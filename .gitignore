@@ -1,0 +1,13 @@
+build/
+.gradle/
+.tools/
+android/local.properties
+android/**/build/
+android/**/.cxx/
+ios/*.xcodeproj/
+ios/DerivedData/
+*.tflite
+*.mlpackage/
+*.mlmodelc/
+*.mp4
+__pycache__/

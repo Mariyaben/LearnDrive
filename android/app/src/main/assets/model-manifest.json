@@ -1,0 +1,55 @@
+{
+  "input": "Float32 NCHW RGB 0..1, letterboxed 320x320",
+  "detector_coordinates": "320x320 pixel units",
+  "sources": {
+    "TwinLite.py": {
+      "url": "https://raw.githubusercontent.com/chequanghuy/TwinLiteNet/main/model/TwinLite.py",
+      "sha256": "dd0f4e7f390f6468d692596543a60cdb219eb26924fb956df8a91ff716268c27"
+    },
+    "best.pth": {
+      "url": "https://raw.githubusercontent.com/chequanghuy/TwinLiteNet/main/pretrained/best.pth",
+      "sha256": "98ffc6c8abc98fda72052117249ce4e2dbc85e58cfcfc6ee2d42f5398c772463"
+    },
+    "TwinLite-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/chequanghuy/TwinLiteNet/main/LICENSE",
+      "sha256": "bfc5776e65f14d8b5a238c6794a095185ed27e5c278bf2f534efaab73c13ee43"
+    },
+    "yolov8n.pt": {
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt",
+      "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+    },
+    "YOLO-LICENSE.txt": {
+      "url": "https://raw.githubusercontent.com/ultralytics/ultralytics/v8.2.59/LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+    }
+  },
+  "assets": {
+    "detector.onnx": {
+      "sha256": "cf8b22e029bcf0bc4da56a86ce9a175623e900d001ec6c88b6c4b8e21b1b1809",
+      "outputs": {
+        "output0": [
+          1,
+          84,
+          2100
+        ]
+      }
+    },
+    "road.onnx": {
+      "sha256": "a90ee1ca89c3e93ae07b1cea57740db239023211be5ebef9a7711dc47d7ecb34",
+      "outputs": {
+        "drivable": [
+          1,
+          2,
+          320,
+          320
+        ],
+        "lanes": [
+          1,
+          2,
+          320,
+          320
+        ]
+      }
+    }
+  }
+}
