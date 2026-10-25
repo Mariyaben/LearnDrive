@@ -28,7 +28,7 @@ final class DecisionCoordinator {
     func start(){queue.async {
         guard !self.running else{return};self.running=true
         let timer=DispatchSource.makeTimerSource(queue:self.queue)
-        timer.schedule(deadline:.now(),repeating:.milliseconds(20));timer.setEventHandler{[weak self] in self?.evaluate()}
+        timer.schedule(deadline:.now(),repeating:.milliseconds(10));timer.setEventHandler{[weak self] in self?.evaluate()}
         self.timer=timer;timer.resume()
     }}
     func stop(){queue.async{self.running=false;self.result=nil;self.timer?.cancel();self.timer=nil}}
@@ -49,8 +49,16 @@ final class DecisionCoordinator {
         let path=config.mode=="Desk" ? row?.path ?? true:result?.inPath ?? false
         let tactical=core.decide(t.values,hazardTime:ht,tti:htti,confidence:hc,path:path,ready:audio.ready,gear:false)
         let driving=core.drivingAdvice(t.values,ready:audio.ready,manual:row?.gear ?? config.gear,slope:true)
-        let id=core.promptPriority(driving)>core.promptPriority(tactical) ? driving:tactical
-        if id>0,audio.submit(Int(id)){if id>=2 && id<=4 {core.accepted(time)};core.drivingAccepted(id,time:time);onPrompt?(Int(id))}
+        let dual=config.mode=="Camera" ? core.dualAdvice(t.values,time:time):[NSNumber(value:0),NSNumber(value:0)]
+        let dualId=dual[0].int32Value
+        let candidates=dual[1].boolValue ? [tactical,dualId]:[tactical,dualId,driving]
+        let id=candidates.max{core.promptPriority($0)<core.promptPriority($1)} ?? 0
+        if id>0,core.audioAllowed(id,time:time),audio.submit(Int(id)) {
+            core.audioAccepted(id,time:time)
+            if id>=2 && id<=4 {core.accepted(time)}
+            if id==dualId {core.dualAccepted(id,time:time)}
+            core.drivingAccepted(id,time:time);onPrompt?(Int(id))
+        }
         onDisplay?(t,result,speedSource)
     }
 }

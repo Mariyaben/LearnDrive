@@ -6,8 +6,27 @@ from pathlib import Path
 import wave
 import zipfile
 import re
+import struct
 import numpy as np
 import onnxruntime as ort
+
+def elf_runtime_sections(binary):
+    """Compare loaded ELF contents while allowing Gradle to strip debug symbols."""
+    assert binary[:6] == b"\x7fELF\x02\x01", "Expected little-endian ELF64"
+    section_offset = struct.unpack_from("<Q", binary, 40)[0]
+    entry_size, count, names_index = struct.unpack_from("<HHH", binary, 58)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", binary, section_offset + i * entry_size)
+                for i in range(count)]
+    names_section = sections[names_index]
+    names = binary[names_section[4]:names_section[4] + names_section[5]]
+    loaded = {}
+    for name, kind, flags, address, offset, size, *_ in sections:
+        if flags & 2:  # SHF_ALLOC; debug and ordinary symbol tables are excluded.
+            label = names[name:names.index(b"\0", name)].decode("ascii")
+            content = b"" if kind == 8 else binary[offset:offset + size]  # SHT_NOBITS
+            loaded[label] = (address, size, hashlib.sha256(content).hexdigest())
+    assert loaded, "ELF has no loadable sections"
+    return loaded
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--apk", type=Path)
@@ -24,6 +43,10 @@ render_script = (project / "tools/render_android_prompts.ps1").read_text(encodin
 render_phrases = re.findall(r"'([^']*)'", re.search(r"\$phrases = @\((.*?)\)\s*for", render_script, re.S).group(1))
 assert render_phrases == [native_phrases[i] for i in range(1, prompt_count + 1)], "Recorded text differs from native prompt IDs"
 manifest = json.loads((assets / "model-manifest.json").read_text(encoding="utf-8"))
+spatial_manifest=json.loads((assets/"supercombo-manifest.json").read_text(encoding="utf-8"))
+assert hashlib.sha256((assets/"supercombo.onnx").read_bytes()).hexdigest()==spatial_manifest["sha256"]
+assert (assets/"COMMA-LICENSE.txt").is_file()
+print("Verified pinned Comma.ai Supercombo asset and license")
 options = ort.SessionOptions()
 options.intra_op_num_threads = 2
 options.inter_op_num_threads = 1
@@ -75,4 +98,7 @@ if args.apk:
         for abi in ("arm64-v8a", "x86_64"):
             assert f"lib/{abi}/liblearndrive.so" in archive.namelist()
             assert f"lib/{abi}/libonnxruntime.so" in archive.namelist()
+            assert archive.namelist().count(f"lib/{abi}/libonnxruntime.so")==1,"Duplicate ORT runtime"
+            with zipfile.ZipFile(project/".tools/maven-repo/com/microsoft/onnxruntime/onnxruntime-android/1.22.0/onnxruntime-android-1.22.0.aar") as runtime:
+                assert elf_runtime_sections(archive.read(f"lib/{abi}/libonnxruntime.so")) == elf_runtime_sections(runtime.read(f"jni/{abi}/libonnxruntime.so")), "Native/Java ORT loadable contents mismatch"
         print("APK contains matching models, voices, notices and both native runtimes")

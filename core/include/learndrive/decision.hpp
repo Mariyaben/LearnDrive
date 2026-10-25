@@ -18,10 +18,12 @@ class DrivingCoach {
 public:
     void reset();
     void road(double captureTime,const RoadShape& shape);
+    // Cancel pending road cues without treating missing evidence as a clear road.
+    void roadUnavailable(double captureTime);
     void engine(const EngineSample& sample) { engine_=sample; }
     const RoadShape& shape() const {return shape_;}
     double roadTime() const {return roadTime_;}
-    Decision evaluate(const Telemetry& t,bool audioReady,bool manual,bool slopeEnabled=true,bool clearPath=false);
+    Decision evaluate(const Telemetry& t,bool audioReady,bool manual,bool slopeEnabled=true);
     void accepted(Prompt prompt,double time);
 private:
     struct Event {
@@ -32,27 +34,37 @@ private:
         bool pending() const {return active!=0&&candidate==active&&!spoken;}
     } slope_,bend_,shift_;
     int spokenSlopeBand_=0;
-    Prompt pendingSlopePrompt_=Prompt::none;
-    bool seenSlope_=false,unavailableSpoken_=false,slopeWasMaintain_=false;
+    bool seenSlope_=false,unavailableSpoken_=false;
     double unavailableSince_=-1,lastSlopeTime_=-1;
     EngineSample engine_;
     RoadShape shape_;
     double roadTime_=-infinity,lastSpoken_=-infinity;
 };
-// Camera coaching uses visible scene evidence and can run before mount/GPS
-// calibration. Image occupancy is a caution cue, never a metric distance.
+// Image position is an attention-zone heuristic, not measured lane identity.
+// Box size alone cannot justify an obstacle or slowing instruction.
 class CameraCoach {
 public:
     void start(double time);
     Decision evaluate(double now,double captureTime,const std::vector<Box>& boxes,bool ready,bool braking,bool shock,
-        double speedKmh=0,bool speedValid=false,bool manual=false);
+        double speedKmh=0,bool speedValid=false,bool manual=false,double imageAspect=16.0/9);
     void accepted(Prompt prompt,double time);
+    bool actorRelevant(int actorId,double now) const;
+    bool newEncounterEligible(int actorId,int referenceId,double now) const;
 private:
     bool started_=false,startupPending_=false;
     double startedAt_=0,lastSpoken_=-infinity;
     Prompt lastPrompt_=Prompt::none;
-    double lastCapture_=-infinity,closeClearSince_=-1,routineClearSince_=-1;
+    double lastCapture_=-infinity,routineClearSince_=-1;
     int closeLevel_=0,spokenCloseLevel_=0,sceneBits_=0,spokenSceneBits_=0;
+    struct Track {
+        Box box;int id=0,hits=0,entryReferenceId=0;
+        double since=0,last=0,lateralRate=0,riderUntil=-infinity,spokenAt=-infinity;
+        bool spoken=false,entryPending=false;
+    };
+    std::vector<Track> attentionTracks_;
+    int nextActorId_=1;
+    int pendingActorId_=0,pendingEvidenceKind_=0;
+    static bool relevant(const Track& track);
 };
 class DecisionEngine {
 public:

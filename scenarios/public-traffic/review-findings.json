@@ -1,0 +1,63 @@
+{
+  "review_type": "Exploratory engineer visual review of source/cue frames; not independent instructor ground truth",
+  "findings": [
+    {
+      "id": "F01",
+      "clip": "udacity-curves",
+      "cue_time": 47.5,
+      "capture_time": 47.32,
+      "prompt": 24,
+      "classification": "false_obstacle_instruction",
+      "observation": "The visible road and guardrail receive a large COCO car box (score about 0.43) although no vehicle is visible inside that box. This triggers an obstacle/slow-down/conditional-gear instruction.",
+      "evidence": "contact/udacity-curves-cue-audit.jpg",
+      "status": "reproduced in both semantic and spatial manual-30 modes"
+    },
+    {
+      "id": "F02",
+      "clip": "udacity-curves",
+      "cue_time": 29.86,
+      "capture_time": 29.68,
+      "prompt": 24,
+      "classification": "spurious_large_vehicle_box",
+      "observation": "A real oncoming car is boxed on the left, while a second large car box (score about 0.68) covers road/roadside. The frame produces the same compound obstacle/gear cue. Exact responsible-track attribution is absent from the trace.",
+      "evidence": "contact/udacity-curves-cue-audit.jpg",
+      "status": "reproduced in both semantic and spatial manual-30 modes"
+    },
+    {
+      "id": "F03",
+      "clip": "udacity-challenge",
+      "cue_time": 2.05,
+      "capture_time": 1.8667,
+      "prompt": 8,
+      "classification": "irrelevant_opposing_traffic_cue",
+      "observation": "The only retained vehicle box at the cue is at the far left across the concrete divider. Generic traffic/gap coaching does not distinguish it from a same-direction lead.",
+      "evidence": "contact/udacity-challenge-cue-audit.jpg",
+      "status": "reproduced in both semantic and spatial manual-30 modes"
+    },
+    {
+      "id": "F04",
+      "clip": "udacity-curves",
+      "classification": "bend_capability_unavailable",
+      "observation": "No bend cue occurs over the full winding-road clip in the initial 110-degree assumed-optics run. Semantic MP4 intentionally has no bend geometry. This is a user-capability gap; uncalibrated out-of-domain footage cannot establish calibrated-model recall.",
+      "evidence": "contact/udacity-curves.jpg",
+      "status": "At assumed 110 degrees: 0 road-valid frames and no bend cue. At assumed 70 degrees: 127/1199 road-valid frames and two bend cues. Neither setting is a measured calibration."
+    },
+    {
+      "id": "F05",
+      "clip": "jodhpur-clear",
+      "cue_time": 3.68,
+      "classification": "event_attribution_unverified",
+      "observation": "The cue overlaps the pre-registered crossing-car time window, but the capture shows a large motorcycle and side car before the white crossing car. A matching generic cue cannot be credited as crossing-car recognition.",
+      "evidence": "contact/jodhpur-clear-cue-audit.jpg",
+      "status": "requires actor-linked traces and instructor labels"
+    },
+    {
+      "id": "F06",
+      "clip": "jodhpur-clear",
+      "classification": "high_speech_occupancy",
+      "observation": "At assumed manual speed 30 km/h, scheduled speech occupies 9.82 of the 10 seconds (98.2%), including interruption and clipping at the end. This deserves a learner-distraction and phrase-length review; it is not a measured distraction score.",
+      "evidence": "contact/jodhpur-clear-cue-audit.jpg",
+      "status": "computed from actual cached-clip durations and accepted event times"
+    }
+  ]
+}

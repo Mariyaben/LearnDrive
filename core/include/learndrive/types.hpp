@@ -38,8 +38,12 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     closeQuiet=16, closeGearQuiet=17, roadUserQuiet=18, nearbyCollision=19,
     bendLeftQuiet=20, bendRightQuiet=21, bendLeftGear=22, bendRightGear=23, closeGear=24, imageClose=25, imageCloseGear=26,
     gentleUp=27, gentleDown=28, steepUp=29, steepDownGear=30, steepDown=31, verySteepUp=32, verySteepDown=33,
-    slopeUnavailable=34, maintainSpeed=35 };
-constexpr int promptCount=35;
+    slopeUnavailable=34, maintainSpeed=35, holdLaneDistance=36, keepSafeGap=37, slowSmoothly=38,
+    watchPedestrians=39, prepareBend=40, observeSign=41, brakeHarder=42, emergencyStop=43,
+    pedestrianSpace=44, riderSpace=45, vehicleSpace=46,
+    mapLeftBend=47,mapRightBend=48,mapJunction=49,mapLeftTurn=50,mapRightTurn=51,
+    mapLeftTurnNear=52,mapRightTurnNear=53,mapLeftTurn50=54,mapRightTurn50=55 };
+constexpr int promptCount=55;
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -65,15 +69,20 @@ constexpr double lowAdviceSpeedKmh=10;
 inline int priority(Prompt p) {
     switch(p) {
     case Prompt::camera:case Prompt::roadUser:case Prompt::roadUserQuiet:case Prompt::traffic:
-    case Prompt::slopeUnavailable:case Prompt::maintainSpeed:return 1;
+    case Prompt::slopeUnavailable:case Prompt::maintainSpeed:case Prompt::observeSign:
+    case Prompt::pedestrianSpace:case Prompt::riderSpace:case Prompt::vehicleSpace:return 1;
     case Prompt::hill:case Prompt::uphill:case Prompt::downhill:case Prompt::bendLeft:case Prompt::bendRight:
     case Prompt::downhillGear:case Prompt::shiftUp:case Prompt::shiftDown:case Prompt::closeQuiet:case Prompt::closeGearQuiet:
     case Prompt::bendLeftQuiet:case Prompt::bendRightQuiet:case Prompt::bendLeftGear:case Prompt::bendRightGear:
     case Prompt::imageClose:case Prompt::imageCloseGear:case Prompt::gentleUp:case Prompt::gentleDown:
-    case Prompt::steepUp:case Prompt::steepDownGear:case Prompt::steepDown:case Prompt::verySteepUp:case Prompt::verySteepDown:return 2;
-    case Prompt::ease:case Prompt::close:case Prompt::closeGear:return 3;
+    case Prompt::steepUp:case Prompt::steepDownGear:case Prompt::steepDown:case Prompt::verySteepUp:case Prompt::verySteepDown:
+    case Prompt::prepareBend:case Prompt::mapLeftBend:case Prompt::mapRightBend:case Prompt::mapJunction:case Prompt::mapLeftTurn:case Prompt::mapRightTurn:
+    case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:return 2;
+    case Prompt::ease:case Prompt::close:case Prompt::closeGear:case Prompt::holdLaneDistance:case Prompt::keepSafeGap:
+    case Prompt::slowSmoothly:case Prompt::watchPedestrians:return 3;
     case Prompt::brake:return 4;
     case Prompt::emergency:case Prompt::nearbyCollision:return 5;
+    case Prompt::brakeHarder:case Prompt::emergencyStop:return 6;
     default:return 0;
     }
 }
@@ -87,6 +96,18 @@ inline const char* promptText(Prompt p) {
     case Prompt::close: return "Obstacle in your path. Slow down and be ready to stop";
     case Prompt::roadUser: return "Road user ahead. Slow down and give them space";
     case Prompt::traffic: return "Traffic ahead. Keep a safe gap";
+    case Prompt::pedestrianSpace: return "Person ahead. Give space";
+    case Prompt::riderSpace: return "Two-wheeler ahead. Give space";
+    case Prompt::vehicleSpace: return "Vehicle ahead. Keep a gap";
+    case Prompt::mapLeftBend: return "Left bend ahead. Prepare early";
+    case Prompt::mapRightBend: return "Right bend ahead. Prepare early";
+    case Prompt::mapJunction: return "Junction ahead. Check for traffic";
+    case Prompt::mapLeftTurn: return "Left turn ahead. Check for traffic";
+    case Prompt::mapRightTurn: return "Right turn ahead. Check for traffic";
+    case Prompt::mapLeftTurnNear: return "Left turn in about ten metres";
+    case Prompt::mapRightTurnNear: return "Right turn in about ten metres";
+    case Prompt::mapLeftTurn50: return "Left turn in about fifty metres";
+    case Prompt::mapRightTurn50: return "Right turn in about fifty metres";
     case Prompt::uphill: return "Uphill. Steady power";
     case Prompt::downhill: return "Downhill. Control speed";
     case Prompt::bendLeft: return "Left bend ahead. Ease off early and stay in your lane";
@@ -114,10 +135,20 @@ inline const char* promptText(Prompt p) {
     case Prompt::verySteepDown: return "Very steep downhill. Brake as needed";
     case Prompt::slopeUnavailable: return "Slope reading unavailable";
     case Prompt::maintainSpeed: return "Maintain speed";
+    case Prompt::holdLaneDistance: return "Hold lane and distance";
+    case Prompt::keepSafeGap: return "Keep a safe gap";
+    case Prompt::slowSmoothly: return "Slow down smoothly";
+    case Prompt::watchPedestrians: return "Watch for pedestrians";
+    case Prompt::prepareBend: return "Prepare for the bend";
+    case Prompt::observeSign: return "Observe the road sign";
+    case Prompt::brakeHarder: return "Brake harder";
+    case Prompt::emergencyStop: return "Emergency stop";
     default: return "";
     }
 }
 inline bool mayInterrupt(Prompt next,Prompt current) {
+    const bool map=int(next)>=int(Prompt::mapLeftBend)&&int(next)<=int(Prompt::mapRightTurn50);
+    if(map&&current!=Prompt::none)return false; // Routine map cues never interrupt speech.
     if(priority(next)>priority(current))return true;
     const bool image=current==Prompt::imageClose||current==Prompt::imageCloseGear||current==Prompt::closeQuiet||current==Prompt::closeGearQuiet;
     const bool guidance=slopePromptBand(next)!=0||next==Prompt::shiftUp||next==Prompt::shiftDown||
@@ -125,8 +156,21 @@ inline bool mayInterrupt(Prompt next,Prompt current) {
     return image&&guidance&&priority(next)>=priority(current);
 }
 struct Hazard { double time{}, tti=infinity, confidence{}; bool inPath{}; };
-struct Decision { Prompt prompt=Prompt::none; double bufferSeconds{}; std::string reason; };
-struct Box { float x{},y{},w{},h{},score{}; int category{},id{}; double tti=infinity, expansion{},confidence{}; };
+struct Decision {
+    Prompt prompt=Prompt::none; double bufferSeconds{}; std::string reason;
+    int actorId=0,actorCategory=-1,evidenceKind=0; // 1 sustained attention, 2 optical approach, 3 critical approach.
+    float actorX=0,actorY=0,actorW=0,actorH=0;
+    // A source-local inward entry, independently seen beside an already spoken
+    // actor. This is encounter provenance, never lane or depth certainty.
+    int entryReferenceId=0;
+    bool newEncounter=false;
+};
+struct Box {
+    float x{},y{},w{},h{},score{}; int category{},id{}; double tti=infinity, expansion{},confidence{};
+    // Timestamp of independently matched, trajectory-supported neural lead.
+    // Optical expansion or an image attention zone alone cannot establish it.
+    double leadTime=-infinity;
+};
 struct LaneMap {
     int width{},height{};
     std::vector<float> road, lane;

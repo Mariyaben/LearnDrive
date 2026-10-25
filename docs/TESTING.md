@@ -1,5 +1,32 @@
 # Desk validation and device acceptance
 
+## Current spatial integration
+
+See [INTEGRATION.md](INTEGRATION.md) for the pinned Supercombo contract, current
+artifact, completed checks and physical acceptance gaps. Run the native CMake
+suite with `ctest --test-dir build/native-spatial --output-on-failure` and compare
+the real-model run using
+`python tools/verify_supercombo.py --native-prefix build/native-spatial/supercombo-smoke`.
+The driving path is deterministic; language models are invoked only by an
+explicit asynchronous post-drive summary request. The active Android spatial
+model is Supercombo, with YOLO labels at 4 Hz; TwinLiteNet is retained as an
+inactive legacy asset. The APK contains 43 recorded prompts.
+
+Camera and tactical guidance share a 3.5-second non-emergency cooldown and
+10-second duplicate lock. Active braking suppresses routine advice, but TTI
+below 1.2 seconds forces Level 0 “Brake harder” and immediate audio preemption.
+The older Desk simulation below exercises the separate legacy telemetry rules;
+its blanket braking suppression and emergency cooldown are not the live
+spatial-reflex contract.
+
+Android analysis targets 30 Hz normally and 25/20 Hz at light/moderate thermal
+levels; severe heat reduces it further and critical heat pauses analysis.
+These scheduling limits do not prove delivered FPS. Run
+`python tools/profile_android.py --seconds 1801` on a physical ARM64 device
+to collect the actual duration, FPS, thermal status and decision-latency gates.
+Physical audio timing, camera accuracy, thermal stability and iOS compilation
+remain unverified in this Windows environment.
+
 ## Built-in test mode
 
 1. Android opens in Camera mode. Tap **Test voice**, raise media volume and confirm audible playback. Point the camera at a person or vehicle and check the green detection boxes. Select **Desk** and wait for **Offline voice ready** to run the scenarios below. Use airplane mode throughout the session.
@@ -42,15 +69,17 @@ Measure in a **release build on each physical phone**, with the actual model ver
 | --- | --- |
 | Frame capture age | Compare capture timestamp in the verified monotonic timebase with analyzer entry |
 | Preprocessing | Timestamp around borrowed-plane conversion and tensor fill |
-| Models | Measure detector and segmentation separately, including delegate synchronization |
+| Models | Measure Supercombo and the separate semantic pass, including provider synchronization |
 | Core decision | End inference to audio worker acceptance |
 | PCM output | Acceptance to first platform audio frame, including audio route/focus |
 | Audible output | Loopback recording or external microphone, accounting for speaker / Bluetooth buffering |
 
 Collect at least 10,000 frame samples after warmup; report p50/p95/p99, maximum, dropped-frame count, peak RSS, battery current and model/provider identity. **The requirement is capture-to-voice-trigger <70 ms; audible onset is a separate measurement.** Reject configurations whose measured p99 exceeds the target. Sustained 30 FPS needs a model loop below 33.3 ms, which is stricter than a 70 ms trigger budget.
 
-Run 30 minutes at ordinary and warm ambient conditions. Android moderate thermal state and iOS fair state reduce analysis to 15 FPS; severe/serious/critical states stop analysis. These are deliberate quality reductions and do not meet a continuous 30 FPS claim. Check resumption, permission revocation, GPS outages, audio focus interruptions, headset routing, app suspension, video EOF and corrupted files.
+Run more than 30 minutes at ordinary and warm ambient conditions. Use the current scheduling limits documented above and inspect the delivered FPS and thermal logs. Any sustained drop below 20 FPS fails the supplied integration criterion; thermal protection must remain enabled. Check resumption, permission revocation, GPS outages, audio focus interruptions, headset routing, app suspension, video EOF and corrupted files.
 
 The UI's vision value measures preprocessing/inference/postprocessing only. It does not prove end-to-end or audible-onset latency. Acceptance remains open until real model/device logs exist.
 
 The supplied phone screenshot shows about 179 ms processing. Rules now allow capture ages below 350 ms and conservatively deduct that age from TTI. Future-dated results and results at or beyond the age cap remain invalid. Tracking uses the same maximum frame interval. These changes allow bounded slower processing; the <70 ms/30 FPS target remains unfulfilled on that screenshot, and phone validation of the new configuration is still required.
+
+The native dual-brain suite covers reflex thresholds, braking escalation, deterministic multi-hazard selection, relevant-scene gating, priority preemption, cooldown/dedup, C ABI checks and post-drive model isolation. `dual_brain_harness` runs the deterministic bus/pothole scenario; its optional live-model mode requests a summary only after stopping the drive. Historical SLM mailbox/schema tests remain regression coverage for the standalone language-model component, which is absent from the driving path. Optional decoder tests execute synthetic FP32/FP16 graphs; real Supercombo verification is a separate native/Python comparison. See [DUAL_BRAIN.md](DUAL_BRAIN.md) and [INTEGRATION.md](INTEGRATION.md) for current commands and acceptance limits.

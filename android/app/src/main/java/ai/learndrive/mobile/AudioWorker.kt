@@ -25,6 +25,7 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     @Volatile private var closed=false
     @Volatile private var pcmReady=false
     val ready get() = cache.size==clipCount&&pcmReady&&!closed
+    fun durationSeconds(id:Int)=cache[id]?.let {it.bytes.size.toDouble()/(it.sampleRate*it.channels*2)}?:3.0
     init {
         worker.execute {
             try {
@@ -92,5 +93,15 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         return true
     }
     @Synchronized fun cancel() {generation.incrementAndGet();pending=0;active=0;track?.pause();track?.flush();audioManager.abandonAudioFocusRequest(focus)}
+    /** Cancel outdated context without cutting off a newer, higher-priority cue. */
+    @Synchronized fun cancelIfPrompt(matches:(Int)->Boolean):Boolean {
+        val current=if(pending!=0)pending else active
+        if(current==0||!matches(current))return false
+        cancel();return true
+    }
+    @Synchronized fun preempt() {
+        generation.incrementAndGet();pending=0;active=0
+        track?.pause();track?.flush();track?.stop()
+    }
     override fun close() {closed=true;pcmReady=false;cancel();worker.execute {synchronized(this){track?.release();track=null}};worker.shutdown()}
 }

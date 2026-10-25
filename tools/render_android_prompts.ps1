@@ -1,3 +1,4 @@
+param([int[]]$PromptIds = @())
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $assetDirectory = Join-Path (Split-Path $PSScriptRoot -Parent) 'android/app/src/main/assets/audio'
@@ -21,13 +22,25 @@ try {
         'Obstacle ahead. Keep a safe gap and be ready to stop', 'Obstacle ahead. Keep a safe gap. Change down only if the engine struggles',
         'Gentle uphill. Steady power', 'Gentle downhill. Watch speed', 'Steep uphill. Avoid engine strain',
         'Steep downhill. Suitable low gear', 'Steep downhill. Control speed', 'Very steep uphill. Controlled power',
-        'Very steep downhill. Brake as needed', 'Slope reading unavailable', 'Maintain speed')
+        'Very steep downhill. Brake as needed', 'Slope reading unavailable', 'Maintain speed',
+        'Hold lane and distance', 'Keep a safe gap', 'Slow down smoothly', 'Watch for pedestrians',
+        'Prepare for the bend', 'Observe the road sign', 'Brake harder', 'Emergency stop',
+        'Person ahead. Give space', 'Two-wheeler ahead. Give space', 'Vehicle ahead. Keep a gap',
+        'Left bend ahead. Prepare early', 'Right bend ahead. Prepare early',
+        'Junction ahead. Check for traffic', 'Left turn ahead. Check for traffic', 'Right turn ahead. Check for traffic',
+        'Left turn in about ten metres', 'Right turn in about ten metres',
+        'Left turn in about fifty metres', 'Right turn in about fifty metres')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
+        if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         $outputPath = Join-Path $assetDirectory ('prompt-{0}.wav' -f ($index + 1))
         $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
         $speech.SetOutputToWaveFile($outputPath, $format)
         $speech.Speak($phrases[$index])
         $speech.SetOutputToNull()
+        if (($index + 1) -ge 44) {
+            & python (Join-Path $PSScriptRoot 'trim_pcm_padding.py') $outputPath
+            if ($LASTEXITCODE -ne 0) { throw 'Prompt padding trim failed.' }
+        }
         Get-Item -LiteralPath $outputPath | Select-Object Name, Length
     }
 } finally { $speech.Dispose() }

@@ -1,4 +1,5 @@
 #include "learndrive/decision.hpp"
+#include "learndrive/vision.hpp"
 namespace ld {
 static RoadShape fitRoad(const double centers[5],double nearRow,double span,int source) {
     RoadShape result;
@@ -112,7 +113,12 @@ void DrivingCoach::road(double time,const RoadShape& shape) {
     shape_=shape;roadTime_=time;
     bend_.update(time,shape.bend,shape.valid&&shape.bend>=-1&&shape.bend<=1,.4,3,2);
 }
-Decision DrivingCoach::evaluate(const Telemetry& t,bool ready,bool manual,bool slopeEnabled,bool clearPath) {
+void DrivingCoach::roadUnavailable(double time) {
+    if(!std::isfinite(time)||time<0||time<roadTime_)return;
+    shape_={};roadTime_=time;
+    bend_.candidate=0;bend_.since=-1;bend_.count=0;bend_.clearSince=-1;bend_.last=time;
+}
+Decision DrivingCoach::evaluate(const Telemetry& t,bool ready,bool manual,bool slopeEnabled) {
     Decision d;
     if(!std::isfinite(t.time)||t.time<0){d.reason="invalid coaching time";return d;}
     const bool pitch=slopeEnabled&&t.calibrated&&t.pitchValid&&std::isfinite(t.pitchDegrees)&&std::abs(t.pitchDegrees)<=30;
@@ -123,11 +129,7 @@ Decision DrivingCoach::evaluate(const Telemetry& t,bool ready,bool manual,bool s
         if(std::abs(t.pitchDegrees)>=boundaries[std::abs(slope_.active)]-.5)grade=slope_.active;
     }
     slope_.update(t.time,grade,pitch,1.5,3,2);
-    if(pitch&&slope_.active==0&&grade==0){spokenSlopeBand_=0;slopeWasMaintain_=false;}
-    if(pitch&&slopeWasMaintain_&&t.speedValid&&std::isfinite(t.speedKmh)&&
-        (t.speedKmh>lowAdviceSpeedKmh||(std::isfinite(t.longitudinalAcceleration)&&t.longitudinalAcceleration>.2))) {
-        slope_.spoken=false;spokenSlopeBand_=0;slopeWasMaintain_=false;
-    }
+    if(pitch&&slope_.active==0&&grade==0)spokenSlopeBand_=0;
     if(t.time>lastSlopeTime_) {
         if(pitch){seenSlope_=true;unavailableSince_=-1;unavailableSpoken_=false;}
         else if(slopeEnabled&&(seenSlope_||(t.calibrated&&t.pitchValid))) {
@@ -160,10 +162,14 @@ Decision DrivingCoach::evaluate(const Telemetry& t,bool ready,bool manual,bool s
         (spokenSlopeBand_*slope_.active<=0||std::abs(slope_.active)>std::abs(spokenSlopeBand_))) {
         const bool stationary=t.speedValid&&std::isfinite(t.speedKmh)&&t.speedKmh<=.5;
         if(stationary){d.reason="vehicle stationary; slope action cues quiet";return d;}
-        const bool controlled=clearPath&&roadFresh&&shape_.bend==0&&t.speedValid&&std::isfinite(t.speedKmh)&&t.speedKmh>.5&&t.speedKmh<=lowAdviceSpeedKmh&&
+        const bool steadyLowSpeed=t.speedValid&&std::isfinite(t.speedKmh)&&t.speedKmh>.5&&t.speedKmh<=lowAdviceSpeedKmh&&
             std::isfinite(t.longitudinalAcceleration)&&std::abs(t.longitudinalAcceleration)<=.2;
-        if(controlled)d.prompt=Prompt::maintainSpeed;
-        else switch(slope_.active) {
+        // A measured steady response can make another slope instruction
+        // unnecessary. It cannot establish that maintaining speed is safe;
+        // empty detections and a straight-road fit do not supply that evidence.
+        // Keep the pending lesson available if motion subsequently changes.
+        if(steadyLowSpeed){d.reason="steady low-speed motion; no additional slope action";return d;}
+        switch(slope_.active) {
         case 1:d.prompt=Prompt::gentleUp;break;
         case 2:d.prompt=manual?Prompt::hill:Prompt::uphill;break;
         case 3:d.prompt=Prompt::steepUp;break;
@@ -173,7 +179,7 @@ Decision DrivingCoach::evaluate(const Telemetry& t,bool ready,bool manual,bool s
         case -3:d.prompt=manual?Prompt::steepDownGear:Prompt::steepDown;break;
         case -4:d.prompt=Prompt::verySteepDown;break;
         }
-        pendingSlopePrompt_=d.prompt;d.reason="sustained slope band from normalized phone plane";
+        d.reason="sustained slope band from normalized phone plane";
     } else if(slopeEnabled&&unavailableSince_>=0&&t.time-unavailableSince_>=1.5&&!unavailableSpoken_) {
         d.prompt=Prompt::slopeUnavailable;d.reason="slope reading outside supported range or unavailable";
     } else {d.reason="watching for a new slope band, bend or necessary shift";return d;}
@@ -184,9 +190,9 @@ void DrivingCoach::accepted(Prompt p,double time) {
     if(!std::isfinite(time)||time<0)return;
     bool valid=false;
     const int band=slopePromptBand(p);
-    if(band!=0||(p==Prompt::maintainSpeed&&pendingSlopePrompt_==p)) {
-        valid=slope_.pending()&&(band==slope_.active||p==Prompt::maintainSpeed);
-        if(valid){slope_.spoken=true;spokenSlopeBand_=slope_.active;slopeWasMaintain_=p==Prompt::maintainSpeed;}
+    if(band!=0) {
+        valid=slope_.pending()&&band==slope_.active;
+        if(valid){slope_.spoken=true;spokenSlopeBand_=slope_.active;}
         if(valid)lastSpoken_=time;
         return;
     }
@@ -200,79 +206,197 @@ void DrivingCoach::accepted(Prompt p,double time) {
     if(valid)lastSpoken_=time;
 }
 void CameraCoach::start(double time) {
+    *this=CameraCoach{};
     started_=std::isfinite(time)&&time>=0;startupPending_=started_;startedAt_=time;
-    lastSpoken_=-infinity;lastPrompt_=Prompt::none;
-    lastCapture_=-infinity;closeClearSince_=routineClearSince_=-1;
-    closeLevel_=spokenCloseLevel_=sceneBits_=spokenSceneBits_=0;
+}
+bool CameraCoach::relevant(const Track& tr) {
+    const auto& b=tr.box;const double center=b.x+b.w*.5,foot=b.y+b.h;
+    const bool vulnerable=b.category==0||b.category==1||b.category==3;
+    const bool enters=vulnerable&&std::abs(tr.lateralRate)<.6&&center+.7*tr.lateralRate>.3&&center+.7*tr.lateralRate<.7;
+    const double margin=b.category==0?.25:.18;
+    return foot>.5&&((center>.32&&center<.68)||(vulnerable&&center>margin&&center<1-margin&&enters));
+}
+bool CameraCoach::actorRelevant(int id,double now) const {
+    if(!std::isfinite(now)||now<lastCapture_||now-lastCapture_>=maxVisionAgeSeconds)return false;
+    for(const auto& tr:attentionTracks_)if(tr.id==id&&tr.last==lastCapture_)return tr.riderUntil<lastCapture_&&relevant(tr);
+    return false;
+}
+bool CameraCoach::newEncounterEligible(int id,int reference,double now) const {
+    if(reference<=0||reference==id||!actorRelevant(id,now))return false;
+    for(const auto& tr:attentionTracks_)if(tr.id==id)
+        return !tr.spoken&&tr.entryPending&&tr.entryReferenceId==reference&&tr.hits>=2&&lastCapture_-tr.since>=.12;
+    return false;
 }
 void CameraCoach::accepted(Prompt prompt,double time) {
-    if(started_&&priority(prompt)>0&&std::isfinite(time)&&time>=startedAt_) {
-        startupPending_=false;lastPrompt_=prompt;lastSpoken_=time;
-        if(prompt==Prompt::close||prompt==Prompt::closeGear||prompt==Prompt::closeQuiet||prompt==Prompt::closeGearQuiet||prompt==Prompt::imageClose||prompt==Prompt::imageCloseGear||
-           prompt==Prompt::emergency||prompt==Prompt::nearbyCollision) {
-            spokenCloseLevel_=std::max(spokenCloseLevel_,closeLevel_);spokenSceneBits_|=sceneBits_;
-        } else if(prompt==Prompt::roadUser||prompt==Prompt::roadUserQuiet)spokenSceneBits_|=2;
-        else if(prompt==Prompt::traffic)spokenSceneBits_|=1;
+    if(!started_||priority(prompt)<=0||!std::isfinite(time)||time<startedAt_)return;
+    startupPending_=false;lastPrompt_=prompt;lastSpoken_=time;
+    if(prompt==Prompt::vehicleSpace||prompt==Prompt::roadUserQuiet)spokenSceneBits_|=1;
+    if(prompt==Prompt::riderSpace)spokenSceneBits_|=2;
+    if(prompt==Prompt::pedestrianSpace)spokenSceneBits_|=4;
+    const bool attention=prompt==Prompt::pedestrianSpace||prompt==Prompt::riderSpace||prompt==Prompt::vehicleSpace||prompt==Prompt::roadUserQuiet;
+    if(attention||prompt==Prompt::keepSafeGap)
+        for(auto& track:attentionTracks_)if(track.id==pendingActorId_){track.spoken=true;track.spokenAt=time;track.entryPending=false;}
+    if(prompt==Prompt::keepSafeGap||prompt==Prompt::emergency||prompt==Prompt::nearbyCollision||(attention&&pendingEvidenceKind_==2)) {
+        spokenCloseLevel_=std::max(spokenCloseLevel_,closeLevel_);spokenSceneBits_|=sceneBits_;
     }
 }
-Decision CameraCoach::evaluate(double time,double captureTime,const std::vector<Box>& boxes,bool ready,bool braking,bool shock,double speed,bool speedValid,bool manual) {
+Decision CameraCoach::evaluate(double time,double captureTime,const std::vector<Box>& boxes,bool ready,bool braking,bool shock,
+        double speed,bool speedValid,bool manual,double imageAspect) {
+    (void)manual; // A camera detection cannot establish gear, RPM or engine strain.
     Decision d;
-    if(!started_||!std::isfinite(time)||time<startedAt_) {d.reason="camera not running";return d;}
-    if(!ready) {d.reason="offline audio not ready";return d;}
+    pendingActorId_=pendingEvidenceKind_=0;
+    if(!started_||!std::isfinite(time)||time<startedAt_){d.reason="camera not running";return d;}
+    if(!ready){d.reason="offline audio not ready";return d;}
     const double age=time-captureTime;
     const bool fresh=std::isfinite(captureTime)&&captureTime>=startedAt_&&age>=0&&age<maxVisionAgeSeconds;
-    const bool knownSpeed=speedValid&&std::isfinite(speed)&&speed>=0&&speed<=160;
-    const bool fast=knownSpeed&&speed>lowAdviceSpeedKmh;
-    bool traffic=false,roadUser=false,close=false,critical=false,massive=false,approaching=false;
-    if(fresh)for(const auto& b:boxes) {
-        const bool category=b.category==0||b.category==1||b.category==2||b.category==3||b.category==5||b.category==7;
-        if(!category||!std::isfinite(b.score)||b.score<.4||b.score>1||!std::isfinite(b.x)||!std::isfinite(b.y)||
-           !std::isfinite(b.w)||!std::isfinite(b.h)||b.w<=0||b.h<=0||b.x<0||b.y<0||b.x+b.w>1.001||b.y+b.h>1.001)continue;
-        const float area=b.w*b.h,foot=b.y+b.h;
-        if(area<.001f)continue;
-        if(b.category==0||b.category==1||b.category==3)roadUser=true;else traffic=true;
-        const bool path=b.x<.66f&&b.x+b.w>.34f&&foot>.5f;
-        // Large central occupancy gives a caution without requiring expansion
-        // or a road pixel that may be hidden by the obstacle itself.
-        close=close||(path&&area>=.04f&&(foot>=.6f||area>=.15f)&&(b.w>=.22f||b.h>=.4f));
-        massive=massive||(path&&area>=.25f&&foot>=.8f);
-        critical=critical||(path&&std::isfinite(b.confidence)&&b.confidence>=.65&&b.confidence<=1&&
-            std::isfinite(b.tti)&&b.tti>0&&b.tti-age<1.2);
-        approaching=approaching||(path&&std::isfinite(b.confidence)&&b.confidence>=.65&&b.confidence<=1&&
-            std::isfinite(b.tti)&&b.tti>0&&b.tti-age<DecisionEngine::buffer(knownSpeed?speed:30));
+    if(!fresh){
+        if(startupPending_){d.prompt=Prompt::camera;d.reason="camera guidance started";}
+        else d.reason="waiting for a fresh camera frame";
+        return d;
     }
-    if(fresh) {
-        sceneBits_=(traffic?1:0)|(roadUser?2:0);closeLevel_=close?(massive?2:1)+(fast?2:0)+(approaching?4:0):0;
-        if(captureTime>lastCapture_) {
-            const bool gap=captureTime-lastCapture_>.4;
-            if(close)closeClearSince_=-1;
-            else {if(closeClearSince_<0||gap)closeClearSince_=captureTime;if(captureTime-closeClearSince_>=2)spokenCloseLevel_=0;}
-            if(sceneBits_!=0)routineClearSince_=-1;
-            else {if(routineClearSince_<0||gap)routineClearSince_=captureTime;if(captureTime-routineClearSince_>=2)spokenSceneBits_=0;}
-            lastCapture_=captureTime;
+    if(!std::isfinite(imageAspect)||imageAspect<.3||imageAspect>4){d.reason="image geometry unavailable";return d;}
+    // Track distinct observations, never repeated 100 Hz evaluations of one box.
+    if(captureTime>lastCapture_) {
+        std::vector<Track> next;std::vector<bool> used(attentionTracks_.size());
+        for(const auto& b:boxes) {
+            const bool vulnerable=b.category==0||b.category==1||b.category==3;
+            const bool vehicle=b.category==2||b.category==5||b.category==7;
+            if((!vulnerable&&!vehicle)||!std::isfinite(b.score)||b.score<(vulnerable?.5:.6)||b.score>1||
+               !std::isfinite(b.x)||!std::isfinite(b.y)||!std::isfinite(b.w)||!std::isfinite(b.h)||
+               b.x<0||b.y<0||b.w<=0||b.h<=0||b.x+b.w>1.001||b.y+b.h>1.001||b.w*b.h<.002)continue;
+            const double aspect=b.w*imageAspect/b.h;
+            // Plausibility only: preserve the raw detector box for review. Wide
+            // road/guardrail hallucinations must not become driving instructions.
+            const double minimum=b.category==0?.12:b.category==2?.6:.2;
+            const double maximum=b.category==0?1.6:b.category==2?3.3:5.;
+            if(aspect<minimum||aspect>maximum)continue;
+            Track track;track.box=b;track.hits=1;track.since=track.last=captureTime;
+            int best=-1;float overlap=.25f;
+            for(size_t i=0;i<attentionTracks_.size();++i)if(!used[i]&&attentionTracks_[i].box.category==b.category&&
+                captureTime-attentionTracks_[i].last>0&&captureTime-attentionTracks_[i].last<=.75) {
+                const float value=iou(b,attentionTracks_[i].box);
+                // Reassociation after a missed observation needs tighter shape
+                // overlap than continuous tracking. Retained history is identity
+                // only; it never counts as a fresh observation or dwell.
+                const bool missing=attentionTracks_[i].last!=lastCapture_;
+                if(value>overlap&&(!missing||value>.5f)){overlap=value;best=int(i);}
+            }
+            if(best>=0) {
+                used[best]=true;const auto& old=attentionTracks_[best];const double dt=captureTime-old.last;
+                track.id=old.id;
+                track.spoken=old.spoken;track.spokenAt=old.spokenAt;track.entryPending=old.entryPending;track.entryReferenceId=old.entryReferenceId;
+                track.riderUntil=old.riderUntil;
+                if(dt>0&&dt<maxVisionAgeSeconds&&old.last==lastCapture_) {
+                    track.hits=old.hits+1;track.since=old.since;
+                    track.lateralRate=((b.x+b.w*.5)-(old.box.x+old.box.w*.5))/dt;
+                    const double before=old.box.x+old.box.w*.5,center=b.x+b.w*.5;
+                    if(center>.32&&center<.68&&(before<=.32||before>=.68)&&!track.spoken)track.entryPending=true;
+                }
+            } else track.id=nextActorId_++;
+            if(!relevant(track)){track.entryPending=false;track.entryReferenceId=0;}
+            next.push_back(track);if(next.size()==64)break;
         }
+        // Overlap alone also occurs when a pedestrian stands behind a bike.
+        // Associate a rider body only after two distinct, continuous frames
+        // show both boxes moving together. Static/ambiguous persons stay visible
+        // to attention selection; brief class loss preserves only proven links.
+        for(auto& person:next)if(person.box.category==0)for(const auto& bike:next)
+            if((bike.box.category==1||bike.box.category==3)&&bike.box.y>=person.box.y&&
+               bike.box.y<person.box.y+person.box.h&&bike.box.y+bike.box.h>person.box.y+person.box.h+.04&&
+               std::abs(person.box.x+person.box.w*.5-bike.box.x-bike.box.w*.5)<std::max(person.box.w,bike.box.w)*.25) {
+                const Track* oldPerson=nullptr;const Track* oldBike=nullptr;
+                for(const auto& old:attentionTracks_)if(old.last==lastCapture_&&captureTime-old.last<maxVisionAgeSeconds) {
+                    if(old.id==person.id)oldPerson=&old;if(old.id==bike.id)oldBike=&old;
+                }
+                if(!oldPerson||!oldBike)continue;
+                const double px=person.box.x+person.box.w*.5-oldPerson->box.x-oldPerson->box.w*.5;
+                const double py=person.box.y+person.box.h*.5-oldPerson->box.y-oldPerson->box.h*.5;
+                const double bx=bike.box.x+bike.box.w*.5-oldBike->box.x-oldBike->box.w*.5;
+                const double by=bike.box.y+bike.box.h*.5-oldBike->box.y-oldBike->box.h*.5;
+                if(std::hypot(px,py)>=.01&&std::hypot(bx,by)>=.01&&std::hypot(px-bx,py-by)<.012)
+                    person.riderUntil=captureTime+.75;
+            }
+        // Distinct encounter proof requires two independently visible actors.
+        // A new tracker ID after occlusion cannot alone defeat phrase dedup.
+        for(auto& tr:next)if(tr.entryPending&&!tr.spoken) {
+            double latest=-infinity;
+            for(const auto& other:next)if(other.spoken&&other.spokenAt>latest&&other.id!=tr.id&&
+                other.box.category==tr.box.category&&other.riderUntil<captureTime&&relevant(other)&&
+                (tr.box.x+tr.box.w+.01f<=other.box.x||other.box.x+other.box.w+.01f<=tr.box.x)) {
+                tr.entryReferenceId=other.id;latest=other.spokenAt;
+            }
+        }
+        for(size_t i=0;i<attentionTracks_.size()&&next.size()<128;++i)
+            if(!used[i]&&captureTime-attentionTracks_[i].last<=.75)next.push_back(attentionTracks_[i]);
+        attentionTracks_=std::move(next);
+        const bool gap=captureTime-lastCapture_>.4;
+        lastCapture_=captureTime;sceneBits_=0;closeLevel_=0;
+        // Only confirmed empty/relevance-free observations rearm an episode.
+        // A missing frame or a long processing gap never proves a clear road.
+        for(const auto& tr:attentionTracks_) {
+            if(tr.last!=captureTime||tr.riderUntil>=captureTime||!relevant(tr))continue;
+            const bool vulnerable=tr.box.category==0||tr.box.category==1||tr.box.category==3;
+            sceneBits_|=tr.box.category==0?4:vulnerable?2:1;
+        }
+        if(sceneBits_)routineClearSince_=-1;
+        else {if(routineClearSince_<0||gap)routineClearSince_=captureTime;
+            if(captureTime-routineClearSince_>=2){spokenSceneBits_=0;spokenCloseLevel_=0;}}
     }
-    if(!braking&&!shock&&critical) {
-        d.prompt=knownSpeed&&speed<=.5?Prompt::nearbyCollision:Prompt::emergency;d.reason="rapid approach in camera path";
+    const bool knownSpeed=speedValid&&std::isfinite(speed)&&speed>=0&&speed<=160;
+    const bool stationary=knownSpeed&&speed<=.5;
+    const Track* selected=nullptr;int selectedRank=0,kind=0;
+    for(const auto& tr:attentionTracks_) {
+        if(tr.last!=lastCapture_||tr.riderUntil>=lastCapture_||!relevant(tr))continue;
+        const auto& b=tr.box;const double center=b.x+b.w*.5,foot=b.y+b.h;
+        const bool vulnerable=b.category==0||b.category==1||b.category==3;
+        const bool central=center>.32&&center<.68&&foot>.5;
+        const bool optical=central&&std::isfinite(b.confidence)&&b.confidence>=.65&&b.confidence<=1&&
+            std::isfinite(b.tti)&&b.tti>0;
+        const bool critical=optical&&b.tti-age<1.2;
+        const bool approach=optical&&b.tti-age<DecisionEngine::buffer(knownSpeed?speed:30);
+        const int bit=b.category==0?4:vulnerable?2:1;
+        // Routine vehicle presence deserves less interruption than a vulnerable
+        // road user. Wait for a sustained encounter before a general gap lesson.
+        const bool entry=!tr.spoken&&tr.entryPending;
+        const bool sustained=tr.hits>=((vulnerable||entry)?2:3)&&captureTime-tr.since>=((vulnerable||entry)?.12:1.0);
+        const int rank=critical?100:!stationary&&approach&&spokenCloseLevel_<1?80:
+            !stationary&&sustained&&(!(spokenSceneBits_&bit)||entry)?(b.category==0?30:vulnerable?20:entry?15:10):0;
+        if(rank>selectedRank){selected=&tr;selectedRank=rank;kind=critical?3:approach?2:1;}
     }
-    else if(!braking&&!shock&&close&&closeLevel_>spokenCloseLevel_) {
-        d.prompt=fast?((massive||approaching)?(manual?Prompt::closeGear:Prompt::close):(manual?Prompt::imageCloseGear:Prompt::imageClose)):
-            (manual&&knownSpeed&&speed>.5?Prompt::closeGearQuiet:Prompt::closeQuiet);
-        d.reason="large obstacle overlaps the path ahead";
-    }
-    else if(startupPending_) {d.prompt=Prompt::camera;d.reason="camera guidance started";return d;}
-    else if(braking||shock) {d.reason=braking?"driver braking":"IMU shock";return d;}
-    else if(close) {d.reason="obstacle already announced; watching for increased risk";return d;}
-    else if(roadUser&&!(spokenSceneBits_&2)) {d.prompt=fast?Prompt::roadUser:Prompt::roadUserQuiet;d.reason="road user visible ahead";}
-    else if(traffic&&!(spokenSceneBits_&1)) {d.prompt=Prompt::traffic;d.reason="traffic visible ahead";}
-    else {d.reason=fresh?"watching the road; no road user detected":"waiting for a fresh camera frame";return d;}
-    // Higher urgency interrupts routine speech immediately. Routine messages
-    // do not consume the tactical decision engine's collision cooldown.
-    if(lastPrompt_!=Prompt::camera&&priority(d.prompt)<=priority(lastPrompt_)) {
-        const bool collision=d.prompt==Prompt::emergency||d.prompt==Prompt::nearbyCollision;
-        const bool increasing=close&&spokenCloseLevel_>0&&closeLevel_>spokenCloseLevel_;
-        const double gap=d.prompt==lastPrompt_&&!collision?8:3.5;
-        if(!increasing&&time-lastSpoken_<gap) {d.prompt=Prompt::none;d.reason="camera guidance cooldown";}
+    if(braking||shock){d.reason=braking?"driver braking":"IMU shock";return d;}
+    if(selectedRank>=100) {
+        d.prompt=stationary?Prompt::nearbyCollision:Prompt::emergency;
+        d.reason="optically confirmed critical approach in forward attention zone";closeLevel_=2;
+    } else if(startupPending_){d.prompt=Prompt::camera;d.reason="camera guidance started";return d;}
+    else if(selectedRank>=80) {
+        const bool lead=knownSpeed&&speed>.5&&time>=selected->box.leadTime&&time-selected->box.leadTime<maxVisionAgeSeconds;
+        d.prompt=lead?Prompt::keepSafeGap:selected->box.category==0?Prompt::pedestrianSpace:
+            (selected->box.category==1||selected->box.category==3)?Prompt::riderSpace:Prompt::roadUserQuiet;
+        d.reason=lead?"optical approach with independently matched trajectory-supported lead":
+            "optically approaching road user; following relationship unverified";closeLevel_=1;
+    } else if(selected) {
+        const bool lead=knownSpeed&&speed>.5&&time>=selected->box.leadTime&&time-selected->box.leadTime<maxVisionAgeSeconds;
+        d.prompt=selected->box.category==0?Prompt::pedestrianSpace:
+            (selected->box.category==1||selected->box.category==3)?Prompt::riderSpace:lead?Prompt::vehicleSpace:Prompt::roadUserQuiet;
+        d.reason=selected->box.category==0?"sustained person in forward attention zone":
+            (selected->box.category==1||selected->box.category==3)?"sustained two-wheeler in forward attention zone":
+            "sustained vehicle in forward attention zone";
+        const bool entry=selected->entryPending&&!selected->spoken;
+        if(entry)d.reason="sustained actor entering forward attention zone";
+        const bool moreVulnerable=entry||((lastPrompt_==Prompt::vehicleSpace||lastPrompt_==Prompt::roadUserQuiet)&&
+            (d.prompt==Prompt::pedestrianSpace||d.prompt==Prompt::riderSpace))||
+            (lastPrompt_==Prompt::riderSpace&&d.prompt==Prompt::pedestrianSpace);
+        if(lastPrompt_!=Prompt::camera&&time-lastSpoken_<(moreVulnerable?3.5:8)){
+            d.prompt=Prompt::none;d.reason="learner attention cue spacing";return d;
+        }
+    } else {d.reason=sceneBits_?"watching relevant traffic; no new attention cue":"no sustained relevant road user";return d;}
+    if(selected) {
+        pendingActorId_=selected->id;
+        pendingEvidenceKind_=kind;
+        d.actorId=selected->id;d.actorCategory=selected->box.category;d.evidenceKind=kind;
+        d.actorX=selected->box.x;d.actorY=selected->box.y;d.actorW=selected->box.w;d.actorH=selected->box.h;
+        d.entryReferenceId=selected->entryReferenceId;
+        d.newEncounter=newEncounterEligible(d.actorId,d.entryReferenceId,time);
     }
     return d;
 }

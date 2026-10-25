@@ -1,5 +1,14 @@
 # Bundled models and exact interface
 
+The active spatial backbone is now **Comma.ai Supercombo v0.8.13**, bundled as
+`supercombo.onnx` with `COMMA-LICENSE.txt` and `supercombo-manifest.json`.
+[INTEGRATION.md](../docs/INTEGRATION.md) records the exact tensor contract,
+upstream commit, SHA-256, coordinate transforms and recurrent-state handling.
+Run `python tools/verify_supercombo.py` to check the actual model. Android uses
+YOLO below for semantic road-user labels; TwinLiteNet is retained for legacy
+tests and is no longer executed in the active road pipeline. iOS uses the same
+native ORT Supercombo runtime and does not require the older Core ML exports.
+
 Android includes `detector.onnx`, `road.onnx` and 35 PCM16 guidance/warning WAVs in `android/app/src/main/assets/`. The app requires no model downloads or installed TTS voice. `model-manifest.json` records original URLs, source hashes, exported hashes and tensor shapes. Gradle rejects builds missing any required asset.
 
 ## Detector: pretrained YOLOv8n COCO

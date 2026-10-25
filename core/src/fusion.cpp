@@ -1,10 +1,11 @@
 #include "learndrive/fusion.hpp"
 namespace ld {
-void SensorFusion::reset() { *this=SensorFusion{}; }
+void SensorFusion::reset() {const auto id=calibrationId_;*this=SensorFusion{};calibrationId_=id;}
 void SensorFusion::restartCalibration(const char* reason) {
     calibrated_=false;start_=-1;count_=linearCount_=0;
     sum_=squares_=gyroSum_=linearSum_={};calibrationProgress_=0;
     calibrationReason_=reason;
+    poseCursor_=poseCount_=0;
 }
 void SensorFusion::calibrate(const ImuSample& s) {
     // Only accept a quiet, stationary five-second window. Gravity gives roll/pitch,
@@ -33,6 +34,7 @@ void SensorFusion::calibrate(const ImuSample& s) {
     gyroOffset_=gyroSum_*(1.0/count_);
     linearOffset_=linearCount_>0?linearSum_*(1.0/linearCount_):Vec3{};
     pitch_=0;acceleration_=0;calibrated_=true;calibrationProgress_=1;
+    ++calibrationId_;
     calibrationReason_="Phone plane normalized";
 }
 void SensorFusion::imu(const ImuSample& s) {
@@ -41,7 +43,7 @@ void SensorFusion::imu(const ImuSample& s) {
     double dt=lastImu_<0?0:s.time-lastImu_;
     if(dt>.2)restartCalibration("Motion data paused; normalize the phone plane again");
     lastImu_=s.time;
-    if(!calibrated_) { calibrate(s); return; }
+    if(!calibrated_) { calibrate(s);rememberCameraPose(s.time);return; }
     if(dt<=0||dt>.2) return; // Never integrate a long suspend/resume gap.
     const Vec3 rotation=s.gyro-gyroOffset_;
     const double angle=rotation.norm()*dt;
@@ -60,7 +62,7 @@ void SensorFusion::imu(const ImuSample& s) {
     pitch_=std::asin(std::clamp(up_.dot(forward_),-1.0,1.0))*180/pi;
     Vec3 linear=s.hasLinear?s.linear-linearOffset_:s.acceleration-up_*gravity;
     double longitudinal=linear.dot(forward_);
-    acceleration_+=(longitudinal-acceleration_)*(1-std::exp(-dt/.08));
+    acceleration_=longitudinal; // Driver-action suppression sees the current 100 Hz sample.
     if(longitudinal<-.8) brakeUntil_=s.time+.45;
     if(longitudinal<=-3.5) hardUntil_=s.time+.6;
     if(linear.norm()>12) shockUntil_=s.time+.5;
@@ -69,6 +71,7 @@ void SensorFusion::imu(const ImuSample& s) {
     pvv_=std::max(1e-6,pvv_-2*dt*pvb_+dt*dt*pbb_+.7*dt);
     pvb_-=dt*pbb_;
     pbb_+=.002*dt;
+    rememberCameraPose(s.time);
 }
 bool SensorFusion::gps(double t,double v,double accuracy) {
     if(!std::isfinite(t)||t<0||t<=lastGps_||!std::isfinite(v)||v<0||v>90||
@@ -91,11 +94,32 @@ Telemetry SensorFusion::snapshot(double t) const {
     out.speedValid=fresh&&lastGps_>=0&&t>=lastGps_&&t-lastGps_<3;
     out.pitchValid=fresh&&calibrated_;
     out.braking=fresh&&t<brakeUntil_; out.hardBraking=fresh&&t<hardUntil_;
-    out.shock=fresh&&t<shockUntil_; return out;
+    out.shock=fresh&&t<shockUntil_;
+    if(!fresh)out.longitudinalAcceleration=std::numeric_limits<double>::quiet_NaN();
+    return out;
 }
 Vec3 SensorFusion::normalizedVector(Vec3 value) const {
     if(!calibrated_||!value.finite())return {};
     return {value.dot(right_),value.dot(referenceUp_),-value.dot(forward_)};
+}
+Vec3 SensorFusion::cameraUp(double time) const noexcept {
+    if(!std::isfinite(time)||lastImu_<0||time-lastImu_>.25)return {};
+    // Camera capture normally precedes the newest 100 Hz sample. Retrieve the
+    // nearest historical gravity/gyro pose instead of discarding it as future.
+    double closest=.03;Vec3 result{};
+    for(size_t i=0;i<poseCount_;++i) {
+        const double age=std::abs(time-cameraPoses_[i].time);
+        if(age<closest){closest=age;result=cameraPoses_[i].up;}
+    }
+    if(result.norm()>.9)return result;
+    if(time>=lastImu_&&time-lastImu_<.25)return calibrated_?up_:(count_>20?sum_.unit():Vec3{});
+    return {};
+}
+void SensorFusion::rememberCameraPose(double time) noexcept {
+    const Vec3 value=calibrated_?up_:(count_>20?sum_.unit():Vec3{});
+    if(value.norm()<.9)return;
+    cameraPoses_[poseCursor_]={time,value};poseCursor_=(poseCursor_+1)%cameraPoses_.size();
+    poseCount_=std::min(poseCount_+1,cameraPoses_.size());
 }
 Inclination SensorFusion::inclination(double time) const {
     const auto telemetry=snapshot(time);

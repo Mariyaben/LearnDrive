@@ -1,5 +1,7 @@
 #pragma once
 #include "types.hpp"
+#include <array>
+#include <cstdint>
 namespace ld {
 struct Inclination {
     bool valid=false;
@@ -15,10 +17,17 @@ public:
     const char* calibrationReason() const {return calibrationReason_;}
     // Right/up/backward coordinates in the level plane captured at calibration.
     Vec3 normalizedVector(Vec3 deviceVector) const;
+    Vec3 cameraUp(double time) const noexcept;
+    uint64_t calibrationId() const noexcept {return calibrationId_;}
 private:
     void calibrate(const ImuSample& s);
     void restartCalibration(const char* reason);
+    void rememberCameraPose(double time) noexcept;
+    struct CameraPose {double time=-infinity;Vec3 up;};
+    std::array<CameraPose,64> cameraPoses_{};
+    size_t poseCursor_{},poseCount_{};
     bool calibrated_{};
+    uint64_t calibrationId_{};
     double start_=-1,lastImu_=-1,lastGps_=-1,calibrationProgress_{};
     int count_{},linearCount_{};
     Vec3 sum_, squares_,gyroSum_,linearSum_,gyroOffset_,linearOffset_;

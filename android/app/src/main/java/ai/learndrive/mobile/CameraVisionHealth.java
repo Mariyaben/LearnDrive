@@ -10,9 +10,9 @@ public final class CameraVisionHealth {
     public static double intervalSeconds(int thermal) {
         if (thermal >= 4) return Double.POSITIVE_INFINITY;
         if (thermal == 3) return 1.5;
-        if (thermal == 2) return .75;
-        if (thermal == 1) return .4;
-        return .25;
+        if (thermal == 2) return 1.0 / 20;
+        if (thermal == 1) return 1.0 / 25;
+        return 1.0 / 30;
     }
 
     public static boolean shouldAnalyze(double now, double lastStarted, int thermal) {

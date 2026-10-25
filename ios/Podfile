@@ -1,0 +1,4 @@
+platform :ios, '16.0'
+target 'LearnDrive' do
+  pod 'onnxruntime-c', '1.22.0'
+end

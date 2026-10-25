@@ -1,0 +1,15 @@
+<resources>
+    <style name="LearnDriveTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#F4F5F7</item>
+        <item name="android:windowBackground">#16171A</item>
+        <item name="android:colorBackground">#16171A</item>
+        <item name="android:textColorPrimary">#F4F5F7</item>
+        <item name="android:textColorSecondary">#A6ACB7</item>
+        <item name="android:statusBarColor">#16171A</item>
+        <item name="android:navigationBarColor">#16171A</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

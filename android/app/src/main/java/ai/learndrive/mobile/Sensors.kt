@@ -27,6 +27,8 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
     private var gyroTime = -1.0
     private var linearTime = -1.0
     private var gravityTime = -1.0
+    @Volatile var latestPosition:Location?=null
+        private set
     @Volatile var motionAvailable=false
         private set
     @Volatile var motionStatus="Waiting for phone motion sensors"
@@ -67,6 +69,12 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
         }
     }
     override fun onLocationChanged(location: Location) {
+        if(location.isFromMockProvider)return // Test positions cannot qualify ordinary road speed or route evidence.
+        latestPosition=Location(location)
+        core.navigationFix(location.elapsedRealtimeNanos/1e9,location.latitude,location.longitude,
+            if(location.hasAccuracy())location.accuracy.toDouble() else Double.POSITIVE_INFINITY,
+            location.speed.toDouble()*3.6,if(location.hasSpeedAccuracy())location.speedAccuracyMetersPerSecond.toDouble() else Double.POSITIVE_INFINITY,
+            location.hasSpeed()&&location.hasSpeedAccuracy(),location.bearing.toDouble(),location.hasBearing()&&location.hasBearingAccuracy()&&location.bearingAccuracyDegrees<=30)
         if(location.hasSpeed()&&location.hasSpeedAccuracy())
             core.gps(location.elapsedRealtimeNanos/1e9,location.speed.toDouble(),location.speedAccuracyMetersPerSecond.toDouble().coerceAtLeast(.5))
     }

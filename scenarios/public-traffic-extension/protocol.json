@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "date": "2026-10-17",
+  "purpose": "Exploratory development replay; no model tuning or release acceptance",
+  "source": {
+    "id": "bangalore-cv-raman",
+    "source_page": "https://commons.wikimedia.org/wiki/File:Bangalore_20220814_154815.webm",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/eb/Bangalore_20220814_154815.webm",
+    "attribution": "L. Shyamal, Driving in Bangalore, C V Raman Road, 2022",
+    "license": "CC0 1.0",
+    "source_sha1_as_published": "9757188c6c4c1a400b8cb68dc63bcfb4951914be",
+    "source_sha256": "aefe85da6cf800b989f975231e37b9148c4ad19d4d466630a0dff1be79adb79d",
+    "source_bytes": 150326691,
+    "transform": "Full clip resized to 640x360, audio removed, libx264 CRF18; source timestamps retained in derived video; replay resamples to requested analysis rate",
+    "original_speed": "unknown",
+    "original_optics_and_motion": "unknown"
+  },
+  "before_inference_review": {
+    "method": "Source contact sheet at 0,6,12,18,24,30,36,42 seconds, before running models on this clip",
+    "observations": "Daytime divided Indian road, same-direction cars/truck and motorcycles, opposing traffic beyond median, tree shadows and some image blur/camera movement. Sparse stills cannot label temporal encounters or prove an unobstructed path.",
+    "reference_status": "No instructor or collision/actor ground truth; do not compute accuracy or credit generic cues as hazard recognition"
+  },
+  "runs": [
+    {"id": "bangalore-semantic-unknown-delay224", "mode": "semantic", "speed_kmh": null, "fps": 30, "latency_ms": 224},
+    {"id": "bangalore-semantic-manual30-delay224", "mode": "semantic", "speed_kmh": 30, "fps": 30, "latency_ms": 224},
+    {"id": "bangalore-semantic-manual30-delay350", "mode": "semantic", "speed_kmh": 30, "fps": 30, "latency_ms": 350},
+    {"id": "bangalore-spatial-manual30-hfov110-delay224", "mode": "spatial", "speed_kmh": 30, "fps": 20, "hfov": 110, "latency_ms": 224},
+    {"id": "bangalore-semantic-manual30-delay500", "mode": "semantic", "speed_kmh": 30, "fps": 30, "latency_ms": 500, "added_after_initial_runs": "Verify clear staleness rejection beyond the 350 ms floating-point boundary"}
+  ],
+  "shared_assumptions": {
+    "pre_roll_seconds": 6,
+    "speed_30_meaning": "Assumed sensitivity input, never a measured speed",
+    "delay_224_meaning": "Fixed sensitivity input informed by first phone capture median; not an Android runtime simulation",
+    "delay_350_meaning": "Boundary stress test of freshness gating; silence does not establish useful perception",
+    "spatial_geometry": "Assumed 110-degree pinhole optics and level gravity only for sensitivity; not calibrated road validation",
+    "audio": "Native submissions and bundled clip durations; no physical audible onset or comprehension measurement",
+    "emergency_commands": false
+  },
+  "checks": [
+    "Decision/acceptance linkage, cooldown and duplicate locks",
+    "No fabricated speed or spatial availability in semantic-only runs",
+    "Speech occupancy, interruptions, repeated cues and scene freshness",
+    "Visual inspection of cue capture frames and surrounding source frames",
+    "Rerun the four existing development clips in semantic/manual30 mode at 224 ms delay; retain prior results separately"
+  ],
+  "release_gate": "Open; ordinary cues require actor relevance, correct timing and independent instructor review. Public-video replay does not qualify phone sensors, mounting, sustained performance, learner benefit or market demand."
+}

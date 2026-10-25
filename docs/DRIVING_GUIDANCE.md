@@ -1,5 +1,17 @@
 # Camera driving guidance
 
+Android 0.4.1 uses the unified map/camera dashboard. Ordinary road coaching uses
+measured telemetry directly: unavailable speed stays unknown, and mock locations
+cannot qualify road speed or route evidence. Location is requested during road
+setup; declining it still permits basic camera attention. Manual speed belongs
+only to explicit screen-video, MP4 and Desk tests. Detailed diagnostics are in Lab
+settings. See [the product/build checkpoints](product/UNIFIED_DRIVING_COACH.md).
+
+For Android 0.3.4, [SETUP_FLOW.md](SETUP_FLOW.md) supersedes the startup/default
+instructions below: road coaching requires explicit Start, level-ground reference
+confirmation is optional and separate, and screen testing must be selected in lab
+settings each launch. The earlier versions described here remain historical.
+
 Install `build/LearnDrive-0.1.8-debug.apk`, open Camera and allow camera access. Startup speech, road-user/obstacle guidance, bend cues, slope cues and conditional gear guidance all run in Camera mode. GPS remains optional.
 
 If the preview is live but boxes disappear, read the **Vision** status. **Vision active: 0 road users** means inference is running but the current frame has no accepted person/vehicle detection. **Vision delayed** shows the number detected and the original capture age. Slow completed results remain visible for up to two seconds after completion, with a three-second capture-age limit; they are not treated as fresh hazard evidence. The shared advice rules still reject camera evidence older than 350 ms.
@@ -18,7 +30,7 @@ Camera shows estimated uphill/downhill angle in degrees and grade percentage, us
 
 In Camera video-test mode, speed still uses the video setting while phone slope uses the actual sensors and retains their calibration, freshness, braking and shock state. When filming a road video, this measures the phone in your hand, not the vehicle in the video. You can tilt the normalized phone gently to exercise hill cues. For explicit simulated hill inputs, turn **Use normalized phone slope** OFF to reveal the **Video slope** dropdown. The simulated slope resets to level when the app starts. Keep **Slope guidance** ON for either source.
 
-For a phone mounted in a real vehicle, turn video test OFF. Mount the phone firmly, point the rear camera along the road and recalibrate while parked on level ground. The five-second calibration defines zero grade. Changing the mount or calibrating on a slope changes that interpretation. Fresh GPS speed is preferred; otherwise the optional manual fallback is used. **Require GPS speed** blocks the speed-based tactical path without a fix, while basic scene and bend guidance continue.
+For a phone mounted in a real vehicle, keep video test OFF. Mount the phone firmly and point the rear camera along the road. An optional level reference must be confirmed and set while parked on level ground. Ordinary road coaching uses fresh measured speed; there is no manual road-speed fallback in Android 0.4.1. Basic camera attention remains available when speed is unknown. Simulated inputs remain isolated in the explicit test modes.
 
 | Condition | Spoken guidance | Evidence |
 | --- | --- | --- |
@@ -42,7 +54,7 @@ The following are app coaching bands awaiting phone and vehicle validation, not 
 
 The gearing phrases are for **Manual vehicle · gear guidance** ON. With it OFF, the 5–8° cues are **Uphill. Steady power.** and **Downhill. Control speed.**, and the 8–12° downhill cue is **Steep downhill. Control speed.** No angle selects an exact gear number.
 
-**Maintain speed.** replaces a slope action cue only when advice speed is above 0.5 and at most 10 km/h, longitudinal acceleration is within ±0.2 m/s², and a fresh, valid straight-road fit and empty detection scene are available. This threshold chooses wording; it is not a universally safe speed. Known stationary speed suppresses slope action cues. Higher speed or positive acceleration restores the normal grade cue after the guidance spacing interval. An obstacle cannot trigger Maintain speed.
+The coach no longer selects **Maintain speed**. Empty detections cannot establish a safe speed. Measured steady motion above 0.5 and at most 10 km/h, with longitudinal acceleration within ±0.2 m/s², keeps additional slope action speech quiet. Known stationary speed also suppresses slope action cues. Changed or unknown motion leaves normal slope guidance available; camera hazard guidance evaluates independently. These thresholds suppress unnecessary speech, rather than defining a safe driving speed.
 
 **Slope reading unavailable.** speaks once after 1.5 seconds of unsupported or lost slope data following a valid reading, or an explicitly invalid calibrated reading. It stays quiet while initial normalization is pending. A recovered valid reading allows a later loss to be reported again. Braking, shock, audio readiness and the slope toggle apply to this cue too.
 

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "purpose": "Public development replay suite; no training and no safety certification",
+  "transform": "Full clips resized to 640x360 with ffmpeg/libx264 CRF18, audio removed, source frame rate retained",
+  "clips": [
+    {
+      "id": "jodhpur-clear",
+      "url": "https://shaaashvat.github.io/ids-jodha/assets/Cleary.mp4",
+      "source_page": "https://shaaashvat.github.io/ids-jodha/",
+      "attribution": "IDS-JODHA project authors, IIT Jodhpur",
+      "license_note": "Project describes the dataset as CC BY 4.0; keep preview attribution and verify distribution terms before product reuse",
+      "sha256": "72b714ff8176cb2f8513a70458063093fb3ec1910d118056bd3f304dd10e304a",
+      "analysis_fps": 25,
+      "conditions": "Indian urban junction, motorcycles, crossing car, pedestrians, auto-rickshaws; daylight",
+      "traffic_hand": "left"
+    },
+    {
+      "id": "jodhpur-rain",
+      "url": "https://shaaashvat.github.io/ids-jodha/assets/Rainy.mp4",
+      "source_page": "https://shaaashvat.github.io/ids-jodha/",
+      "attribution": "IDS-JODHA project authors, IIT Jodhpur",
+      "license_note": "Project describes the dataset as CC BY 4.0; keep preview attribution and verify distribution terms before product reuse",
+      "sha256": "060799add950f93afdb0354cae3e159a49bc0b4adee8e4aeac5b916bc05d6496",
+      "analysis_fps": 25,
+      "conditions": "Indian urban junction, motorcycles, rain, reflections and windshield wipers; outside proposed dry-road support",
+      "traffic_hand": "left"
+    },
+    {
+      "id": "udacity-challenge",
+      "url": "https://raw.githubusercontent.com/udacity/CarND-Advanced-Lane-Lines/master/challenge_video.mp4",
+      "source_page": "https://github.com/udacity/CarND-Advanced-Lane-Lines",
+      "attribution": "Udacity CarND Advanced Lane Lines",
+      "license_note": "Repository MIT license; retain source and license attribution",
+      "sha256": "81062ee3b472732828098c7798a6a459ff239e7add8e94de69042c806dd3369f",
+      "analysis_fps": 30,
+      "conditions": "US freeway, overpass shadows, adjacent-lane and overtaking vehicles; source 30000/1001 fps resampled to 30",
+      "traffic_hand": "right; out-of-domain control (current Supercombo runtime remains configured for India)"
+    },
+    {
+      "id": "udacity-curves",
+      "url": "https://raw.githubusercontent.com/udacity/CarND-Advanced-Lane-Lines/master/harder_challenge_video.mp4",
+      "source_page": "https://github.com/udacity/CarND-Advanced-Lane-Lines",
+      "attribution": "Udacity CarND Advanced Lane Lines",
+      "license_note": "Repository MIT license; retain source and license attribution",
+      "sha256": "45879f48cdc43e40771317a7d03c973cb4c45db47f145e28837d9610d121732c",
+      "analysis_fps": 25,
+      "conditions": "US winding two-lane road, strong tree shadows, oncoming vehicles and motorcycles; out-of-domain control",
+      "traffic_hand": "right; out-of-domain control (current Supercombo runtime remains configured for India)"
+    }
+  ]
+}
