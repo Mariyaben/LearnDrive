@@ -227,6 +227,11 @@ bool CameraCoach::newEncounterEligible(int id,int reference,double now) const {
         return !tr.spoken&&tr.entryPending&&tr.entryReferenceId==reference&&tr.hits>=2&&lastCapture_-tr.since>=.12;
     return false;
 }
+bool CameraCoach::actorBox(int id,double now,Box& out) const {
+    if(!actorRelevant(id,now))return false;
+    for(const auto& track:attentionTracks_)if(track.id==id){out=track.box;return true;}
+    return false;
+}
 void CameraCoach::accepted(Prompt prompt,double time) {
     if(!started_||priority(prompt)<=0||!std::isfinite(time)||time<startedAt_)return;
     startupPending_=false;lastPrompt_=prompt;lastSpoken_=time;
@@ -239,6 +244,13 @@ void CameraCoach::accepted(Prompt prompt,double time) {
     if(prompt==Prompt::keepSafeGap||prompt==Prompt::emergency||prompt==Prompt::nearbyCollision||(attention&&pendingEvidenceKind_==2)) {
         spokenCloseLevel_=std::max(spokenCloseLevel_,closeLevel_);spokenSceneBits_|=sceneBits_;
     }
+}
+void CameraCoach::acceptedActor(Prompt prompt,double time,int actorId,int evidenceKind) {
+    if(actorId<=0||!actorRelevant(actorId,time))return;
+    const int previousActor=pendingActorId_,previousKind=pendingEvidenceKind_;
+    pendingActorId_=actorId;pendingEvidenceKind_=evidenceKind;
+    accepted(prompt,time);
+    pendingActorId_=previousActor;pendingEvidenceKind_=previousKind;
 }
 Decision CameraCoach::evaluate(double time,double captureTime,const std::vector<Box>& boxes,bool ready,bool braking,bool shock,
         double speed,bool speedValid,bool manual,double imageAspect) {
