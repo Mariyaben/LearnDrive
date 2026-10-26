@@ -1,6 +1,6 @@
 package ai.learndrive.mobile
 
-/** Short-lived caption of accepted speech, never a persistent driving command. */
+/** Short-lived accepted coaching cue. Voice submission is independent. */
 class CoachCaption {
     private data class Entry(val text:String,val source:Long,val acceptedAt:Double,val expiresAt:Double,
         val route:Long?,val eventProgress:Double?,val origin:Int)

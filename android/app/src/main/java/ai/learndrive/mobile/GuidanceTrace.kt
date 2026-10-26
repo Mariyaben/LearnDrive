@@ -5,11 +5,15 @@ import org.json.JSONObject
 
 /** Versioned local diagnostic format shared with tools/review_video.py. */
 object GuidanceTrace {
+    /** Provider content stays transient. Only offline route context is exportable. */
+    fun navigationForExport(context:DoubleArray?,google:Boolean):DoubleArray?=if(google)null else context
     fun decision(d:GuidanceDecision,time:Double,source:String,speedSource:String,frame:FrameContext?,reason:String,
         emergencies:Boolean,spatialReadiness:Int?=null,setupState:Int?=null,levelReferenceId:Long?=null,
-        calibrationId:Long?=null,advice:Telemetry?=null,measured:Telemetry?=null,navigation:DoubleArray?=null):String = JSONObject().apply {
+        calibrationId:Long?=null,advice:Telemetry?=null,measured:Telemetry?=null,navigation:DoubleArray?=null,
+        coachingDiagnostics:String?=null,capability:VisionPerformanceSnapshot?=null):String = JSONObject().apply {
         put("schema_version",1);put("event","decision");put("time",time)
         put("source",source);put("source_id",d.sourceId);put("sequence",d.sequence)
+        put("settings_revision",d.settingsRevision)
         put("prompt",d.prompt);put("origin",d.origin)
         put("candidates",JSONArray(listOf(d.tactical,d.reflex,d.terrain,d.camera)))
         put("suppress",d.suppress);put("eligible",d.eligible);put("blocked",d.blocked)
@@ -30,10 +34,26 @@ object GuidanceTrace {
         put("advice_telemetry",advice?.let {telemetry(it)}?:JSONObject.NULL)
         put("measured_phone_telemetry",measured?.let {telemetry(it)}?:JSONObject.NULL)
         put("navigation",navigation?.let {navigationFields(it)}?:JSONObject.NULL)
+        put("coaching",coachingDiagnostics?.let {JSONObject(it)}?:JSONObject.NULL)
+        put("capability",capability?.let {JSONObject().apply {
+            put("profile",it.capabilityProfile);put("reason",it.capabilityReason)
+            put("advanced_available",it.advancedAvailable);put("spatial_samples",it.capabilitySamples)
+            put("slow_spatial_samples",it.capabilitySlowSamples);put("spatial_failures",it.capabilityFailures)
+            put("last_detector_ms",number(it.lastDetectorMs));put("last_spatial_ms",number(it.lastSpatialMs))
+            put("last_frame_ms",number(it.lastFrameMs))
+        }}?:JSONObject.NULL)
     }.toString()
     fun accepted(d:GuidanceDecision,time:Double):String=JSONObject().apply {
         put("schema_version",1);put("event","accepted");put("time",time)
         put("source_id",d.sourceId);put("sequence",d.sequence);put("prompt",d.prompt)
+        put("settings_revision",d.settingsRevision);put("voice_submitted",true)
+        put("audible_playback_confirmed",false)
+    }.toString()
+    fun coachingAccepted(d:GuidanceDecision,time:Double,voiceSubmitted:Boolean):String=JSONObject().apply {
+        put("schema_version",1);put("event","coaching_accepted");put("time",time)
+        put("source_id",d.sourceId);put("sequence",d.sequence);put("prompt",d.prompt)
+        put("settings_revision",d.settingsRevision);put("voice_submitted",voiceSubmitted)
+        put("audible_playback_confirmed",false)
     }.toString()
     private fun number(value:Double?)=value?.takeIf {it.isFinite()}?:JSONObject.NULL
     private fun navigationFields(v:DoubleArray)=JSONObject().apply {

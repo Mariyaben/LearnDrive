@@ -12,6 +12,14 @@ public final class PracticeSessionReviewTest {
         run.run(); passed++; System.out.println("PASS " + name);
     }
     public static void main(String[] args) {
+        test("visual coaching remains distinct from voice submission", () -> {
+            PracticeSessionReview session=new PracticeSessionReview();session.start(0);
+            session.accepted(1,4,"Give space",false);session.accepted(2,5,"Prepare for a left turn",true);
+            PracticeSessionReview.Review review=session.finish(3);
+            check(review.roadCues==1&&review.navigationCues==1,"muted logical coaching disappeared");
+            check(review.voiceSubmissions==1,"visual cue invented an audio submission");
+            check(review.text().contains("Voice submissions: 1")&&review.text().contains("hearing are not confirmed"),"review implies heard speech");
+        });
         test("terrain stage cannot turn a bend cue into a measured inclination or vehicle lesson", () -> {
             PracticeSessionReview session = new PracticeSessionReview();session.start(1);
             session.accepted(2, 3, "Right bend ahead. Ease off early and stay in your lane");

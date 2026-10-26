@@ -32,3 +32,15 @@ $journalTests = Join-Path $projectRoot 'tests\SessionJournalTest.java'
 if ($LASTEXITCODE -ne 0) { throw 'Session journal compilation failed.' }
 & java -cp $outputDir ai.learndrive.mobile.SessionJournalTest $outputDir
 if ($LASTEXITCODE -ne 0) { throw 'Session journal tests failed.' }
+$capability = Join-Path $projectRoot 'android\app\src\main\java\ai\learndrive\mobile\VisionCapabilityPolicy.java'
+$capabilityTests = Join-Path $projectRoot 'tests\VisionCapabilityPolicyTest.java'
+& javac --release 17 -d $outputDir $readiness $capability $capabilityTests
+if ($LASTEXITCODE -ne 0) { throw 'Vision capability test compilation failed.' }
+& java -cp $outputDir ai.learndrive.mobile.VisionCapabilityPolicyTest
+if ($LASTEXITCODE -ne 0) { throw 'Vision capability tests failed.' }
+$interruption = Join-Path $projectRoot 'android\app\src\main\java\ai\learndrive\mobile\AudioInterruptionPolicy.java'
+$interruptionTests = Join-Path $projectRoot 'tests\AudioInterruptionPolicyTest.java'
+& javac --release 17 -d $outputDir $interruption $interruptionTests
+if ($LASTEXITCODE -ne 0) { throw 'Audio interruption test compilation failed.' }
+& java -cp $outputDir ai.learndrive.mobile.AudioInterruptionPolicyTest
+if ($LASTEXITCODE -ne 0) { throw 'Audio interruption tests failed.' }

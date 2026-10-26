@@ -11,7 +11,14 @@ import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,private val status:(String)->Unit): AutoCloseable {
+fun interface AudioPlaybackGate {
+    /** Acquire the native lock, then call play with a predicate checked at the
+     * AudioTrack.play boundary, after the audio monitor has been acquired. */
+    fun start(play:(()->Boolean)->Boolean):Boolean
+}
+
+class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,
+    private val priority:(Int)->Int={Int.MAX_VALUE},private val status:(String)->Unit): AutoCloseable {
     private data class Clip(val bytes:ByteArray,val sampleRate:Int,val channels:Int)
     private val cache=java.util.concurrent.ConcurrentHashMap<Int,Clip>()
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"pcm-audio") }
@@ -21,9 +28,13 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     private val focus=AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).setAudioAttributes(attributes).setOnAudioFocusChangeListener { if(it<0)cancel() }.build()
     @Volatile private var active=0
     @Volatile private var pending=0
+    private var activeWarning=false
+    private var pendingWarning=false
     @Volatile private var track:AudioTrack?=null
     @Volatile private var closed=false
     @Volatile private var pcmReady=false
+    @Volatile private var voiceAllowed=true
+    val voiceEnabled get()=voiceAllowed
     val ready get() = cache.size==clipCount&&pcmReady&&!closed
     fun durationSeconds(id:Int)=cache[id]?.let {it.bytes.size.toDouble()/(it.sampleRate*it.channels*2)}?:3.0
     init {
@@ -64,21 +75,37 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         require(channels in 1..2&&rate in 8000..48000&&pcm.isNotEmpty()&&pcm.size%(channels*2)==0) {"Invalid warning PCM format"}
         return Clip(pcm,rate,channels)
     }
-    @Synchronized fun submit(id:Int):Boolean {
+    /** The optional onset gate acquires the native lock before taking this worker's
+     * monitor. Calling it outside this monitor preserves core -> audio lock order. */
+    fun submit(id:Int,onset:AudioPlaybackGate?=null):Boolean=submitClip(id,onset,false)
+    /** Only NativeCore calls this after pending(seq,prompt) validates the exact
+     * source/revision and native mode. Test voice has no warning-authority flag. */
+    internal fun submitCoaching(id:Int,validatedWarning:Boolean,onset:AudioPlaybackGate):Boolean=
+        submitClip(id,onset,validatedWarning)
+    @Synchronized private fun submitClip(id:Int,onset:AudioPlaybackGate?,validatedWarning:Boolean):Boolean {
         val clip=cache[id]?:return false
-        if(!ready||!mayInterrupt(id,active)||!mayInterrupt(id,pending))return false
+        fun canReplace(current:Int,warning:Boolean)=AudioInterruptionPolicy.mayReplace(validatedWarning,warning,
+            priority(current),mayInterrupt(id,current))
+        if(!voiceEnabled||!ready||!canReplace(active,activeWarning)||!canReplace(pending,pendingWarning))return false
         if(audioManager.requestAudioFocus(focus)!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {status("Audio focus unavailable; retry Test voice");return false}
-        val token=generation.incrementAndGet();pending=id;track?.pause();track?.flush()
+        val token=generation.incrementAndGet();pending=id;pendingWarning=validatedWarning;track?.pause();track?.flush()
         worker.execute {
             if(generation.get()!=token||closed)return@execute
-            synchronized(this) {active=id;pending=0}
             val player=track?:return@execute
             try {
-                if(generation.get()!=token)return@execute
-                player.play();var offset=0
+                val play:(()->Boolean)->Boolean={valid->synchronized(this) {
+                    if(generation.get()!=token||closed||!voiceEnabled||!valid())false
+                    else {active=id;activeWarning=validatedWarning;pending=0;pendingWarning=false;player.play();true}
+                }}
+                if(!(onset?.start(play)?:play {true}))return@execute
+                var offset=0
                 val chunk=(clip.sampleRate/100).coerceAtLeast(1)*clip.channels*2 // Whole PCM frames, about 10 ms.
                 while(offset<clip.bytes.size&&generation.get()==token&&!closed) {
-                    val count=player.write(clip.bytes,offset,minOf(chunk,clip.bytes.size-offset),AudioTrack.WRITE_NON_BLOCKING)
+                    // Cancellation flushes under the same monitor. An old
+                    // worker must never append a chunk after that flush.
+                    val count=writeCurrent(token) {
+                        player.write(clip.bytes,offset,minOf(chunk,clip.bytes.size-offset),AudioTrack.WRITE_NON_BLOCKING)
+                    }?:break
                     check(count>=0) {"PCM write failed: $count"}
                     offset+=count
                     if(count==0)Thread.sleep(2)
@@ -87,12 +114,20 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
                 while(player.playbackHeadPosition<frames&&generation.get()==token&&!closed)Thread.sleep(5)
             } catch(e:Exception) {status("Audio output: ${e.message}")}
             finally {
-                synchronized(this) {if(generation.get()==token){player.pause();player.flush();active=0;pending=0;audioManager.abandonAudioFocusRequest(focus)}}
+                synchronized(this) {if(generation.get()==token){player.pause();player.flush();active=0;pending=0;activeWarning=false;pendingWarning=false;audioManager.abandonAudioFocusRequest(focus)}}
             }
         }
         return true
     }
-    @Synchronized fun cancel() {generation.incrementAndGet();pending=0;active=0;track?.pause();track?.flush();audioManager.abandonAudioFocusRequest(focus)}
+    @Synchronized private fun writeCurrent(token:Int,write:()->Int):Int? {
+        if(generation.get()!=token||closed||!voiceEnabled)return null
+        return write()
+    }
+    @Synchronized fun setVoiceEnabled(enabled:Boolean) {
+        voiceAllowed=enabled
+        if(!enabled)cancel()
+    }
+    @Synchronized fun cancel() {generation.incrementAndGet();pending=0;active=0;activeWarning=false;pendingWarning=false;track?.pause();track?.flush();audioManager.abandonAudioFocusRequest(focus)}
     /** Cancel outdated context without cutting off a newer, higher-priority cue. */
     @Synchronized fun cancelIfPrompt(matches:(Int)->Boolean):Boolean {
         val current=if(pending!=0)pending else active
@@ -100,8 +135,13 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         cancel();return true
     }
     @Synchronized fun preempt() {
-        generation.incrementAndGet();pending=0;active=0
+        generation.incrementAndGet();pending=0;active=0;activeWarning=false;pendingWarning=false
         track?.pause();track?.flush();track?.stop()
     }
-    override fun close() {closed=true;pcmReady=false;cancel();worker.execute {synchronized(this){track?.release();track=null}};worker.shutdown()}
+    @Synchronized override fun close() {
+        if(closed)return
+        closed=true;pcmReady=false;cancel()
+        worker.execute {synchronized(this){track?.release();track=null}}
+        worker.shutdown()
+    }
 }

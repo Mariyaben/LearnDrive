@@ -19,7 +19,7 @@ public final class PracticeSessionReview {
     private static final double MAX_SAMPLE_GAP = .5;
     private boolean active, previousCurrent;
     private double started, lastSample, lastAccepted, checkedSeconds, currentSeconds;
-    private int roadCues, navigationCues;
+    private int roadCues, navigationCues, voiceSubmissions;
     private final LinkedHashMap<String, Cue> cues = new LinkedHashMap<>();
 
     public static final class Cue {
@@ -32,14 +32,14 @@ public final class PracticeSessionReview {
 
     public static final class Review {
         public final double durationSeconds, checkedSeconds, currentSeconds, unmeasuredSeconds;
-        public final int roadCues, navigationCues;
+        public final int roadCues, navigationCues, voiceSubmissions;
         public final List<Cue> cues;
-        private Review(double duration, double checked, double current, int road, int navigation, List<Cue> cues) {
+        private Review(double duration, double checked, double current, int road, int navigation, int voice, List<Cue> cues) {
             durationSeconds = duration;
             checkedSeconds = Math.min(duration, checked);
             currentSeconds = Math.min(checkedSeconds, current);
             unmeasuredSeconds = Math.max(0, duration - checkedSeconds);
-            roadCues = road; navigationCues = navigation;
+            roadCues = road; navigationCues = navigation; voiceSubmissions = voice;
             this.cues = Collections.unmodifiableList(cues);
         }
         public String text() {
@@ -52,6 +52,8 @@ public final class PracticeSessionReview {
                 .append("\nUnmeasured time: ").append(duration(unmeasuredSeconds));
             out.append("\n\nCoaching cues: ").append(roadCues + navigationCues)
                 .append("\nRoad: ").append(roadCues).append(" · Navigation: ").append(navigationCues);
+            out.append("\nVoice submissions: ").append(voiceSubmissions)
+                .append(". Playback and hearing are not confirmed.");
             if (roadCues + navigationCues == 0)
                 out.append("\nNo cues does not mean there were no hazards.");
             int shown = 0, shownCount = 0;
@@ -89,7 +91,7 @@ public final class PracticeSessionReview {
     public synchronized boolean start(double time) {
         if (active || !validTime(time)) return false;
         active = true; started = lastSample = lastAccepted = time;
-        checkedSeconds = currentSeconds = 0; roadCues = navigationCues = 0;
+        checkedSeconds = currentSeconds = 0; roadCues = navigationCues = voiceSubmissions = 0;
         previousCurrent = false; cues.clear();
         return true;
     }
@@ -105,12 +107,18 @@ public final class PracticeSessionReview {
         lastSample = time; previousCurrent = current;
     }
 
-    /** Call only after AudioWorker accepts a real supervised road cue. Test Voice is excluded. */
+    /** Compatibility for existing accepted voice submissions. Test Voice is excluded. */
     public synchronized boolean accepted(double time, int origin, String phrase) {
+        return accepted(time, origin, phrase, true);
+    }
+
+    /** Logical road coaching acceptance counts even when optional voice is off. */
+    public synchronized boolean accepted(double time, int origin, String phrase, boolean voiceSubmitted) {
         if (!active || !validTime(time) || time < lastAccepted || origin < 1 || origin > 5 ||
             phrase == null || phrase.trim().isEmpty()) return false;
         lastAccepted = time;
         if (origin == 5) navigationCues++; else roadCues++;
+        if (voiceSubmitted) voiceSubmissions++;
         String bounded = phrase.trim();
         if (bounded.length() > 160) bounded = bounded.substring(0, 160);
         String key = origin + ":" + bounded;
@@ -123,7 +131,7 @@ public final class PracticeSessionReview {
     public synchronized Review finish(double time) {
         if (!active || !validTime(time) || time < Math.max(lastSample, lastAccepted)) return null;
         active = false;
-        return new Review(time - started, checkedSeconds, currentSeconds, roadCues, navigationCues,
+        return new Review(time - started, checkedSeconds, currentSeconds, roadCues, navigationCues, voiceSubmissions,
             new ArrayList<>(cues.values()));
     }
 
