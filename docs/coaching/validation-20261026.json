@@ -1,0 +1,212 @@
+{
+  "date": "2026-10-26",
+  "branch": "codex/balanced-coaching",
+  "validated_code_commit": "2872bc572e3f96e7b37212dde446734f749e1450",
+  "published_baseline": "34a63c38d67d17923ff390747a1ea1ad9b3a4ffe",
+  "status": "engineering prototype; paid launch not qualified",
+  "apk": {
+    "apk": "build/LearnDrive-0.5.0-debug.apk",
+    "bytes": 237891741,
+    "sha256": "031894031de6e8f2b4caa3dd170f1e6267522fdc6dab0e322e6f1302b282cbd6",
+    "version": "0.5.0",
+    "version_code": 29,
+    "native_libraries": [
+      {
+        "path": "lib/arm64-v8a/libdatastore_shared_counter.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libgmm-jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libimage_processing_util_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/liblearndrive.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libmaplibre.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libonnxruntime.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libonnxruntime4j_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libsurface_util_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/arm64-v8a/libvalhalla-wrapper.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libdatastore_shared_counter.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libgmm-jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libimage_processing_util_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/liblearndrive.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libmaplibre.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libonnxruntime.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libonnxruntime4j_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libsurface_util_jni.so",
+        "load_segment_alignment": [
+          16384,
+          16384
+        ]
+      },
+      {
+        "path": "lib/x86_64/libvalhalla-wrapper.so",
+        "load_segment_alignment": [
+          16384,
+          16384,
+          16384
+        ]
+      }
+    ],
+    "zipalign_16k": "passed",
+    "signature": "verified debug certificate",
+    "assets": "models voices notices and ORT loaded sections matched"
+  },
+  "tests": {
+    "native_ctest_groups": 13,
+    "native_coaching_groups": 21,
+    "temporal_groups": 8,
+    "python_tests": 67,
+    "python_skips": 0,
+    "java_host_classes": 9,
+    "structured_synthetic_fixtures": 17,
+    "video_clips": 28,
+    "video_seconds": 760.5,
+    "video_frames": 22818,
+    "video_logical_cues": 59,
+    "video_contracts": "passed",
+    "instructor_accuracy": "unavailable",
+    "physical_android_instrumentation": "not run; no connected ADB device"
+  },
+  "performance": {
+    "scope": "synthetic_x64_policy_only",
+    "ticks": 20000,
+    "engine_bytes": 284296,
+    "world_bytes": 5744,
+    "ordinary_cpp_allocations": 0,
+    "logical_accepted": 16,
+    "p50_us": 0.4,
+    "p95_us": 0.5,
+    "p99_us": 0.5,
+    "max_us": 28.1,
+    "phone_performance_measured": false
+  },
+  "pretrained_shadow": "unavailable",
+  "local_evidence_sha256": {
+    "build/balanced-coaching/ctest.txt": "4fb1b25afeeace02962c8a75af5086c32868656c03f4c2341287f1a0b6a7bcf8",
+    "build/balanced-coaching/native-build.txt": "c046c191eb7ffc2b70225045224bb547e350920fa8fbcbd6f732b019e828490a",
+    "build/balanced-coaching/python-tests.txt": "c6e080c1c5179d50e2d7da01a2434b862f55ba46af7f633ac8e4435771a947f2",
+    "build/balanced-coaching/host-camera-tests.txt": "74133660d0e5e242dcbee208850d6958544559dd41fdbe004a2e674d718e3198",
+    "build/balanced-coaching/host-road-tests.txt": "6976862985d9148299755a61b6385fdf28f1ef284ce81ff864fe9656b07b97d6",
+    "build/balanced-coaching/android-build-retry.txt": "574514bb5d07dbefee0f0b7e2f0c5dd82b41959576c3a748971bb7beb128b1ff",
+    "build/balanced-coaching/apk-assets.txt": "f1ce4d76eb686eaf6e15b264115ad0a3bf7a3a6ce4f6a1481142850db85bfea0",
+    "build/balanced-coaching/apk-signature.txt": "bd0298216edb11132067f114e8bd485c8938762b216c3873bd805eedbb9d1804",
+    "build/balanced-coaching/apk-alignment.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build/balanced-coaching/video-contracts.json": "37ce9d9607398775f48e7e23438cdcb7d8debb93b2b9c64beedef0b08a317bd6",
+    "build/balanced-coaching/structured-replay/report.json": "90cd6e170e93ed6dbb6e1095aa9208792b80f1072fd7cc89cf3c543d3f0e46ea",
+    "build/balanced-coaching/shadow-benchmark.json": "c7578cccc170b86591eee52e1257ecaa898ed1c9995a8eb0ea2eabc5e6ac433a"
+  },
+  "limits": [
+    "Host policy timing is not phone inference or acoustic latency.",
+    "Video onset is simulated and does not prove audibility or learner understanding.",
+    "No current sustained thermal/battery/RAM/CPU/GPU phone qualification.",
+    "Model commercial licensing and Google contract/product-wide privacy review remain open.",
+    "No instructor labels or trained policy superiority claim."
+  ]
+}
