@@ -67,6 +67,23 @@ class Native:
         if not result:
             raise RuntimeError(self.error(handle).decode("utf-8", "replace"))
 
+    def configure_coaching(self, handle, profile):
+        if profile == "legacy":
+            return
+        signatures = {"coaching_configure": ([P, C.c_int, C.c_uint64], C.c_int),
+                      "coaching_accepted": ([P, C.c_int, C.c_double], C.c_int),
+                      "coaching_onset": ([P, C.c_int, C.c_double], C.c_int),
+                      "coaching_diagnostics": ([P, C.c_double], C.c_char_p)}
+        try:
+            for name,(arguments,result) in signatures.items():
+                function=getattr(self.lib,"replay_"+name)
+                function.argtypes,function.restype=arguments,result
+                setattr(self,name,function)
+        except AttributeError as error:
+            raise RuntimeError("Selected coaching profile needs an updated learndrive_replay build; legacy v2 remains available") from error
+        if not self.coaching_configure(handle,{"minimal":0,"balanced":1,"guided":2}[profile],1):
+            raise RuntimeError("Native coaching profile configuration rejected")
+
 
 def ptr(array):
     return array.ctypes.data_as(P)
@@ -185,6 +202,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video", type=Path)
     parser.add_argument("--speeds", type=Path, help="Reviewed samples: time,speed_kmh; otherwise speed is unknown")
+    parser.add_argument("--coaching-profile",choices=["legacy","minimal","balanced","guided"],default="legacy",
+                        help="Explicit opt-in shared CoachingEngine policy; default retains legacy video replay behavior")
     parser.add_argument("--mode", choices=["spatial", "semantic"], default="spatial",
                         help="Spatial uses explicitly assumed optics; semantic matches uncalibrated Android MP4")
     parser.add_argument("--test-speed-kmh", type=float,
@@ -298,6 +317,7 @@ def main():
     handle = native.create(b"", width, height, ptr(geometry) if spatial else None)
     if not handle:
         raise RuntimeError("Native policy initialization failed")
+    native.configure_coaching(handle,args.coaching_profile)
     native.emergencies(handle, int(args.research_emergencies))
     box_buffer, road, decision = np.empty(64 * 6, np.float32), np.empty(13, np.float64), np.empty(8, np.float64)
     trace = np.empty(22, np.float64)
@@ -339,11 +359,25 @@ def main():
                            "research_emergencies": args.research_emergencies,
                            "calibration_origin": calibration_origin,
                            "recorded_time": now - args.pre_roll_seconds})
+            if args.coaching_profile != "legacy":
+                traces[-1].update(settings_revision=1,coaching_profile=args.coaching_profile,
+                                  coaching=json.loads(native.coaching_diagnostics(handle,now)))
             selected = int(decision[0])
             if selected:
                 candidate_counts[str(selected)] = candidate_counts.get(str(selected), 0) + 1
             if selected and decision[6] and decision[7]:
                 is_dual = int(trace[3]) == 1
+                if args.coaching_profile != "legacy":
+                    if not native.coaching_accepted(handle,selected,now):
+                        raise RuntimeError("Selected coaching event failed current-evidence logical acceptance; no speech event recorded")
+                    onset_valid=bool(native.coaching_onset(handle,selected,now))
+                    traces.append({"schema_version":1,"event":"coaching_accepted","time":now,
+                                   "source_id":int(trace[1]),"sequence":int(trace[0]),"prompt":selected,
+                                   "settings_revision":1,"voice_submitted":True,"audible_playback_confirmed":False,
+                                   "simulated_validated_onset":onset_valid})
+                    if not onset_valid:
+                        tick += 1
+                        continue
                 event = {"time": round(now - args.pre_roll_seconds, 4), "prompt": selected, "text": native.prompt(selected).decode(),
                          "duration": durations[selected], "speed_kmh": speed,
                          "speed_source": speed_observation.source,
@@ -352,9 +386,11 @@ def main():
                          "source": {1: "dual", 2: "tactical", 3: "terrain", 4: "camera"}.get(int(trace[3]), "none"),
                          "reason": reason,
                          "interrupted_prompt": playing}
-                event["camera_actor"] = traces[-1]["camera_actor"]
+                event["camera_actor"] = {"id":int(trace[15]),"category":int(trace[16]),"evidence_kind":int(trace[17]),
+                                         "box":trace[18:22].tolist()} if trace[15] else None
                 (events if now >= args.pre_roll_seconds else startup_events).append(event)
-                native.accepted(handle, selected, now, int(is_dual))
+                if args.coaching_profile == "legacy":
+                    native.accepted(handle, selected, now, int(is_dual))
                 traces.append({"schema_version": 1, "event": "accepted", "time": now,
                                "source_id": int(trace[1]), "sequence": int(trace[0]), "prompt": selected})
                 playing, playing_until = selected, now + durations[selected]
@@ -427,8 +463,11 @@ def main():
         "native_library_sha256": digest(args.library),
         "policy_source_sha256": {file: digest(ROOT / file) for file in ["core/src/c_api.cpp",
             "core/src/ReflexEngine.cpp", "core/src/ContextualPolicyEngine.cpp", "core/src/PriorityArbiter.cpp",
-            "core/src/decision.cpp", "core/include/learndrive/decision.hpp", "core/include/learndrive/types.hpp"]},
-        "assumptions": {"mode": args.mode, "horizontal_fov_degrees": args.hfov if spatial else None, "camera_intrinsics_measured": False,
+            "core/src/decision.cpp", "core/include/learndrive/decision.hpp", "core/include/learndrive/types.hpp",
+            "core/src/coaching/CoachingEngine.cpp", "core/src/coaching/TemporalSupport.cpp",
+            "core/include/learndrive/coaching/CoachingEngine.hpp", "core/include/learndrive/coaching/TemporalSupport.hpp"]},
+        "assumptions": {"mode": args.mode,"coaching_profile":args.coaching_profile,
+            "horizontal_fov_degrees": args.hfov if spatial else None, "camera_intrinsics_measured": False,
             "gravity_assumed_level": spatial, "imu_available": False, "slope_guidance_enabled": False,
             "speed_source": speed_source,
             "manual_test_speed_kmh": args.test_speed_kmh,

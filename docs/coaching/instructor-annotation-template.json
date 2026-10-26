@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "annotation_id": null,
+  "source_sha256": null,
+  "split": null,
+  "reviewer": {"role": null, "id": null},
+  "status": "pending",
+  "reviewed_interval": null,
+  "encounter_id": null,
+  "actor_id": null,
+  "useful_window": null,
+  "decision": null,
+  "allowed_prompt_ids": [],
+  "rationale": null,
+  "uncertainty": null,
+  "adjudication": null
+}

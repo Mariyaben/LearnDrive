@@ -50,6 +50,7 @@ def inspect(path):
                 raise ValueError("Loss incorrectly marked complete")
             warnings.append("Capture lost records or reached its storage limit")
     decisions, counts = {}, Counter()
+    logical_keys, voice_keys = set(), set()
     for row in body:
         event = row.get("event")
         if event in ("session_start", "session_end"):
@@ -57,16 +58,33 @@ def inspect(path):
         counts[event] += 1
         if event == "decision":
             decisions[(row.get("source_id"), row.get("sequence"))] = row
-        elif event == "accepted":
+        elif event in ("accepted", "coaching_accepted"):
             decision = decisions.get((row.get("source_id"), row.get("sequence")))
             if not decision or not decision.get("eligible") or row.get("prompt") != decision.get("prompt"):
                 if complete:
                     raise ValueError("Accepted submission lacks its eligible decision")
                 warnings.append("Incomplete capture cannot resolve an accepted submission")
+            key = (row.get("source_id"), row.get("sequence"), row.get("prompt"))
+            keys = logical_keys if event == "coaching_accepted" else voice_keys
+            if key in keys:
+                raise ValueError("Duplicate logical or PCM acceptance")
+            keys.add(key)
+            if event == "coaching_accepted":
+                revision = row.get("settings_revision")
+                if (not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0
+                        or not isinstance(row.get("voice_submitted"), bool)
+                        or row.get("audible_playback_confirmed") is not False):
+                    raise ValueError("Invalid logical acceptance settings/voice evidence")
+                if decision and revision != decision.get("settings_revision"):
+                    raise ValueError("Logical acceptance settings revision differs from its decision")
+    logical = counts["coaching_accepted"]
+    voice = counts["accepted"]
     return {"session_id": rows[0].get("session_id"), "journal_status": "complete" if complete else "partial",
             "metadata": rows[0]["metadata"], "records": dict(counts), "warnings": warnings,
             "meaning_of_complete": "Capture interval drained without reported loss; not a complete drive or accuracy result",
-            "audio_evidence": "Accepted submission only; audible playback/completion unverified"}
+            "logical_accepted": logical if logical else None,
+            "voice_submissions": voice,
+            "audio_evidence": "Logical coaching acceptance and PCM submission are separate; audible playback/completion unverified"}
 
 
 def main():
