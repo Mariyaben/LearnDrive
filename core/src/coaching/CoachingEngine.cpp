@@ -280,7 +280,7 @@ bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,dou
     ++stats_.logical;if(submitted)++stats_.voiceSubmitted;pending_={};return true;
 }
 bool CoachingEngine::playbackValid(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) const noexcept {
-    return revision==revision_&&voice_&&w.audioReady&&accepted_.accepted&&accepted_.voiceSubmitted&&ticketValid(accepted_,sequence,prompt,w,now);
+    return revision==revision_&&voice_&&w.audioReady&&accepted_.accepted&&!accepted_.onset&&accepted_.voiceSubmitted&&ticketValid(accepted_,sequence,prompt,w,now);
 }
 bool CoachingEngine::playbackStarted(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) noexcept {
     if(!playbackValid(sequence,prompt,w,now,revision)||accepted_.onset){++stats_.onsetRejected;return false;}

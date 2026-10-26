@@ -70,6 +70,7 @@ int main(){try {
         check(f.e.accept(1,44,w,1,true),"accept");auto next=world(1.1);put(next,attention(next));f.e.decide(next,2);
         check(f.e.playbackValid(1,44,next,1.1,1),"later decision cancelled accepted ticket");
         check(f.e.playbackStarted(1,44,next,1.1,1)&&!f.e.playbackStarted(1,44,next,1.1,1),"onset not exactly once");
+        check(!f.e.playbackValid(1,44,next,1.1,1),"already started ticket permitted another PCM onset");
         next.telemetry.time=1.36;next.now=1.36;check(!f.e.playbackValid(1,44,next,1.36,1),"old capture was refreshed by new decision");
         check(f.e.stats().voiceSubmitted==1&&f.e.stats().playbackOnsets==1,"submission/onset stats");
     });
