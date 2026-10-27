@@ -58,7 +58,8 @@ const InterpretedScene& TemporalSceneInterpreter::observe(const WorldState& w,co
         if(a.captureTime<=e->captureTime)continue; // Duplicate rule ticks cannot manufacture continuity.
         const bool wasClosing=e->closing,wasRelevant=e->relevant;
         const double oldTti=e->tti;const auto oldPhase=e->phase;
-        e->dx=a.x+a.w*.5f-e->x-e->w*.5f;e->dy=a.y+a.h*.5f-e->y-e->h*.5f;
+        e->dx=e->observations?a.x+a.w*.5f-e->x-e->w*.5f:0;
+        e->dy=e->observations?a.y+a.h*.5f-e->y-e->h*.5f:0;
         const bool material=e->observations&&(a.inPath!=e->inPath||a.leadSupported!=e->leadSupported||a.opticalClosing!=wasClosing||a.relevant!=wasRelevant||
             (a.opticalClosing&&std::isfinite(oldTti)&&a.tti<oldTti-.75));
         e->category=a.category;e->captureTime=a.captureTime;e->lastSeen=a.captureTime;e->confidence=a.confidence;e->tti=a.tti;
@@ -76,10 +77,10 @@ const InterpretedScene& TemporalSceneInterpreter::observe(const WorldState& w,co
     scene_.count=0;
     for(auto& e:scene_.encounters)if(e.used) {
         const auto previous=e.phase;
-        if(!e.fresh&&newFrame&&e.phase!=EncounterPhase::Resolved) {
-            ++e.missingFrames;
+        if(!e.fresh) {
+            if(newFrame)++e.missingFrames;
             if(w.now-e.lastSeen>=10)e.phase=EncounterPhase::Expired;
-            else if(w.now-e.lastSeen>=.35)e.phase=EncounterPhase::TemporarilyLost;
+            else if(w.now-e.lastSeen>=.35&&e.phase!=EncounterPhase::Resolved)e.phase=EncounterPhase::TemporarilyLost;
         }
         if(e.phase!=previous){e.changedAt=w.now;changed=true;}
         if(e.phase!=EncounterPhase::Expired)++scene_.count;
@@ -125,18 +126,30 @@ std::string TemporalSceneInterpreter::encode(const WorldState& w,const EventLedg
     out<<",\"navigation\":{\"provider_content_excluded\":"<<scene_.routeProvider;
     if(!scene_.routeProvider){out<<",\"fresh\":"<<scene_.routeFresh<<",\"event_id\":"<<scene_.routeEvent<<",\"route_id\":"<<scene_.routeId<<",\"epoch\":"<<scene_.routeEpoch<<",\"maneuver\":"<<scene_.routeFeature<<",\"window\":"<<scene_.routeWindow<<",\"distance_m\":";number(out,scene_.routeFresh?scene_.routeDistance:infinity);out<<",\"eta_s\":";number(out,scene_.routeFresh?scene_.routeEta:infinity);}
     out<<"},\"events\":[";bool comma=false;size_t encoded=0;
-    for(const auto& e:scene_.encounters)if(e.used&&e.phase!=EncounterPhase::Expired&&encoded<12) {
+    // Bound the summary by importance, not array allocation order. Otherwise
+    // old lost tracks can crowd the currently actionable actor out of the prompt.
+    std::array<const EncounterEpisode*,64> ordered{};size_t count=0;SafetyValidator validator;
+    for(const auto& e:scene_.encounters)if(e.used&&e.phase!=EncounterPhase::Expired)ordered[count++]=&e;
+    const auto rank=[&](const EncounterEpisode& e){int score=(e.fresh?100:0)+(e.relevant?20:0)+(e.closing?20:0);
+        for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){auto c=w.candidates[i];c.prompt=SafetyValidator::neutral(c.prompt,c.mechanicalMeasured);
+            if(e.space==int(c.identity.space)&&e.id==c.identity.id&&e.scope==c.identity.scope&&validator.validate(c,w,w.now)==Block::None)score+=200;}
+        return score;};
+    std::sort(ordered.begin(),ordered.begin()+count,[&](const auto* a,const auto* b){const int x=rank(*a),y=rank(*b);return x!=y?x>y:a->lastSeen>b->lastSeen;});
+    for(size_t i=0;i<std::min(count,size_t(12));++i){const auto& e=*ordered[i];
         if(comma)out<<',';comma=true;++encoded;
         out<<"{\"space\":"<<e.space<<",\"id\":"<<e.id<<",\"scope\":"<<e.scope<<",\"category\":"<<e.category<<",\"state\":\""<<encounterName(e.phase)<<"\",\"fresh\":"<<e.fresh<<",\"capture_time\":";number(out,e.captureTime);
         out<<",\"observations\":"<<e.observations<<",\"confidence\":"<<e.confidence<<",\"relevant_region\":"<<e.relevant<<",\"supported_path\":"<<e.inPath<<",\"optical_closing\":"<<e.closing<<",\"tti_s\":";number(out,e.closing?e.tti:infinity);
         out<<",\"coached\":"<<e.coached<<",\"image_position\":["<<e.x<<','<<e.y<<','<<e.w<<','<<e.h<<"],\"image_delta\":["<<e.dx<<','<<e.dy<<"]}";
     }
     out<<"],\"history\":[";comma=false;size_t history=0;
-    for(const auto& e:ledger.entries())if(e.used&&e.sourceId==w.sourceId&&e.acceptedAt>=0&&w.now-e.acceptedAt<=10&&history<8) {
-        if(e.providerContent||(e.identity.space==IdentitySpace::Route&&scene_.routeProvider))continue;
+    std::array<const Event*,64> deliveredHistory{};size_t historyCount=0;
+    for(const auto& e:ledger.entries())if(e.used&&e.sourceId==w.sourceId&&e.acceptedAt>=0&&w.now-e.acceptedAt<=10&&!e.providerContent&&
+        !(e.identity.space==IdentitySpace::Route&&scene_.routeProvider))deliveredHistory[historyCount++]=&e;
+    std::sort(deliveredHistory.begin(),deliveredHistory.begin()+historyCount,[](const auto* a,const auto* b){return a->acceptedAt>b->acceptedAt;});
+    for(size_t i=0;i<std::min(historyCount,size_t(8));++i){const auto& e=*deliveredHistory[i];
         if(comma)out<<',';comma=true;++history;out<<"{\"event_number\":"<<e.number<<",\"space\":"<<int(e.identity.space)<<",\"actor_id\":"<<e.identity.id<<",\"scope\":"<<e.identity.scope<<",\"instruction_id\":"<<int(e.acceptedPrompt)<<",\"meaning\":"<<int(instructionMeaning(int(e.acceptedPrompt)))<<",\"accepted_at\":"<<e.acceptedAt<<",\"submitted\":"<<e.voiceSubmitted<<",\"started\":"<<(e.startedAt>=0)<<",\"visual_only\":"<<e.visualOnly<<",\"delivery_stage\":"<<int(e.deliveryStage)<<",\"delivered\":"<<delivered(e)<<"}";
     }
-    out<<"],\"candidates\":[";comma=false;SafetyValidator validator;
+    out<<"],\"candidates\":[";comma=false;
     for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i) {
         auto c=w.candidates[i];c.prompt=SafetyValidator::neutral(c.prompt,c.mechanicalMeasured);
         if(validator.validate(c,w,w.now)!=Block::None||(scene_.routeProvider&&c.origin==5))continue;

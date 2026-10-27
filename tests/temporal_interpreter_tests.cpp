@@ -62,6 +62,13 @@ int main(){try {
      generation=f.interpreter.scene().generation;changed=world(2);changed.captureTime=1.2;
      require(f.observe(changed).generation>generation&&!f.interpreter.scene().cameraFresh,"camera expiry did not invalidate reasoning");}
     std::cout<<"PASS material path, choice and freshness changes invalidate cache\n";
+    {F f;for(int i=0;i<20;++i){auto w=world(1+i*.01);w.actors[0].identity.id=100+i;f.observe(w);}
+     auto w=world(2);w.actors[0].identity.id=777;w.candidates[0]=cue(w);w.candidateCount=1;f.observe(w);
+     const auto text=f.interpreter.encode(w,f.ledger);
+     require(text.find("\"id\":777")<text.find("\"id\":119"),"old tracks crowded actionable actor out of bounded summary");
+     require(f.interpreter.scene().encounters[20].dx==0&&f.interpreter.scene().encounters[20].dy==0,"first observation invented motion");
+     auto missing=world(20,false);missing.captureTime=2;require(f.observe(missing).count==0,"expired actor retained indefinitely without new camera frames");}
+    std::cout<<"PASS bounded summaries prioritize current candidates without invented motion\n";
     {F f;auto w=world(1);w.candidates[0]=cue(w);w.candidateCount=1;f.observe(w);
      HybridPolicy policy;auto& s=f.interpreter.scene();
      BoundedModelProposal p;p.mode=Mode::SILENCE;p.source=1;p.revision=1;p.generation=s.generation;p.createdAt=1;p.expiresAt=3;p.valid=true;

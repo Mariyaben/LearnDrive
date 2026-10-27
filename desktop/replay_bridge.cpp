@@ -121,6 +121,7 @@ EXPORT const char* replay_coaching_diagnostics(Replay* r,double time) {
     return ld_coaching_diagnostics_json(r->engine,time);
 }
 EXPORT const char* replay_coaching_context(Replay* r) {return ld_coaching_context_json(r->engine);}
+EXPORT const char* replay_coaching_world(Replay* r) {return ld_coaching_world_snapshot_json(r->engine);}
 EXPORT const char* replay_guidance_reason(Replay* r){return ld_guidance_reason(r->engine);}
 EXPORT void replay_trace(Replay* r,double* out) {
     const auto& d=r->guidance;const double values[]={double(d.sequence),double(d.source_id),double(d.prompt),double(d.origin),

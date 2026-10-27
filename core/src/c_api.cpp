@@ -8,6 +8,8 @@
 #include "learndrive/perception/supercombo.hpp"
 #include "learndrive/coaching/CoachingEngine.hpp"
 #include <exception>
+#include <sstream>
+#include <iomanip>
 #include "learndrive/dual_brain_c_api.h"
 struct ld_engine {
     ld::SensorFusion fusion;ld::DecisionEngine decisions;ld::CameraCoach coach;ld::DrivingCoach driving;
@@ -38,6 +40,7 @@ struct ld_engine {
     double coachingRouteEta=ld::infinity;
     std::string coachingDiagnostics;
     std::string intelligenceContext;
+    std::string replayWorld;
     ld::EngineSample coachingEngineSample{};
     ld_engine(){promptTimes.fill(-ld::infinity);}
 };
@@ -622,6 +625,24 @@ const char* ld_coaching_diagnostics_json(ld_engine* e,double now) {
 const char* ld_coaching_context_json(ld_engine* e) {
     if(!e)return "{}";
     try{e->intelligenceContext=e->coaching.interpretedSceneJson();return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+const char* ld_coaching_world_snapshot_json(ld_engine* e) {
+    if(!e||e->coachingWorld.route.provider)return "{}";
+    try {
+        const auto& w=e->coachingWorld;std::ostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17);
+        const auto scalar=[&](auto value){if(std::isfinite(double(value)))out<<value;else out<<"null";};
+        const auto array=[&](auto... values){size_t i=0;out<<'[';((i++?out<<',':out,scalar(values)),...);out<<']';};
+        out<<"{\"packed_version\":1,\"header\":";
+        array(w.sourceId,w.frameSequence,w.now,w.telemetry.time,w.telemetry.speedKmh,w.telemetry.pitchDegrees,w.telemetry.longitudinalAcceleration,
+            w.telemetry.calibrated,w.telemetry.speedValid,w.telemetry.pitchValid,w.telemetry.braking,w.telemetry.hardBraking,w.telemetry.shock,
+            w.active,w.audioReady,w.allowCritical,w.simulation,w.route.routeId,w.route.eventId,w.route.epoch,w.route.captureTime,w.route.distanceM,w.route.etaSeconds,
+            w.route.feature,w.route.valid,w.route.provider,w.route.gpsTime,w.roadCaptureTime,w.engineCaptureTime,w.roadBend,w.gradeBand,w.roadValid,w.engineValid,w.captureTime);
+        out<<",\"actors\":[";
+        for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){if(i)out<<',';const auto& a=w.actors[i];array(int(a.identity.space),a.identity.id,a.identity.scope,a.captureTime,a.confidence,a.tti,a.category,a.relevant,a.inPath,a.opticalClosing,a.leadSupported,a.x,a.y,a.w,a.h);}
+        out<<"],\"candidates\":[";
+        for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){if(i)out<<',';const auto& c=w.candidates[i];array(int(c.prompt),c.origin,int(c.identity.space),c.identity.id,c.identity.scope,int(c.kind),c.captureTime,c.maxAge,c.expiresAt,c.confidence,c.tti,c.supported,c.urgent,c.critical,c.mechanicalMeasured,c.actorCategory,c.evidenceKind,c.x,c.y,c.w,c.h);}
+        out<<"]}";e->replayWorld=out.str();return e->replayWorld.c_str();
+    }catch(...){return "{}";}
 }
 const char* ld_guidance_reason(ld_engine* e) {
     if(!e)return "engine unavailable";

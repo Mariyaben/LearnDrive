@@ -74,6 +74,7 @@ class Native:
                       "coaching_accepted": ([P, C.c_int, C.c_double], C.c_int),
                       "coaching_onset": ([P, C.c_int, C.c_double], C.c_int),
                       "coaching_completed": ([P, C.c_int, C.c_double], None),
+                      "coaching_world": ([P], C.c_char_p),
                       "coaching_context": ([P], C.c_char_p),
                       "coaching_diagnostics": ([P, C.c_double], C.c_char_p)}
         try:
@@ -332,7 +333,7 @@ def main():
             durations[prompt] = clip.getnframes() / clip.getframerate()
     events, startup_events, observations, candidate_counts, publications = [], [], [], {}, []
     playing, playing_until, tick = 0, 0, 0
-    temporal_contexts=[]
+    temporal_contexts=[];temporal_worlds=[]
     latency = args.latency_ms / 1000
     def speed_at(t):
         return speed_timeline.at(t).speed_kmh
@@ -370,6 +371,8 @@ def main():
                                   coaching=json.loads(native.coaching_diagnostics(handle,now)))
                 if args.save_temporal_context and tick%100==0:
                     temporal_contexts.append(json.loads(native.coaching_context(handle)))
+                if args.save_temporal_context and tick%10==0:
+                    temporal_worlds.append({'published_at':now,'profile':1,'voice':True,'revision':1,'native_world':json.loads(native.coaching_world(handle))})
             selected = int(decision[0])
             if selected:
                 candidate_counts[str(selected)] = candidate_counts.get(str(selected), 0) + 1
@@ -503,6 +506,7 @@ def main():
                 'native_library_sha256':report['native_library_sha256'],'review_tool_sha256':report['review_tool_sha256'],
                 'google_content':False,'evaluation_permission':'user-requested local evaluation; no redistribution clearance claimed'}
         (args.output/'temporal-contexts.jsonl').write_text(''.join(json.dumps(c,allow_nan=False)+'\n' for c in temporal_contexts),encoding='utf-8')
+        (args.output/'temporal-worlds.json').write_text(json.dumps({'evidence_kind':'recorded_native_perception','provenance':report['sha256'],'rows':temporal_worlds},allow_nan=False),encoding='utf-8')
     (args.output / "observations.json").write_text(json.dumps(observations, allow_nan=False) + "\n", encoding="utf-8")
     with (args.output / "guidance.csv").open("w", newline="", encoding="utf-8") as target:
         writer = csv.DictWriter(target, fieldnames=["time", "prompt", "text", "duration", "speed_kmh", "speed_source",
