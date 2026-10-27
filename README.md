@@ -1,13 +1,16 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.5.0.** The Balanced Coaching Engine adds bounded
-temporal context, encounter/maneuver history, independent evidence validation,
-experimental routine pacing and persisted Minimal/Balanced/Guided settings.
-Voice can be disabled while visual coaching and navigation continue. See the
-[engine](docs/coaching/ENGINE.md) and
-[implementation report](docs/coaching/IMPLEMENTATION_REPORT.md) for current checks
-and limits. No trained reasoning model or instructor-qualified coaching accuracy
-is claimed.
+**Current Android candidate: 0.6.0 (experimental).** The native temporal coach
+interprets encounter changes, uncertainty and actual cue delivery. Optional local
+pretrained Qwen3/SmolLM2 inference runs in a separate shadow worker and has no
+live speech authority. No model training is required. Model import and shadow
+controls are under More options; normal coaching needs no language model.
+See the [architecture](docs/intelligence/ARCHITECTURE.md),
+[measured comparison](docs/intelligence/MODEL_BENCHMARK.md),
+[Android setup](docs/intelligence/PRETRAINED_MODEL_INTEGRATION.md) and
+[release gates](docs/intelligence/RELEASE_READINESS.md).
+Model usefulness and Android model performance are not qualified for a paid launch.
+Minimal/Balanced/Guided settings and the independent voice toggle are preserved.
 
 The charcoal dashboard integrates the map,
 road camera, destination search and coaching voice. It supports both landscape
