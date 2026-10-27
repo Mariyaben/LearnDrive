@@ -69,11 +69,11 @@ def recorded_case(path):
         'rows':rows}
 
 
-def run_case(case,model,baseline,current,max_calls=3):
+def run_case(case,model,baseline,current,max_calls=3,timeout=8):
     bridges=[NativeBridge(baseline),NativeBridge(current),NativeBridge(current)]
     bridges[2].use_hybrid();events=[[],[],[]];ticks=[];samples=[]
     previous=None;last_inference=-100;calls=0;playing=[None,None,None]
-    counters={'ticks':0,'unchanged_context':0,'throttled_or_call_cap':0,'ineligible_context':0}
+    counters={'ticks':0,'unchanged_context':0,'throttled_or_call_cap':0,'ineligible_context':0,'no_approved_choices':0}
     try:
         for i,row in enumerate(case['rows']):
             now=row['published_at'];w=row['world'];decisions=[]
@@ -87,20 +87,23 @@ def run_case(case,model,baseline,current,max_calls=3):
                 decision_start=time.perf_counter();d=b.decide(i+1)
                 if arm==2:
                     context=b.context();key=(context['source_id'],context['revision'],context['generation'])
-                    if context['model_eligible'] and key!=previous and now-last_inference>=1.5 and calls<max_calls:
+                    if context['model_eligible'] and context.get('candidates') and key!=previous and now-last_inference>=1.5 and calls<max_calls:
                         calls+=1;previous=key;last_inference=now
                         sample={'context':context,'scenario_id':case['scenario_id'],'input_sha256':hashlib.sha256(canonical(context).encode()).hexdigest()}
+                        inference_started=time.perf_counter()
                         try:
-                            sample.update(model.infer(context))
+                            sample.update(model.infer(context,timeout=timeout))
                             if sample['status']=='completed':
                                 sample['native_proposal_admitted']=b.proposal(sample['proposal'],context,w)
                                 d=b.decide(10000+i)
                                 sample['hybrid_decision']=d
-                        except Exception as error:sample.update(status='inference_failed',error=type(error).__name__+': '+str(error))
+                        except Exception as error:sample.update(status='inference_failed',error=type(error).__name__+': '+str(error),
+                            wall_ms=(time.perf_counter()-inference_started)*1000,process_after=process_metrics(model.process.pid))
                         sample['clock_scope']='offline decision evaluation freezes scenario time; not live latency qualification'
                         sample['exceeds_experimental_2s_live_budget']=sample.get('wall_ms',0)>2000
                         samples.append(sample)
                     elif not context['model_eligible']:counters['ineligible_context']+=1
+                    elif not context.get('candidates'):counters['no_approved_choices']+=1
                     elif key==previous:counters['unchanged_context']+=1
                     else:counters['throttled_or_call_cap']+=1
                 d['decision_wall_ms']=(time.perf_counter()-decision_start)*1000
@@ -146,13 +149,14 @@ def main():
     p.add_argument('--baseline',type=Path,default=ROOT/'build/intelligence-v2/baseline-native/liblearndrive_coaching_replay.dll')
     p.add_argument('--output',type=Path,required=True);p.add_argument('--limit',type=int,default=20)
     p.add_argument('--recorded-worlds',type=Path,nargs='*',default=[])
+    p.add_argument('--timeout-seconds',type=float,default=8)
     args=p.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     cases=list(scenarios())[:args.limit]+[recorded_case(path) for path in args.recorded_worlds]
     (args.output/'inputs.json').write_text(json.dumps(cases,indent=2)+'\n')
     runs=[]
     with LocalModel(args.server,args.model,args.output/'runtime') as model:
         for case in cases:
-            result=run_case(case,model,args.baseline,args.library,max_calls=6 if case['evidence_kind']=='recorded_native_perception' else 3);runs.append(result)
+            result=run_case(case,model,args.baseline,args.library,timeout=args.timeout_seconds);runs.append(result)
             print(case['scenario_id'],{k:len(v) for k,v in result['events'].items()},flush=True)
             (args.output/(case['scenario_id']+'.json')).write_text(json.dumps(result,indent=2)+'\n')
         all_samples=[s for r in runs for s in r['model_samples']]
@@ -163,6 +167,8 @@ def main():
             'scenario_evidence':{kind:sum(c['evidence_kind']==kind for c in cases) for kind in sorted({c['evidence_kind'] for c in cases})},
             'model_wall_ms':percentiles([s['wall_ms'] for s in all_samples if 'wall_ms' in s]),
             'invalid_or_failed':sum(s['status']!='completed' for s in all_samples),
+            'successful_calls':sum(s['status']=='completed' for s in all_samples),
+            'request_timeout_seconds':args.timeout_seconds,
             'exceeds_2s_live_budget':sum(s['exceeds_experimental_2s_live_budget'] for s in all_samples),
             'process_counters':process_metrics(model.process.pid),
             'total_decision_wall_ms':{arm:percentiles([tick['decisions'][i]['decision_wall_ms'] for run in runs for tick in run['ticks']]) for i,arm in enumerate(('A_balanced','B_temporal','C_pretrained_hybrid'))},

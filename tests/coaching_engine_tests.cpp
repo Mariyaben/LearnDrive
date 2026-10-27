@@ -241,5 +241,12 @@ int main(){try {
         check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.origin==LD_GUIDANCE_TACTICAL,"tactical fixture");
         check(!ld_coaching_accept(e.get(),d.sequence,d.prompt,1.36,1),"native tactical decision timestamp extended evidence");
     });
+    test("terminal failure cannot be resurrected by a late completion callback",[]{
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,true),"fixture");
+        check(f.e.playbackStarted(1,44,w,1,1),"onset fixture");
+        check(f.e.deliveryEvent(1,44,DeliveryStage::Interrupted,1.1),"interrupt rejected");
+        check(!f.e.deliveryEvent(1,44,DeliveryStage::Completed,1.2),"late completion claimed interrupted audio delivered");
+        auto fresh=world(1.3);put(fresh,attention(fresh));check(f.e.decide(fresh,2).eligible&&f.e.accept(2,44,fresh,1.3,true),"fresh retry lost after interruption");
+    });
     std::cout<<passed<<" coaching groups passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

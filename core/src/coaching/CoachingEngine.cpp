@@ -316,6 +316,7 @@ bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage st
     if(!ticket||!std::isfinite(now)||now<ticket->decidedAt||
        (stage!=DeliveryStage::Scheduled&&stage!=DeliveryStage::Interrupted&&stage!=DeliveryStage::Expired&&stage!=DeliveryStage::Failed&&stage!=DeliveryStage::Completed))return false;
     if(ticket->stage==DeliveryStage::Completed||ticket->stage==DeliveryStage::VisualOnly)return stage==ticket->stage;
+    if(ticket->stage==DeliveryStage::Interrupted||ticket->stage==DeliveryStage::Expired||ticket->stage==DeliveryStage::Failed)return stage==ticket->stage;
     if(stage==DeliveryStage::Completed&&!ticket->onset)return false;
     ticket->stage=stage;
     auto& event=ledger_.observe(source_,ticket->candidate,now);event.deliveryStage=stage;

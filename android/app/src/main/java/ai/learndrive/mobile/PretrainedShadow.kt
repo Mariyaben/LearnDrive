@@ -90,7 +90,7 @@ class PretrainedShadow(context:Context,private val core:NativeCore,private val s
         if(thermal>=2){cancelModel();if(busy.compareAndSet(false,true))worker.execute {try{unload()}finally{busy.set(false)}};status("Local AI shadow paused while warm");return}
         val t=now();if(t-lastOffer<1.5)return
         val scene=runCatching {JSONObject(encoded)}.getOrNull()?:return
-        if(!scene.optBoolean("model_eligible"))return
+        if(!scene.optBoolean("model_eligible")||(scene.optJSONArray("candidates")?.length()?:0)==0)return
         val key="${scene.optLong("source_id")}:${scene.optLong("revision")}:${scene.optLong("generation")}"
         if(key==lastKey||!busy.compareAndSet(false,true))return
         lastKey=key;lastOffer=t
@@ -103,6 +103,7 @@ class PretrainedShadow(context:Context,private val core:NativeCore,private val s
                 // never the old pre-load observation as current model evidence.
                 val workScene=current
                 val candidates=workScene.optJSONArray("candidates")?:JSONArray()
+                if(candidates.length()==0)return@execute
                 val choices=JSONObject().put("S","SILENCE").put("D","DEFER")
                 var letters="SD"
                 for(i in 0 until minOf(8,candidates.length())){val letter=alphabet[i].toString();choices.put(letter,candidates.getJSONObject(i));letters+=letter}
