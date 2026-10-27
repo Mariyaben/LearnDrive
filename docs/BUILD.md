@@ -2,7 +2,12 @@
 
 ## Android
 
-The current Android source is **0.4.8**, with a stable Start action and automatic
+The current Android source is **0.5.0**, adding the
+[Balanced Coaching Engine](coaching/ENGINE.md) and
+[structured replay](coaching/STRUCTURED_REPLAY.md). Current build/test evidence and
+physical qualification limits are in the
+[implementation report](coaching/IMPLEMENTATION_REPORT.md).
+It retains a stable Start action and automatic
 level calibration after confirming parked, level ground. See the
 [Start repair](reviews/2026-10-22-start-control-repair.md). The charcoal dashboard,
 separate preparation/destination pages and both landscape orientations are

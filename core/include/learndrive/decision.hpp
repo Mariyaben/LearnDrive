@@ -49,7 +49,10 @@ public:
         double speedKmh=0,bool speedValid=false,bool manual=false,double imageAspect=16.0/9);
     void accepted(Prompt prompt,double time);
     bool actorRelevant(int actorId,double now) const;
+    bool actorBox(int actorId,double now,Box& out) const;
     bool newEncounterEligible(int actorId,int referenceId,double now) const;
+    // New coordinator commits the actor carried by its validated ticket.
+    void acceptedActor(Prompt prompt,double time,int actorId,int evidenceKind);
 private:
     bool started_=false,startupPending_=false;
     double startedAt_=0,lastSpoken_=-infinity;

@@ -101,6 +101,23 @@ int ld_guidance_decide(ld_engine*,const ld_guidance_request*,ld_guidance_result*
 int ld_guidance_accepted(ld_engine*,uint64_t sequence,int prompt,double now);
 int ld_guidance_pending(ld_engine*,uint64_t sequence,int prompt,double now);
 const char* ld_guidance_reason(ld_engine*);
+// Opt-in coaching coordinator; old callers remain on the frozen legacy path.
+// Profiles: 0 Minimal (20s), 1 Balanced (12s), 2 Guided (8s). Timings experimental.
+// revision>=1; identical same-revision configuration is idempotent. A newer
+// revision invalidates pending/accepted tickets while preserving pacing.
+int ld_coaching_configure(ld_engine*,int profile,int voice,uint64_t revision);
+// Logical/visual presentation is distinct from PCM queue submission. Neither
+// submission nor onset means the driver heard or followed the cue.
+int ld_coaching_accept(ld_engine*,uint64_t sequence,int prompt,double now,int voice_submitted);
+int ld_coaching_playback_valid(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
+void ld_coaching_playback_started(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
+// 20 values: enabled,profile,voice,revision,mode,block,event,capture,age,
+// historyCount,activeEvents,resolvedEvents,logicalAccepted,voiceSubmitted,
+// playbackOnsets,onsetRejected,duplicates,deferred,speedTrend,ordinaryInterval.
+// mode 0 SILENCE/1 COACH/2 WARN/3 DEFER; trend 0 unknown/1 steady/2 up/3 down.
+// No images, coordinates, road names, routes or free-form speech are exported.
+int ld_coaching_diagnostics(ld_engine*,double now,double* out,size_t capacity);
+const char* ld_coaching_diagnostics_json(ld_engine*,double now);
 int ld_spatial_publish_source(ld_engine*,uint64_t source_id,double time,const float*,size_t);
 // Lost pose/optics invalidates spatial and derived metric evidence immediately.
 // Preserves semantic boxes and speech cooldowns; rejects old-source/older work.

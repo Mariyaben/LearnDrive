@@ -18,6 +18,24 @@ static void preemptAudio(void* context,int id) {
 extern "C" {
 JNIEXPORT jdoubleArray JNICALL JNI(benchmark)(JNIEnv* e,jobject){double values[5];ld::benchmarkDecisions(values);return output(e,values,5);}
 JNIEXPORT jlong JNICALL JNI(create)(JNIEnv*,jobject) {return reinterpret_cast<jlong>(ld_create());}
+JNIEXPORT jboolean JNICALL JNI(coachingConfigure)(JNIEnv*,jobject,jlong h,jint profile,jboolean voice,jlong revision) {
+    return revision>0&&ld_coaching_configure(engine(h),profile,voice,uint64_t(revision));
+}
+JNIEXPORT jboolean JNICALL JNI(coachingAccept)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jboolean voice) {
+    return ld_coaching_accept(engine(h),uint64_t(sequence),prompt,time,voice);
+}
+JNIEXPORT jboolean JNICALL JNI(coachingPlaybackValid)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jlong revision) {
+    return ld_coaching_playback_valid(engine(h),uint64_t(sequence),prompt,time,uint64_t(revision));
+}
+JNIEXPORT void JNICALL JNI(coachingPlaybackStarted)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jlong revision) {
+    ld_coaching_playback_started(engine(h),uint64_t(sequence),prompt,time,uint64_t(revision));
+}
+JNIEXPORT jdoubleArray JNICALL JNI(coachingDiagnostics)(JNIEnv* e,jobject,jlong h,jdouble time) {
+    double values[20]{};ld_coaching_diagnostics(engine(h),time,values,20);return output(e,values,20);
+}
+JNIEXPORT jstring JNICALL JNI(coachingDiagnosticsJson)(JNIEnv* e,jobject,jlong h,jdouble time) {
+    return e->NewStringUTF(ld_coaching_diagnostics_json(engine(h),time));
+}
 JNIEXPORT void JNICALL JNI(destroy)(JNIEnv* e,jobject,jlong h) {
     auto* b=static_cast<AudioBinding*>(ld_reflex_context(engine(h)));
     ld_set_reflex_preempt(engine(h),nullptr,nullptr);if(b){e->DeleteGlobalRef(b->target);delete b;}ld_destroy(engine(h));

@@ -60,6 +60,8 @@ class ClassicBridge:
 
 def checked_report(path, current_library):
     report = json.loads(path.read_text(encoding="utf-8"))
+    if report.get("assumptions",{}).get("coaching_profile","legacy") != "legacy":
+        raise ValueError("Historical semantic comparator accepts legacy policy reports only; Balanced video evidence must remain distinct")
     assumptions = report["assumptions"]
     if report.get("schema_version") != 2 or report.get("replay_bridge_contract") != 2:
         raise ValueError("Comparison requires a verified v2 current-run report")

@@ -13,8 +13,10 @@ public final class SpatialReadinessTest {
             double pitch=.6;
             check(SpatialReadiness.evaluate(true,true,Math.sin(roll)*Math.cos(pitch),Math.cos(roll)*Math.cos(pitch),Math.sin(pitch))==SpatialReadiness.READY,"tilted landscape mount rejected");
         }
-        for(double z:new double[]{-1,1})
+        for(double z:new double[]{-1,1}) {
             check(SpatialReadiness.evaluate(true,true,0,0,z)==SpatialReadiness.MOUNT_UNSUPPORTED,"vertical camera accepted");
+            check(SpatialReadiness.evaluate(true,false,0,0,z)==SpatialReadiness.MOUNT_UNSUPPORTED,"missing optics hid a known unsupported mount");
+        }
         check(SpatialReadiness.evaluate(true,true,.34,0,Math.sqrt(1-.34*.34))==SpatialReadiness.MOUNT_UNSUPPORTED,"near-vertical camera accepted");
         check(SpatialReadiness.evaluate(true,true,0,0,0)==SpatialReadiness.GRAVITY_UNAVAILABLE,"loss not reported");
         check(SpatialReadiness.evaluate(true,true,0,1,0)==SpatialReadiness.READY,"pose cannot recover");

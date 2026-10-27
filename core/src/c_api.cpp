@@ -6,6 +6,7 @@
 #include "learndrive/ContextualPolicyEngine.hpp"
 #include "learndrive/perception/metric_estimator.hpp"
 #include "learndrive/perception/supercombo.hpp"
+#include "learndrive/coaching/CoachingEngine.hpp"
 #include <exception>
 #include "learndrive/dual_brain_c_api.h"
 struct ld_engine {
@@ -30,6 +31,13 @@ struct ld_engine {
     double guidanceTime=-ld::infinity;
     double sourceStartedAt=0;
     double spatialUnavailableAt=-ld::infinity;
+    ld::coaching::CoachingEngine coaching;
+    ld::coaching::WorldState coachingWorld{};
+    double coachingRouteReceipt=-ld::infinity;
+    uint64_t coachingRouteEpoch{};
+    double coachingRouteEta=ld::infinity;
+    std::string coachingDiagnostics;
+    ld::EngineSample coachingEngineSample{};
     ld_engine(){promptTimes.fill(-ld::infinity);}
 };
 static uint64_t confirmedSpatialLead(const ld_engine& e,double time) noexcept {
@@ -89,12 +97,81 @@ static std::string cameraReason(const ld_engine& e,const ld::Decision& d) {
     return d.reason+"; encounter="+std::to_string(d.actorId)+"; reference="+std::to_string(d.entryReferenceId)+
         "; source="+std::to_string(e.sourceId)+"; new_entry="+(d.newEncounter?"1":"0");
 }
+static ld::Telemetry coachingTelemetry(ld_telemetry a) {
+    return {a.time,a.speed,a.pitch,a.acceleration,a.progress,bool(a.calibrated),bool(a.speed_valid),bool(a.pitch_valid),bool(a.braking),bool(a.hard_braking),bool(a.shock)};
+}
+static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
+    using namespace ld::coaching;
+    auto w=e.coachingWorld;w.now=now;w.sourceId=e.sourceId;w.actorCount=0;
+    w.captureTime=e.visionTime;
+    w.frameSequence=e.visionTime>=0?uint64_t(e.visionTime*1000000)+1:0;
+    // Original recording motion never comes from the phone. In live operation
+    // fresh fusion may add current braking/shock evidence between rule ticks.
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto measured=e.fusion.snapshot(now);
+        if(measured.calibrated&&ld::cognition::fresh(now,measured.time,.15))w.telemetry=measured;
+    }
+    w.gradeBand=w.telemetry.calibrated&&w.telemetry.pitchValid?ld::slopeBand(w.telemetry.pitchDegrees):0;
+    w.roadCaptureTime=e.driving.roadTime();w.roadValid=e.driving.shape().valid;w.roadBend=e.driving.shape().bend;
+    w.engineCaptureTime=e.coachingEngineSample.time;
+    w.engineValid=ld::cognition::fresh(now,w.engineCaptureTime,1)&&e.coachingEngineSample.gear>=1&&e.coachingEngineSample.gear<=e.coachingEngineSample.maxGear&&
+        e.coachingEngineSample.rpm>=500&&e.coachingEngineSample.rpm<=12000&&e.coachingEngineSample.underLoad;
+    w.engineRpm=e.coachingEngineSample.rpm;w.engineLowerRpm=e.coachingEngineSample.lowerRpm;w.engineUpperRpm=e.coachingEngineSample.upperRpm;
+    w.engineGear=e.coachingEngineSample.gear;w.engineMaxGear=e.coachingEngineSample.maxGear;w.engineUnderLoad=e.coachingEngineSample.underLoad;
+    if(e.sourceKind==LD_SOURCE_RECORDING||e.sourceKind==LD_SOURCE_SCREEN) {
+        // MP4/screen test speed settings and the phone holding the playback
+        // are not measurements of the recorded vehicle's response.
+        w.telemetry.speedValid=false;w.telemetry.pitchValid=false;w.telemetry.calibrated=false;
+        w.telemetry.braking=w.telemetry.hardBraking=w.telemetry.shock=false;
+        w.telemetry.longitudinalAcceleration=std::numeric_limits<double>::quiet_NaN();
+    }
+    for(const auto& b:e.boxes) {
+        if(w.actorCount==w.actors.size())break;
+        const double center=b.x+b.w*.5,foot=b.y+b.h;
+        const bool relevant=foot>.5&&center>.18&&center<.82;
+        auto& a=w.actors[w.actorCount++];a={};a.identity={IdentitySpace::Optical,uint64_t(b.id),0};a.captureTime=e.visionTime;
+        a.confidence=std::isfinite(b.tti)?std::min(b.confidence,double(b.score)):b.score;a.tti=b.tti;a.category=b.category;
+        a.relevant=relevant;a.inPath=false;
+        if(ld::cognition::fresh(now,e.semanticScene.capture_time))for(size_t i=0;i<std::min(e.semanticScene.count,size_t(64));++i)
+            if(e.semanticScene.hazards[i].id==uint64_t(b.id)){a.inPath=e.semanticScene.hazards[i].in_trajectory!=0;break;}
+        a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;a.leadSupported=ld::cognition::fresh(now,b.leadTime);
+        a.x=b.x;a.y=b.y;a.w=b.w;a.h=b.h;
+    }
+    auto attention=[&](uint64_t id) {
+        if(!id||w.actorCount>=w.actors.size()||!e.coach.actorRelevant(int(id),now))return;
+        for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==Identity{IdentitySpace::Attention,id,0})return;
+        ld::Box match;if(!e.coach.actorBox(int(id),now,match))return;
+        ActorObservation a;a.identity={IdentitySpace::Attention,id,0};a.captureTime=e.visionTime;a.relevant=true;a.category=match.category;
+        a.x=match.x;a.y=match.y;a.w=match.w;a.h=match.h;
+        for(const auto& b:e.boxes)if(b.category==match.category&&ld::iou(match,b)>.5f) {
+            a.confidence=std::isfinite(b.tti)?std::min(double(b.score),b.confidence):b.score;a.tti=b.tti;
+            a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;a.leadSupported=ld::cognition::fresh(now,b.leadTime);break;
+        }
+        w.actors[w.actorCount++]=a;
+    };
+    attention(uint64_t(e.cameraDecision.actorId));
+    const auto& accepted=e.coaching.acceptedTicket();
+    if(accepted.valid&&accepted.candidate.identity.space==IdentitySpace::Attention)attention(accepted.candidate.identity.id);
+    if(e.scene.count&&e.scene.hazards[0].id==0x100000001ULL&&w.actorCount<w.actors.size()) {
+        const auto id=confirmedSpatialLead(e,now);
+        for(const auto& a:w.actors)if(a.identity.space==IdentitySpace::Optical&&a.identity.id==id&&a.opticalClosing) {
+            auto spatial=a;spatial.identity={IdentitySpace::Spatial,0x100000001ULL,0};spatial.captureTime=e.scene.capture_time;
+            spatial.inPath=bool(e.scene.hazards[0].in_trajectory);w.actors[w.actorCount++]=spatial;break;
+        }
+    }
+    const bool provider=e.providerNavigation.active();const auto route=provider?e.providerNavigation.context(now):e.navigation.context(now);
+    w.route={};w.route.routeId=route.routeId;w.route.eventId=route.featureId;w.route.epoch=e.coachingRouteEpoch;
+    w.route.captureTime=provider?e.coachingRouteReceipt:route.fixTime;w.route.gpsTime=route.fixTime;
+    w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
+    w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
+    return w;
+}
 extern "C" {
 void ld_set_reflex_preempt(ld_engine* e,ld_reflex_preempt fn,void* context){if(e){e->preempt=fn;e->audioContext=context;}}
 void* ld_reflex_context(ld_engine* e){return e?e->audioContext:nullptr;}
 ld_engine* ld_create(void) { try {return new ld_engine;} catch(...) {return nullptr;} }
 void ld_destroy(ld_engine* e) {delete e;}
-void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->driving.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->visionTime=-1;e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
+void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->driving.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->visionTime=-1;e->coaching.invalidateEvidence();e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
 void ld_camera_intrinsics(ld_engine* e,double fy) {if(e) {e->focalY=std::isfinite(fy)&&fy>0?fy:ld::infinity;e->metric.reset();}}
 int ld_camera_up(ld_engine* e,double t,double out[3]) {
     if(!e||!out)return 0;const auto up=e->fusion.cameraUp(t);
@@ -262,7 +339,7 @@ int ld_camera_decide_telemetry(ld_engine* e,ld_telemetry t,int ready,int manual)
 const char* ld_camera_reason(ld_engine* e) {return e?e->cameraReason.c_str():"camera not running";}
 void ld_driving_reset(ld_engine* e) {if(e)e->driving.reset();}
 void ld_engine_sample(ld_engine* e,double time,int gear,int maxGear,double rpm,double lower,double upper,int load) {
-    if(e)e->driving.engine({time,rpm,lower,upper,gear,maxGear,load!=0});
+    if(e){e->coachingEngineSample={time,rpm,lower,upper,gear,maxGear,load!=0};e->driving.engine(e->coachingEngineSample);}
 }
 int ld_driving_decide(ld_engine* e,ld_telemetry a,int ready,int manual,int slope) {
     if(!e)return 0;
@@ -337,6 +414,8 @@ int ld_guidance_begin(ld_engine* e,uint64_t id,int kind,double now) {
     e->navigation.invalidateFix();
     e->providerNavigation.invalidateFix();
     e->providerNavigation.unavailable();
+    e->coaching.beginSource(id);e->coachingWorld={};e->coachingWorld.sourceId=id;
+    if(e->coaching.configured())e->coach.accepted(ld::Prompt::camera,now);
     return 1;
 }
 int ld_spatial_unavailable_source(ld_engine* e,uint64_t id,double time) {
@@ -364,6 +443,70 @@ int ld_guidance_decide(ld_engine* e,const ld_guidance_request* q,ld_guidance_res
     if(!e||!q||!out)return 0;
     ld_guidance_result r{};r.actor_category=-1;r.sequence=++e->guidanceSequence;r.source_id=q->source_id;
     r.capture_time=e->visionTime;r.scene_age=q->now-e->visionTime;
+    if(e->coaching.configured()) {
+        using namespace ld::coaching;
+        if(q->source_id!=e->sourceId||!q->source_id||!std::isfinite(q->now)||q->now<e->guidanceTime||
+            !std::isfinite(q->telemetry.time)||q->telemetry.time>q->now) {r.blocked=LD_GUIDANCE_INVALID;*out=r;return 1;}
+        auto t=q->telemetry;
+        if(e->sourceKind==LD_SOURCE_RECORDING) {t.pitch=t.acceleration=std::numeric_limits<double>::quiet_NaN();t.progress=0;t.calibrated=t.pitch_valid=t.braking=t.hard_braking=t.shock=0;}
+        const bool simulation=e->sourceKind==LD_SOURCE_SIMULATION;
+        const double ht=simulation?q->hazard_time:e->semanticHazard.time,tti=simulation?q->tti:e->semanticHazard.tti;
+        const double conf=simulation?q->confidence:e->semanticHazard.confidence;const bool path=simulation?q->in_path!=0:e->semanticHazard.inPath;
+        // Candidate producers remain unchanged. Logical/caption presentation is
+        // available even when PCM is muted or the output is unavailable.
+        r.tactical=ld_decide(e,t,ht,tti,conf,path,1,0);
+        if(!simulation) {r.reflex=dualPolicyEvaluate(e,t,q->now,&r.suppress,false);r.camera=ld_camera_decide_telemetry(e,t,1,0);}
+        r.terrain=ld_driving_decide(e,t,1,q->manual,q->slope_enabled&&e->sourceKind!=LD_SOURCE_RECORDING);
+        e->coachingWorld.telemetry=coachingTelemetry(t);e->coachingWorld.active=q->active!=0;
+        e->coachingWorld.allowCritical=q->allow_emergency_commands!=0;e->coachingWorld.audioReady=q->audio_ready!=0;e->coachingWorld.simulation=simulation;
+        auto w=coachingCurrent(*e,q->now);w.candidateCount=0;
+        auto add=[&](int id,int origin,Identity identity,EventKind kind,double capture,double maxAge=ld::maxVisionAgeSeconds) -> Candidate* {
+            if(!id||w.candidateCount>=w.candidates.size())return nullptr;
+            auto& c=w.candidates[w.candidateCount++];c={};c.prompt=static_cast<ld::Prompt>(id);c.origin=origin;c.identity=identity;c.kind=kind;
+            c.captureTime=capture;c.maxAge=maxAge;c.expiresAt=capture+maxAge;c.supported=true;
+            c.critical=id==4||id==19||id==42||id==43;return &c;
+        };
+        if(r.camera&&e->cameraDecision.actorId) {
+            const auto& d=e->cameraDecision;const Identity key{IdentitySpace::Attention,uint64_t(d.actorId),0};
+            auto* c=add(r.camera,LD_GUIDANCE_CAMERA,key,d.evidenceKind==3?EventKind::Critical:d.evidenceKind==2?EventKind::Approach:EventKind::Attention,e->visionTime);
+            if(c) {c->actorCategory=d.actorCategory;c->evidenceKind=d.evidenceKind;c->x=d.actorX;c->y=d.actorY;c->w=d.actorW;c->h=d.actorH;
+                for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==key){c->confidence=w.actors[i].confidence;c->tti=w.actors[i].tti;c->urgent=d.evidenceKind>=2&&w.actors[i].opticalClosing&&c->tti<5;break;}}
+        }
+        auto approach=[&](int id,int origin,double capture) {
+            if(!id)return;Identity key{IdentitySpace::Tactical,1,0};double best=ld::infinity,confidence=0;bool supported=simulation&&path;
+            for(size_t i=0;i<w.actorCount;++i) {const auto& a=w.actors[i];
+                if(a.identity.space==IdentitySpace::Attention||!a.relevant||!a.opticalClosing||(!a.inPath&&!a.leadSupported)||a.tti>=best)continue;
+                best=a.tti;confidence=a.confidence;key=a.identity;supported=true;
+            }
+            if(simulation){best=tti;confidence=conf;}
+            auto* c=add(id,origin,key,(id==4||id==42||id==43)?EventKind::Critical:EventKind::Approach,capture);
+            if(c){c->supported=supported;c->tti=best;c->confidence=confidence;c->urgent=supported&&std::isfinite(best)&&best<5;
+                for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==key){c->captureTime=std::min(c->captureTime,w.actors[i].captureTime);c->expiresAt=c->captureTime+c->maxAge;break;}}
+        };
+        approach(r.tactical,LD_GUIDANCE_TACTICAL,ht);
+        approach(r.reflex,LD_GUIDANCE_REFLEX,e->scene.capture_time);
+        if(r.terrain) {
+            const auto p=static_cast<ld::Prompt>(r.terrain);const int band=ld::slopePromptBand(p);
+            const bool bend=p==ld::Prompt::bendLeft||p==ld::Prompt::bendRight||p==ld::Prompt::bendLeftQuiet||p==ld::Prompt::bendRightQuiet||p==ld::Prompt::bendLeftGear||p==ld::Prompt::bendRightGear;
+            const bool shift=p==ld::Prompt::shiftUp||p==ld::Prompt::shiftDown;
+            auto* c=add(r.terrain,LD_GUIDANCE_TERRAIN,{band?IdentitySpace::Slope:bend?IdentitySpace::Bend:shift?IdentitySpace::Engine:IdentitySpace::None,
+                uint64_t(band?band+5:bend?e->driving.shape().bend+2:r.terrain),shift?uint64_t(e->coachingEngineSample.gear):0},band?EventKind::Slope:bend?EventKind::Bend:shift?EventKind::Shift:EventKind::Status,
+                bend?e->driving.roadTime():t.time);
+            if(c)c->mechanicalMeasured=shift&&w.engineValid;
+        }
+        if(!r.suppress&&e->sourceKind==LD_SOURCE_CAMERA) {
+            const int navigation=int(e->providerNavigation.active()?e->providerNavigation.evaluate(q->now,t.braking||t.hard_braking,t.shock):e->navigation.evaluate(q->now,t.braking||t.hard_braking,t.shock));
+            add(navigation,LD_GUIDANCE_NAVIGATION,{IdentitySpace::Route,w.route.eventId,w.route.routeId},EventKind::Route,w.route.captureTime,w.route.provider?3:2.5);
+        }
+        e->coachingWorld=w;
+        const auto d=e->coaching.decide(w,r.sequence);const auto& c=d.ticket.candidate;
+        if(d.ticket.valid) {r.prompt=int(c.prompt);r.origin=c.origin;r.capture_time=c.captureTime;r.scene_age=q->now-c.captureTime;
+            if(c.identity.space==IdentitySpace::Attention){r.actor_id=c.identity.id;r.actor_category=c.actorCategory;r.evidence_kind=c.evidenceKind;r.actor_x=c.x;r.actor_y=c.y;r.actor_w=c.w;r.actor_h=c.h;}}
+        r.eligible=d.eligible;r.semantic_available=ld::cognition::fresh(q->now,e->visionTime);r.spatial_available=ld::cognition::fresh(q->now,e->spatialTime);
+        r.blocked=d.blocked==Block::None?LD_GUIDANCE_OK:d.blocked==Block::Inactive?LD_GUIDANCE_INACTIVE:d.blocked==Block::CriticalDisabled?LD_GUIDANCE_RESEARCH_ONLY:
+            d.blocked==Block::Stale||d.blocked==Block::Revision?LD_GUIDANCE_INVALID:LD_GUIDANCE_COOLDOWN;
+        e->guidance=r;e->guidanceTime=q->now;*out=r;return 1;
+    }
     if(q->source_id!=e->sourceId||!q->source_id||!std::isfinite(q->now)||q->now<e->guidanceTime||
        !std::isfinite(q->telemetry.time)||q->telemetry.time>q->now||q->now-q->telemetry.time>=ld::maxVisionAgeSeconds)r.blocked=LD_GUIDANCE_INVALID;
     else if(!q->active)r.blocked=LD_GUIDANCE_INACTIVE;
@@ -413,6 +556,7 @@ int ld_guidance_decide(ld_engine* e,const ld_guidance_request* q,ld_guidance_res
     *out=r;return 1;
 }
 int ld_guidance_pending(ld_engine* e,uint64_t sequence,int prompt,double now) {
+    if(e&&e->coaching.configured())return e->coaching.pending(sequence,prompt,coachingCurrent(*e,now),now);
     if(!e||!e->guidance.eligible||sequence!=e->guidance.sequence||prompt!=e->guidance.prompt||
        e->guidance.source_id!=e->sourceId||!std::isfinite(now)||now<e->guidanceTime||
        now-e->guidanceTime>=ld::maxVisionAgeSeconds||!ld_audio_allowed(e,prompt,now))return 0;
@@ -426,6 +570,7 @@ int ld_guidance_pending(ld_engine* e,uint64_t sequence,int prompt,double now) {
     return 1;
 }
 int ld_guidance_accepted(ld_engine* e,uint64_t sequence,int prompt,double now) {
+    if(e&&e->coaching.configured())return ld_coaching_accept(e,sequence,prompt,now,1);
     if(!ld_guidance_pending(e,sequence,prompt,now))return 0;
     ld_audio_accepted(e,prompt,now);
     if(e->guidance.origin==LD_GUIDANCE_CAMERA&&attentionPrompt(prompt)&&e->guidance.actor_id) {
@@ -441,8 +586,38 @@ int ld_guidance_accepted(ld_engine* e,uint64_t sequence,int prompt,double now) {
     if(e->sourceKind!=LD_SOURCE_SIMULATION)ld_camera_accepted(e,prompt,now);
     e->guidance.eligible=0;return 1;
 }
+int ld_coaching_configure(ld_engine* e,int profile,int voice,uint64_t revision) {
+    if(!e||voice<0||voice>1||!e->coaching.configure(profile,voice!=0,revision))return 0;
+    e->coaching.beginSource(e->sourceId);e->guidance.eligible=0;
+    if(e->sourceId)e->coach.accepted(ld::Prompt::camera,std::max(e->sourceStartedAt,e->guidanceTime));
+    return 1;
+}
+int ld_coaching_accept(ld_engine* e,uint64_t sequence,int prompt,double now,int submitted) {
+    if(!e||!e->coaching.configured()||submitted<0||submitted>1||!e->coaching.accept(sequence,prompt,coachingCurrent(*e,now),now,submitted!=0))return 0;
+    const auto& ticket=e->coaching.acceptedTicket();const auto& c=ticket.candidate;
+    if(c.origin==LD_GUIDANCE_CAMERA&&c.identity.space==ld::coaching::IdentitySpace::Attention)
+        e->coach.acceptedActor(static_cast<ld::Prompt>(prompt),now,int(c.identity.id),c.evidenceKind);
+    // The event ledger, not unrelated producers' mutable pending fields, owns
+    // logical acceptance. In particular a reflex cannot acknowledge a person
+    // selected by CameraCoach or retire a different navigation maneuver.
+    if(submitted)ld_audio_accepted(e,prompt,now);
+    e->guidance.eligible=0;return 1;
+}
+int ld_coaching_playback_valid(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
+    return e&&e->coaching.playbackValid(sequence,prompt,coachingCurrent(*e,now),now,revision);
+}
+void ld_coaching_playback_started(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
+    if(e)e->coaching.playbackStarted(sequence,prompt,coachingCurrent(*e,now),now,revision);
+}
+int ld_coaching_diagnostics(ld_engine* e,double now,double* out,size_t capacity) {return e?int(e->coaching.diagnostics(now,out,capacity)):0;}
+const char* ld_coaching_diagnostics_json(ld_engine* e,double now) {
+    if(!e)return "{}";
+    try{e->coachingDiagnostics=e->coaching.diagnosticsJson(now);return e->coachingDiagnostics.c_str();}
+    catch(...){return "{}";}
+}
 const char* ld_guidance_reason(ld_engine* e) {
     if(!e)return "engine unavailable";
+    if(e->coaching.configured())return e->coaching.reason();
     switch(e->guidance.blocked) {
     case LD_GUIDANCE_INACTIVE:return "source inactive";
     case LD_GUIDANCE_INVALID:return "stale source or invalid time";
@@ -484,6 +659,7 @@ int ld_navigation_turn_update(ld_engine* e,const ld_navigation_turn* turn) {
         turn->received_at,static_cast<ld::navigation::TurnState>(turn->state),turn->step_number,
         static_cast<ld::navigation::TurnKind>(turn->maneuver),turn->estimated_remaining_m,turn->estimated_remaining_seconds};
     if(!e->providerNavigation.update(input))return 0;
+    e->coachingRouteReceipt=turn->received_at;e->coachingRouteEpoch=turn->route_epoch;e->coachingRouteEta=turn->estimated_remaining_seconds;
     e->navigation.clear();e->guidance.eligible=0;return 1;
 }
 void ld_navigation_turn_unavailable(ld_engine* e) {

@@ -17,8 +17,8 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.4.8"
+        versionCode = 29
+        versionName = "0.5.0"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

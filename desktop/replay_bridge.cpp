@@ -25,6 +25,8 @@ struct Replay {
     std::string error;
     ld_guidance_result guidance{};
     bool emergencies=false;
+    uint64_t coachingRevision{};
+    bool selectedWarning{},playingWarning{};
     bool spatialEnabled=false;
     Replay(const char* model,int w,int h,const double* geometry):width(w),height(h) {
         if(!engine)throw std::runtime_error("cannot allocate replay engine");
@@ -85,11 +87,36 @@ EXPORT void replay_tick(Replay* r,double time,double speed,int speedValid,int pl
     out[0]=selected;out[1]=d.reflex;out[2]=d.tactical;out[3]=d.terrain;out[4]=d.camera;out[5]=d.suppress;
     out[6]=d.eligible;
     out[7]=ld_prompt_may_interrupt(selected,emergency?0:playing);
+    if(r->coachingRevision) {
+        if(!playing)r->playingWarning=false;
+        double diagnostics[20]{};
+        ld_coaching_diagnostics(r->engine,time,diagnostics,20);
+        r->selectedWarning=d.eligible&&diagnostics[4]==2;
+        if(r->selectedWarning&&priority(static_cast<Prompt>(playing))<=2)out[7]=1;
+        else if(r->playingWarning&&!r->selectedWarning)out[7]=0;
+    }
 }
 EXPORT void replay_accepted(Replay* r,int id,double time,int isDual) {
     (void)isDual;ld_guidance_accepted(r->engine,r->guidance.sequence,id,time);
 }
 EXPORT void replay_emergencies(Replay* r,int enabled){r->emergencies=enabled!=0;}
+// Optional policy selection extends v2 without changing its legacy default.
+// Acceptance and onset here are simulations, never physical audio evidence.
+EXPORT int replay_coaching_configure(Replay* r,int profile,uint64_t revision) {
+    if(!r||!ld_coaching_configure(r->engine,profile,1,revision))return 0;
+    r->coachingRevision=revision;return 1;
+}
+EXPORT int replay_coaching_accepted(Replay* r,int id,double time) {
+    if(!r||!r->coachingRevision||!ld_coaching_accept(r->engine,r->guidance.sequence,id,time,1))return 0;
+    r->playingWarning=r->selectedWarning;return 1;
+}
+EXPORT int replay_coaching_onset(Replay* r,int id,double time) {
+    if(!r||!r->coachingRevision||!ld_coaching_playback_valid(r->engine,r->guidance.sequence,id,time,r->coachingRevision))return 0;
+    ld_coaching_playback_started(r->engine,r->guidance.sequence,id,time,r->coachingRevision);return 1;
+}
+EXPORT const char* replay_coaching_diagnostics(Replay* r,double time) {
+    return ld_coaching_diagnostics_json(r->engine,time);
+}
 EXPORT const char* replay_guidance_reason(Replay* r){return ld_guidance_reason(r->engine);}
 EXPORT void replay_trace(Replay* r,double* out) {
     const auto& d=r->guidance;const double values[]={double(d.sequence),double(d.source_id),double(d.prompt),double(d.origin),

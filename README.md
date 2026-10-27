@@ -1,12 +1,21 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.4.8.** The charcoal dashboard integrates the map,
+**Current Android candidate: 0.5.0.** The Balanced Coaching Engine adds bounded
+temporal context, encounter/maneuver history, independent evidence validation,
+experimental routine pacing and persisted Minimal/Balanced/Guided settings.
+Voice can be disabled while visual coaching and navigation continue. See the
+[engine](docs/coaching/ENGINE.md) and
+[implementation report](docs/coaching/IMPLEMENTATION_REPORT.md) for current checks
+and limits. No trained reasoning model or instructor-qualified coaching accuracy
+is claimed.
+
+The charcoal dashboard integrates the map,
 road camera, destination search and coaching voice. It supports both landscape
 directions, keeps Start stable during readiness updates, and calibrates a level
 reference automatically after confirming parked, level ground. Confirmed starts
 wait for fresh camera evidence; cancelled requests cannot silently start later.
 
-The final candidate passed 19 stationary S24 Ultra / Android 16 checks and nine
+The preceding **0.4.8** candidate passed 19 stationary S24 Ultra / Android 16 checks and nine
 bounded-start host cases. These are engineering checks, not paid learner-launch
 or road qualification. Heat optimization remains deferred. See the
 [Start repair review](docs/reviews/2026-10-22-start-control-repair.md),

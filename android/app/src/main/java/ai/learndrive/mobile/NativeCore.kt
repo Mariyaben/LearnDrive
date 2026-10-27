@@ -16,6 +16,11 @@ data class PhoneSlope(val valid:Boolean,val degrees:Double,val roll:Double,val g
 class NativeCore : AutoCloseable {
     private var handle = create().also { check(it != 0L) { "Native engine allocation failed" } }
     @Volatile var sourceId:Long=0; private set
+    @Volatile var coachingSettings=CoachingSettings(); private set
+    @Synchronized fun configureCoaching(settings:CoachingSettings) {
+        check(coachingConfigure(handle,settings.profile.nativeId,settings.voiceEnabled,settings.revision)) {"Coaching settings rejected"}
+        coachingSettings=settings
+    }
     @Synchronized fun beginSource(id:Long,kind:CaptureSource,time:Double) {
         check(guidanceBegin(handle,id,kind.nativeId,time));sourceId=id
     }
@@ -23,6 +28,40 @@ class NativeCore : AutoCloseable {
     @Synchronized fun guidance(t:Telemetry,now:Double,id:Long,active:Boolean,ready:Boolean,manual:Boolean,
         slope:Boolean,emergencies:Boolean,ht:Double,tti:Double,confidence:Double,path:Boolean):GuidanceDecision =
         GuidanceDecision.from(requireNotNull(guidanceDecide(handle,id,t.values(),now,active,ready,manual,slope,emergencies,ht,tti,confidence,path)),now)
+            .copy(settingsRevision=coachingSettings.revision)
+    data class CoachingDelivery(val voiceSubmitted:Boolean,val acceptedAt:Double)
+    /** Logical acceptance is independent of PCM availability. A submission is
+     * recorded only when the worker really accepts a clip; onset revalidates the
+     * accepted ticket under the native lock before AudioTrack.play. */
+    @Synchronized fun deliverCoaching(d:GuidanceDecision,audio:AudioWorker):CoachingDelivery? {
+        val time=now()
+        if(d.sourceId!=sourceId||!d.eligible||d.settingsRevision!=coachingSettings.revision||
+            time<d.decidedAt||time-d.decidedAt>=.35||!guidancePending(handle,d.sequence,d.prompt,time))return null
+        val validatedWarning=coachingDiagnostics(handle,time)[4]==2.0
+        val submitted=coachingSettings.voiceEnabled&&audio.submitCoaching(d.prompt,validatedWarning) {play->
+            synchronized(this) {
+                var checkedAt=0.0
+                // The worker takes its monitor only after this native monitor.
+                // Revalidate inside that boundary: waiting for the audio monitor
+                // must not consume the remainder of the evidence lifetime.
+                val started=play {
+                    checkedAt=now()
+                    handle!=0L&&d.sourceId==sourceId&&d.settingsRevision==coachingSettings.revision&&
+                        coachingPlaybackValid(handle,d.sequence,d.prompt,checkedAt,d.settingsRevision)
+                }
+                if(started)coachingPlaybackStarted(handle,d.sequence,d.prompt,checkedAt,d.settingsRevision)
+                started
+            }
+        }
+        val acceptedAt=now()
+        if(!coachingAccept(handle,d.sequence,d.prompt,acceptedAt,submitted)) {
+            if(submitted)audio.cancel()
+            return null
+        }
+        return CoachingDelivery(submitted,acceptedAt)
+    }
+    @Synchronized fun coachingDiagnostics(time:Double)=coachingDiagnostics(handle,time)
+    @Synchronized fun coachingDiagnosticsJson(time:Double)=coachingDiagnosticsJson(handle,time)
     @Synchronized fun guidanceAccepted(d:GuidanceDecision,time:Double)=guidanceAccepted(handle,d.sequence,d.prompt,time)
     @Synchronized fun deliverGuidance(d:GuidanceDecision,submit:(Int)->Boolean,cancel:()->Unit):Boolean {
         val time=now()
@@ -99,8 +138,14 @@ class NativeCore : AutoCloseable {
         vision(handle,t,d,c,n,cf,normalized,road,lane,w,h) ?: throw IllegalArgumentException(error(handle))
     @Synchronized fun boxes():FloatArray=boxes(handle)
     @Synchronized fun reason():String=reason(handle)
-    @Synchronized override fun close() { if(handle!=0L)destroy(handle);handle=0 }
+    @Synchronized override fun close() { if(handle!=0L)destroy(handle);handle=0;sourceId=0 }
     private external fun create():Long
+    private external fun coachingConfigure(h:Long,profile:Int,voice:Boolean,revision:Long):Boolean
+    private external fun coachingAccept(h:Long,sequence:Long,prompt:Int,time:Double,voiceSubmitted:Boolean):Boolean
+    private external fun coachingPlaybackValid(h:Long,sequence:Long,prompt:Int,time:Double,revision:Long):Boolean
+    private external fun coachingPlaybackStarted(h:Long,sequence:Long,prompt:Int,time:Double,revision:Long)
+    private external fun coachingDiagnostics(h:Long,time:Double):DoubleArray
+    private external fun coachingDiagnosticsJson(h:Long,time:Double):String
     private external fun guidanceBegin(h:Long,id:Long,kind:Int,time:Double):Boolean
     private external fun guidanceDecide(h:Long,id:Long,t:DoubleArray,now:Double,active:Boolean,ready:Boolean,manual:Boolean,slope:Boolean,emergencies:Boolean,ht:Double,tti:Double,confidence:Double,path:Boolean):DoubleArray?
     private external fun guidanceAccepted(h:Long,sequence:Long,prompt:Int,time:Double):Boolean

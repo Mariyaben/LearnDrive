@@ -181,6 +181,13 @@ class MainActivitySetupTest {
                     val eligible=complete(source)
                     field("lastVision").set(activity,eligible);completedField?.set(activity,eligible)
                     assertTrue("Each rejection needs an otherwise eligible positive control",eligibility.invoke(activity) as Boolean)
+                    val audio=field("audio").get(activity) as AudioWorker
+                    val pcm=AudioWorker::class.java.getDeclaredField("pcmReady").apply {isAccessible=true}
+                    val previousPcm=pcm.getBoolean(audio);val previousVoice=audio.voiceEnabled
+                    try {
+                        audio.setVoiceEnabled(false);pcm.setBoolean(audio,false)
+                        assertTrue("Optional muted/unavailable PCM must not block camera session admission",eligibility.invoke(activity) as Boolean)
+                    }finally {pcm.setBoolean(audio,previousPcm);audio.setVoiceEnabled(previousVoice)}
                     fun rejected(name:String,result:VisionResult,error:String?=null,thermal:Int=0) {
                         field("lastVision").set(activity,result);completedField?.set(activity,result)
                         field("cameraError").set(activity,error);field("cameraThermal").setInt(activity,thermal)

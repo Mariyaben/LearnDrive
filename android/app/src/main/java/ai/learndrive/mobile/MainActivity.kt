@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var core:NativeCore
     private lateinit var sensors:Sensors
     private lateinit var audio:AudioWorker
+    private lateinit var coachingPreferences:CoachingPreferences
+    @Volatile private var coachingSettings=CoachingSettings()
     private lateinit var preview:PreviewView
     private lateinit var overlay:DetectionOverlay
     private lateinit var cameraFrame:FrameLayout
@@ -235,6 +237,8 @@ class MainActivity : ComponentActivity() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window,false)
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
+        coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
+        coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings)
         preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FIT_CENTER;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
         overlay=DetectionOverlay(this)
         cameraFrame=FrameLayout(this).apply {addView(preview,FrameLayout.LayoutParams(-1,-1));addView(this@MainActivity.overlay,FrameLayout.LayoutParams(-1,-1))}
@@ -296,6 +300,24 @@ class MainActivity : ComponentActivity() {
         val optionsToggle=button("More setup options") {}
         optionsToggle.setOnClickListener {val opening=moreOptions.visibility==View.GONE;moreOptions.visibility=if(opening)View.VISIBLE else View.GONE;optionsToggle.text=if(opening)"Hide setup options" else "More setup options"}
         setupUtilities.addView(optionsToggle,LinearLayout.LayoutParams(0,CoachStyle.dp(this,48),1f));setupPanel.addView(moreOptions)
+        moreOptions.addView(text("Coaching level",13f))
+        val coachingProfile=Spinner(this).apply {
+            tag="coaching-profile"
+            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,CoachingProfile.entries.map {it.label})
+            setSelection(coachingSettings.profile.ordinal)
+        }
+        coachingProfile.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
+                changeCoachingSettings(CoachingProfile.entries[position],coachingSettings.voiceEnabled)
+            }
+            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
+        }
+        moreOptions.addView(coachingProfile)
+        moreOptions.addView(Switch(this).apply {
+            tag="coaching-voice";text="Coaching voice";setTextColor(CoachStyle.text);isChecked=coachingSettings.voiceEnabled
+            setOnCheckedChangeListener {_,enabled->changeCoachingSettings(coachingSettings.profile,enabled)}
+        })
+        moreOptions.addView(text("Minimal keeps essential cues. Balanced spaces routine coaching. Guided adds more reminders. Visual coaching continues with voice off.",12f))
         moreOptions.addView(button("Enable GPS speed") {requestPermissions(includeLocation=true)})
         moreOptions.addView(button("Recalibrate level reference") {normalizePhone()})
         referenceSkip=button("Skip inclination lessons") {setup.skipLevelReference();publishOptions();updateSetupUi()}
@@ -334,6 +356,7 @@ class MainActivity : ComponentActivity() {
                     put("camera_coaching_policy","temporal_attention_v1");put("semantic_publication","before_spatial_inference")
                     put("navigation_policy","provider_turn_preparation_v1");put("navigation_runtime","Google Navigation 7.6.1 / local Valhalla Mobile 0.6.4")
                     put("navigation_evidence","Provider estimates and measured GPS quality; no route/GPS coordinates exported")
+                    put("coaching_policy","balanced_coaching_v1");put("capability_policy","observed_spatial_budget_v1")
                     put("audio_evidence","worker submission acceptance; completion and audible onset not measured")
                     put("contains_video",false);put("contains_microphone_audio",false);put("contains_gps_coordinates",false)
                     put("recording_sidecar_import_supported",false)
@@ -446,7 +469,8 @@ class MainActivity : ComponentActivity() {
                 showSetup->{hideKeyboard();showSetup=false;updateSetupUi()}
                 else->finish()}
         }})
-        audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount()) {message->main.post {audioStatus=message}}
+        audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority) {message->main.post {audioStatus=message}}
+        audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
         researchEmergencies=Switch(this).apply {text="Lab only: unvalidated emergency commands";isChecked=false}
         controls.addView(researchEmergencies)
@@ -460,6 +484,18 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun roadSource()=mode=="Camera"&&!filmedVideo.isChecked
+    private fun changeCoachingSettings(profile:CoachingProfile,voice:Boolean) {
+        if(coachingSettings.profile==profile&&coachingSettings.voiceEnabled==voice)return
+        synchronized(core) {
+            val updated=CoachingSettings(profile,voice,Math.addExact(coachingSettings.revision,1))
+            core.configureCoaching(updated);coachingSettings=updated
+            // Same lock order as native delivery/onset: core, then audio.
+            if(::audio.isInitialized){audio.cancel();audio.setVoiceEnabled(voice)}
+            coachingPreferences.save(updated)
+        }
+        coachCaption.clear()
+        if(::researchEmergencies.isInitialized)publishOptions()
+    }
     private fun showNavigationProvider() {
         dashboard.attachMap(activeMap.view)
         destinationContent.removeAllViews()
@@ -478,8 +514,8 @@ class MainActivity : ComponentActivity() {
         if(setup.isMonitoring()||knownMoving()||(google&&googleNavigation==null))return
         if(useGoogle!=google) {
             googleNavigation?.stopGuidance();audio.cancel();coachCaption.clear();googleEventKey=null;navigationCaptionGeneration.incrementAndGet()
-            synchronized(routeMutationLock){++routeLoadGeneration;loadedRoute=false;core.navigationClear()}
-            useGoogle=google;routeFileVersion=-1L
+            synchronized(routeMutationLock){++routeLoadGeneration;loadedRoute=false;core.navigationClear();useGoogle=google}
+            routeFileVersion=-1L
             getSharedPreferences("navigation_provider",MODE_PRIVATE).edit().putBoolean("google",google).apply()
             showNavigationProvider()
         }
@@ -599,7 +635,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun canStartRoad():Boolean=canStartRoad(knownMoving())
     private fun canStartRoad(moving:Boolean):Boolean {
-        if(!roadSource()||setup.isMonitoring()||setup.referencePending()||!cameraRunning||!audio.ready||moving)return false
+        if(!roadSource()||setup.isMonitoring()||setup.referencePending()||!cameraRunning||moving)return false
         val frame=lastCompletedVision?:return false;val age=now()-frame.time
         return frame.frame?.sourceId==generation.get().toLong()&&age>=0&&age<.35&&visionError==null&&cameraError==null&&cameraThermal<4&&
             frame.spatialReadiness!=SpatialReadiness.MOUNT_UNSUPPORTED
@@ -627,14 +663,14 @@ class MainActivity : ComponentActivity() {
                 if(!resumed||!roadSource()||setup.isMonitoring()||knownMoving()||cameraThermal>=4||cameraError!=null||visionError!=null||current?.spatialReadiness==SpatialReadiness.MOUNT_UNSUPPORTED) {
                     setStartDialogMessage("Session has not started. ${startReadinessMessage()} Stay parked, then retry.")
                 } else if(!sensors.motionAvailable) {
-                    setStartDialogMessage("Level reference unavailable: ${sensors.motionStatus}. You can start without inclination lessons when the camera and voice are ready.")
+                    setStartDialogMessage("Level reference unavailable: ${sensors.motionStatus}. You can start without inclination lessons when the camera is ready.")
                 } else {
                     val needsReference=!setup.levelAllowed(core.calibrationId())
                     if(needsReference)resetPhoneReference(true)
                     check(levelStart.request(now(),generation.get().toLong()))
                     confirmation.getButton(android.app.AlertDialog.BUTTON_POSITIVE).apply {text=if(needsReference)"Calibrating…" else "Starting…";isEnabled=false}
                     setStartDialogMessage(if(needsReference)"Hold still on the confirmed level ground. Calibrating the level reference; coaching starts only after calibration and fresh camera evidence. Back cancels this start."
-                        else "Level reference is ready. Waiting for current camera evidence and voice readiness. Stay parked; Back cancels this start.")
+                        else "Level reference is ready. Waiting for current camera evidence. Stay parked; Back cancels this start.")
                 }
                 updateSetupUi()
             }
@@ -645,7 +681,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     check(levelStart.request(now(),generation.get().toLong(),false))
                     confirmation.getButton(android.app.AlertDialog.BUTTON_POSITIVE).apply {text="Starting…";isEnabled=false}
-                    setStartDialogMessage("Starting without inclination lessons. Waiting for current camera evidence and voice readiness. Stay parked; Back cancels this start.")
+                    setStartDialogMessage("Starting without inclination lessons. Waiting for current camera evidence. Stay parked; Back cancels this start.")
                 }
             }
         }
@@ -657,12 +693,11 @@ class MainActivity : ComponentActivity() {
         cameraError!=null->"Camera unavailable: $cameraError"
         visionError!=null->"Camera analysis unavailable: $visionError"
         !cameraRunning->"Waiting for the rear camera."
-        !audio.ready->"Preparing the coaching voice."
         setup.referencePending()->"Hold still while the level reference is calibrated."
         lastCompletedVision?.frame?.sourceId!=generation.get().toLong()->"Waiting for a current camera result."
         lastCompletedVision?.spatialReadiness==SpatialReadiness.MOUNT_UNSUPPORTED->"Adjust the mount so the rear camera faces forward towards the road."
         lastCompletedVision?.let {now()-it.time !in 0.0..<.35}!=false->"Waiting for fresh camera evidence."
-        else->"Camera and voice are ready."
+        else->"Camera is ready. Voice is optional."
     }
     private fun setStartDialogMessage(message:String) {
         sessionStartDialog?.findViewById<TextView>(android.R.id.message)?.setUiText(message)
@@ -769,7 +804,7 @@ class MainActivity : ComponentActivity() {
             frame?.spatialReadiness==SpatialReadiness.READY->"Forward view ready"
             else->"Basic detection · distance unavailable"
         },cameraFresh&&frame?.spatialReadiness!=SpatialReadiness.MOUNT_UNSUPPORTED)
-        dashboard.setReadiness(1,if(audio.ready)"Ready · tap Check sound" else audioStatus,audio.ready)
+        dashboard.setReadiness(1,if(!coachingSettings.voiceEnabled)"Voice off · visual coaching continues" else if(audio.ready)"Ready · tap Check sound" else "$audioStatus · visual coaching continues",!coachingSettings.voiceEnabled||audio.ready)
         val measured=core.snapshot(now())
         dashboard.setReadiness(2,if(measured.speedValid)"Measured speed available" else "No reliable speed yet",measured.speedValid)
         val alignment=frame?.let {SpatialReadiness.status(it.spatialReadiness)}?:"Waiting for camera analysis"
@@ -777,7 +812,7 @@ class MainActivity : ComponentActivity() {
             else if(!roadSource())"Lab screen test selected. Select the road camera to set up a mounted session."
             else if(moving)"Setup paused: measured speed is above 1 km/h. Stop and park before setup."
             else "Confirm the fixed forward-facing mount before starting."
-        setupStatus.setUiText("$heading\n$alignment\nVoice: $audioStatus\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
+        setupStatus.setUiText("$heading\n$alignment\nCoaching: ${coachingSettings.profile.label} · voice ${if(coachingSettings.voiceEnabled)audioStatus else "off"}\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
         // The entry action stays stable while frame age/capability changes. Its modal
         // explains readiness; both actual admission paths still enforce canStartRoad.
         setupStart.setUiText(if(!roadSource())"Use mounted road camera" else "Start session")
@@ -826,7 +861,13 @@ class MainActivity : ComponentActivity() {
     private fun beginSource(kind:CaptureSource):Int {
         val token=generation.incrementAndGet()
         lastCompletedVision=null;lastSemanticVision=null
-        val time=now();core.beginSource(token.toLong(),kind,time)
+        val time=now()
+        synchronized(core) {
+            core.beginSource(token.toLong(),kind,time)
+            // Automatic camera recovery also changes source. Retire current
+            // PCM as well as native tickets before another onset can pass.
+            if(::audio.isInitialized)audio.cancel()
+        }
         journal?.offer(GuidanceTrace.source(token.toLong(),kind,time))
         return token
     }
@@ -1071,36 +1112,47 @@ class MainActivity : ComponentActivity() {
         if(desk&&config.script==null)core.engineSample(t,config.demoGear,6,config.demoRpm,1200.0,3000.0,config.engineLoad)
         val active=when(config.mode){"Camera"->cameraRunning&&(!road||setup.isMonitoring());"MP4"->videoRunning;else->true}
         val captionGeneration=navigationCaptionGeneration.get()
-        val decision=core.guidance(telemetry,t,config.sourceId,active,audio.ready,row?.gear?:config.gear,
-            config.slope&&!recording&&levelAllowed,config.emergencies,htime,htti,confidence,path)
-        val routeContext=if(decision.origin==5)core.navigationContext(t) else null
+        val (decision,routeContext,googleContext)=synchronized(routeMutationLock) {
+            val selected=core.guidance(telemetry,t,config.sourceId,active,audio.ready,row?.gear?:config.gear,
+                config.slope&&!recording&&levelAllowed,config.emergencies,htime,htti,confidence,path)
+            // Keep provider identity with this exact context; a parked provider
+            // switch must not relabel Google content as exportable offline data.
+            Triple(selected,if(selected.origin==5)core.navigationContext(t) else null,useGoogle)
+        }
         warningStatus=if(road&&!setup.isMonitoring())"Coaching paused · complete setup while parked" else "Guidance: ${core.guidanceReason()}"
         if(!desk)warningStatus+="\nRoad: ${result?.takeIf {t-it.time>=0&&t-it.time<.35}?.road?.status?:"unavailable"}"
         if(!config.emergencies)warningStatus+="\nExperimental emergency commands off"
-        val key="${decision.sourceId}:${decision.prompt}:${decision.origin}:${decision.blocked}:${decision.semanticAvailable}:${decision.spatialAvailable}:${decision.suppress}:${decision.tactical}:${decision.reflex}:${decision.terrain}:${decision.camera}:${decision.actorId}:${decision.evidenceKind}:${config.emergencies}:${result?.spatialReadiness}:${setup.state()}:${setup.referenceId()}:$calibrationId"
+        val key="${decision.sourceId}:${decision.settingsRevision}:${decision.prompt}:${decision.origin}:${decision.blocked}:${decision.semanticAvailable}:${decision.spatialAvailable}:${decision.suppress}:${decision.tactical}:${decision.reflex}:${decision.terrain}:${decision.camera}:${decision.actorId}:${decision.evidenceKind}:${config.emergencies}:${result?.spatialReadiness}:${setup.state()}:${setup.referenceId()}:$calibrationId"
         var decisionTraced=false
         fun emitDecision() {
             val capturing=journal?.isAccepting==true
             val trace=GuidanceTrace.decision(decision,t,config.mode,if(decision.origin==5)"measured_navigation_gps" else speedSource,result?.frame,
                 if(decision.blocked==5)"stale source or invalid time" else core.guidanceReason(),config.emergencies,result?.spatialReadiness,
-                if(road)setup.state() else null,if(road)setup.referenceId() else null,calibrationId,if(capturing)telemetry else null,if(capturing)measured else null,routeContext)
+                if(road)setup.state() else null,if(road)setup.referenceId() else null,calibrationId,if(capturing)telemetry else null,if(capturing)measured else null,
+                GuidanceTrace.navigationForExport(routeContext,googleContext),
+                core.coachingDiagnosticsJson(t),vision?.performanceSnapshot)
             Log.i("LearnDriveGuidance",trace);journal?.offer(trace)
             traceKey=key;traceAt=t
             decisionTraced=true
         }
         if(key!=traceKey||t-traceAt>=1.0)emitDecision()
-        if((!road||setup.isMonitoring())&&core.deliverGuidance(decision,audio::submit,audio::cancel)) {
+        val delivery=if(!road||setup.isMonitoring())core.deliverCoaching(decision,audio) else null
+        if(delivery!=null) {
             // Audio can become available between sampled ticks. Preserve the
             // exact eligible decision before its acceptance acknowledgement.
             if(!decisionTraced)emitDecision()
-            val acceptedAt=now()
-            if(road&&setup.isMonitoring())practiceReview.accepted(acceptedAt,decision.origin,core.promptText(decision.prompt))
-            val trace=GuidanceTrace.accepted(decision,acceptedAt);Log.i("LearnDriveGuidance",trace);journal?.offer(trace)
+            val acceptedAt=delivery.acceptedAt
+            if(road&&setup.isMonitoring())practiceReview.accepted(acceptedAt,decision.origin,core.promptText(decision.prompt),delivery.voiceSubmitted)
+            val presented=GuidanceTrace.coachingAccepted(decision,acceptedAt,delivery.voiceSubmitted)
+            Log.i("LearnDriveGuidance",presented);journal?.offer(presented)
+            if(delivery.voiceSubmitted) {
+                val trace=GuidanceTrace.accepted(decision,acceptedAt);Log.i("LearnDriveGuidance",trace);journal?.offer(trace)
+            }
             main.post {
                 val currentContext=if(decision.origin==5&&useGoogle)core.navigationContext(now()) else null
                 val currentEncounter=currentContext==null||(currentContext[10]!=0.0&&routeContext!=null&&
                     currentContext[0]==routeContext[0]&&currentContext[1]==routeContext[1])
-                if(decision.sourceId==core.sourceId&&currentEncounter&&
+                if(decision.sourceId==core.sourceId&&decision.settingsRevision==coachingSettings.revision&&currentEncounter&&
                     (decision.origin!=5||captionGeneration==navigationCaptionGeneration.get()))
                     coachCaption.accept(core.promptText(decision.prompt),decision.sourceId,acceptedAt,audio.durationSeconds(decision.prompt),routeContext,decision.origin)
             }

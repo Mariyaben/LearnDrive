@@ -44,7 +44,9 @@ data class VisionPerformanceSnapshot(val instanceId:Long,val sourceId:Long=0,
     val spatialCalls:Long=0,val spatialFailures:Long=0,val spatialTotalMs:Double=0.0,
     val lastReadiness:Int=SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN,
     val lastFrameMs:Double=0.0,val lastDetectorMs:Double?=null,val lastSpatialMs:Double?=null,
-    val spatialNativeCompletions:Long=0)
+    val spatialNativeCompletions:Long=0,val capabilityProfile:String="STANDARD",
+    val capabilityReason:String="",val capabilitySamples:Long=0,val capabilitySlowSamples:Long=0,
+    val capabilityFailures:Long=0,val advancedAvailable:Boolean=false)
 
 class Vision(private val context:Context,private val core:NativeCore) : AutoCloseable {
     private val performanceInstanceId=android.os.SystemClock.elapsedRealtimeNanos()
@@ -123,8 +125,9 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         override fun close()=session.close()
     }
     private val detector=try {Model("detector.onnx",listOf("output0"))}catch(e:Exception){tensor.close();throw e}
-    private val spatial=try {SpatialVision(context,core)}catch(e:Exception){detector.close();tensor.close();throw e}
-    val providerStatus="Supercombo ${spatial.providerStatus} · semantic detector ${detector.provider}"
+    private val capability=VisionCapabilityPolicy()
+    private val spatial=try {SpatialVision(context,core)}catch(e:Exception){capability.spatialUnavailable();null}
+    val providerStatus get()="${capability.profile()} · ${if(capability.spatialEnabled())"Supercombo ${spatial?.providerStatus}" else capability.reason()} · semantic detector ${detector.provider} · Advanced unavailable"
     private val detectionShape=detector.shapes[0]
     private val channelFirst=detectionShape.size==3&&detectionShape[1]==84L
     private val count:Int
@@ -161,14 +164,17 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
                 performanceDetectorCalls,performanceDetectorFailures,performanceDetectorTotalMs,
                 performanceSpatialCalls,performanceSpatialFailures,performanceSpatialTotalMs,
                 performanceReadiness,duration,performanceLastDetectorMs,performanceLastSpatialMs,
-                spatialNativeCompletions=performanceSpatialNativeCompletions)
+                spatialNativeCompletions=performanceSpatialNativeCompletions,
+                capabilityProfile=capability.profile(),capabilityReason=capability.reason(),
+                capabilitySamples=capability.samples(),capabilitySlowSamples=capability.slowSamples(),
+                capabilityFailures=capability.failures(),advancedAvailable=capability.advancedAvailable())
         }
     }
     private fun processFrame(image:Image,rotation:Int,originalFrame:FrameContext,fullRange:Boolean,onSemantic:(VisionResult)->Unit):VisionResult {
         val time=originalFrame.captureTime
         core.requireSource(originalFrame.sourceId)
         if(sourceId!=originalFrame.sourceId) {
-            spatial.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null;sourceId=originalFrame.sourceId;frameSequence=0
+            spatial?.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null;sourceId=originalFrame.sourceId;frameSequence=0
         }
         val rect=image.cropRect
         val frame=originalFrame.copy(imageWidth=image.width,imageHeight=image.height,rotationDegrees=rotation,
@@ -176,12 +182,13 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             pixelFormat=image.format,frameSequence=++frameSequence)
         val started=now()
         val up=core.cameraUp(time)
-        val readiness=SpatialReadiness.evaluate(frame.source==CaptureSource.CAMERA,frame.intrinsics!=null,up[0],up[1],up[2])
+        val poseReadiness=SpatialReadiness.evaluate(frame.source==CaptureSource.CAMERA,frame.intrinsics!=null,up[0],up[1],up[2])
+        var readiness=capability.readiness(poseReadiness)
         performanceReadiness=readiness
         val metric=readiness==SpatialReadiness.READY
         if(!metric) {
             core.spatialUnavailable(frame.sourceId,time)
-            if(spatialActive){spatial.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null}
+            if(spatialActive){spatial?.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null}
         }
         // Publish classification before the expensive spatial model. Native rules
         // can consume the original capture timestamp while spatial inference runs.
@@ -191,18 +198,28 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             semanticResult=semantic;semanticTime=time;onSemantic(semantic)
         }
         if(metric) {
-            if(!spatialActive)spatial.reset()
+            val model=requireNotNull(spatial)
+            if(!spatialActive)model.reset()
             val spatialStarted=now();performanceSpatialCalls++
+            var completedSpatial=false
             try {
-                spatial.process(image,rotation,frame,fullRange,up)
+                model.process(image,rotation,frame,fullRange,up)
                 performanceSpatialNativeCompletions++
-            }catch(error:Throwable) {
-                performanceSpatialFailures++;throw error
+                completedSpatial=true
+            }catch(error:StaleSourceException) {throw error
+            }catch(error:Exception) {
+                performanceSpatialFailures++;capability.spatialUnavailable()
             }finally {
                 val duration=(now()-spatialStarted)*1000
                 performanceSpatialTotalMs+=duration;performanceLastSpatialMs=duration
+                if(completedSpatial)capability.completedSpatial(duration)
             }
-            spatial.publish(frame);spatialActive=true
+            if(capability.spatialEnabled()) {model.publish(frame);spatialActive=true}
+            else {
+                core.spatialUnavailable(frame.sourceId,time);model.reset();model.close();spatialActive=false
+                semanticTime=Double.NEGATIVE_INFINITY
+                readiness=capability.readiness(poseReadiness);performanceReadiness=readiness
+            }
         }
         core.requireSource(frame.sourceId)
         val last=semanticResult
@@ -245,5 +262,5 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         return VisionResult(time,hazard[0],hazard[1],hazard[2]!=0.0,(completed-started)*1000,detections,
             if(swapped)crop.height() else crop.width(),if(swapped)crop.width() else crop.height(),shape,completed)
     }
-    override fun close() {spatial.close();detector.close();tensor.close()}
+    override fun close() {spatial?.close();detector.close();tensor.close()}
 }
