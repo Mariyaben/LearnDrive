@@ -37,6 +37,7 @@ struct ld_engine {
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
     std::string coachingDiagnostics;
+    std::string intelligenceContext;
     ld::EngineSample coachingEngineSample{};
     ld_engine(){promptTimes.fill(-ld::infinity);}
 };
@@ -606,6 +607,9 @@ int ld_coaching_accept(ld_engine* e,uint64_t sequence,int prompt,double now,int 
 int ld_coaching_playback_valid(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
     return e&&e->coaching.playbackValid(sequence,prompt,coachingCurrent(*e,now),now,revision);
 }
+int ld_coaching_delivery_event(ld_engine* e,uint64_t sequence,int prompt,double now,int stage) {
+    return e&&e->coaching.deliveryEvent(sequence,prompt,static_cast<ld::coaching::DeliveryStage>(stage),now);
+}
 void ld_coaching_playback_started(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
     if(e)e->coaching.playbackStarted(sequence,prompt,coachingCurrent(*e,now),now,revision);
 }
@@ -614,6 +618,10 @@ const char* ld_coaching_diagnostics_json(ld_engine* e,double now) {
     if(!e)return "{}";
     try{e->coachingDiagnostics=e->coaching.diagnosticsJson(now);return e->coachingDiagnostics.c_str();}
     catch(...){return "{}";}
+}
+const char* ld_coaching_context_json(ld_engine* e) {
+    if(!e)return "{}";
+    try{e->intelligenceContext=e->coaching.interpretedSceneJson();return e->intelligenceContext.c_str();}catch(...){return "{}";}
 }
 const char* ld_guidance_reason(ld_engine* e) {
     if(!e)return "engine unavailable";

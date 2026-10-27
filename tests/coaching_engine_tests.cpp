@@ -65,6 +65,19 @@ int main(){try {
         check(!f.e.accept(1,44,w,1,false),"ticket accepted twice");check(!f.e.playbackValid(1,44,w,1,1),"muted playback allowed");
         check(f.e.stats().logical==1&&f.e.stats().voiceSubmitted==0&&f.e.stats().playbackOnsets==0,"delivery states conflated");
     });
+    test("enabled voice refusal never acknowledges event or consumes pacing",[]{
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible,"candidate");
+        check(!f.e.accept(1,44,w,1,false),"failed audio falsely became visual-only acceptance");
+        check(f.e.stats().logical==0&&f.e.stats().submissionFailed==1,"failed submission accounting");
+        auto later=world(1.1);put(later,attention(later));check(f.e.decide(later,2).eligible,"failed event suppressed by ledger or cooldown");
+        check(f.e.accept(2,44,later,1.1,true),"fresh recovery after refusal");
+    });
+    test("cancelled queued audio cannot play later or consume routine pacing",[]{
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,true),"queue fixture");
+        check(f.e.deliveryEvent(1,44,DeliveryStage::Expired,1.1),"expiry not recorded");
+        check(!f.e.playbackValid(1,44,w,1.1,1),"retired clip allowed another onset");
+        auto n=world(1.2);put(n,attention(n,8));check(f.e.decide(n,2).eligible,"expired queue consumed ordinary pacing");
+    });
     test("accepted ticket survives later selection but never evidence expiry",[]{
         EngineFixture f;auto w=world(1);put(w,attention(w));auto d=f.e.decide(w,1);check(d.eligible,"fixture");
         check(f.e.accept(1,44,w,1,true),"accept");auto next=world(1.1);put(next,attention(next));f.e.decide(next,2);
@@ -88,7 +101,8 @@ int main(){try {
         }
     });
     test("routine intervals persist across settings and source changes",[]{
-        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible,"fixture");check(f.e.accept(1,44,w,1,false),"accept");
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible,"fixture");check(f.e.accept(1,44,w,1,true),"accept");
+        check(f.e.playbackStarted(1,44,w,1,1)&&f.e.deliveryEvent(1,44,DeliveryStage::Completed,1),"simulated completed delivery");
         auto n=world(5);put(n,attention(n,8));auto d=f.e.decide(n,2);check(d.mode==Mode::DEFER&&!d.eligible,"Balanced12 interval lost");
         check(f.e.configure(2,true,2),"Guided config");f.e.beginSource(2);n=world(5,2);put(n,attention(n,9));
         check(!f.e.decide(n,3).eligible,"settings/source reset routine cooldown");
@@ -96,23 +110,23 @@ int main(){try {
         check(!f.e.playbackValid(1,44,n,9,1),"old source/revision ticket survived");
     });
     test("new independently supported urgent event bypasses routine cooldown",[]{
-        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,false),"routine fixture");
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,true),"routine fixture");
         auto n=world(1.1);put(n,attention(n,8,true));auto d=f.e.decide(n,2);
         check(d.eligible&&d.mode==Mode::WARN,"new urgent event hidden by routine pacing");
-        check(f.e.accept(2,44,n,1.1,false),"urgent acceptance");
+        check(f.e.accept(2,44,n,1.1,true),"urgent acceptance");
         n=world(1.2);auto unsupported=attention(n,9,true);n.actors[0].opticalClosing=false;put(n,unsupported);
         check(!f.e.decide(n,3).eligible,"unconfirmed urgency bypassed validator");
     });
     test("same urgent encounter needs worsening evidence before another warning",[]{
         EngineFixture f;auto w=world(1);auto c=attention(w,7,true);c.tti=4;w.actors[0].tti=4;put(w,c);
-        check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,false),"first urgent cue");
+        check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,true),"first urgent cue");
         auto n=world(4);c=attention(n,7,true);c.tti=4;n.actors[0].tti=4;put(n,c);
         check(!f.e.decide(n,2).eligible,"unchanged warning repeated after timer alone");
         n=world(4.1);c=attention(n,7,true);c.tti=2;n.actors[0].tti=2;put(n,c);
         check(f.e.decide(n,3).eligible,"materially worsening current evidence suppressed");
     });
     test("route phases share one maneuver ledger identity",[]{
-        EngineFixture f;auto w=world(1);put(w,route(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,50,w,1,false),"turn fixture");
+        EngineFixture f;auto w=world(1);put(w,route(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,50,w,1,true),"turn fixture");
         auto n=world(20);auto near=route(n,5,Prompt::mapLeftTurnNear);n.route.provider=false;near.maxAge=2.5;near.expiresAt=22.5;put(n,near);auto d=f.e.decide(n,2);
         check(!d.eligible&&d.blocked==Block::Duplicate,"distance phrase created a duplicate turn event");
         n=world(21);n.route.valid=false;f.e.decide(n,3);check(f.e.ledger().resolvedCount()>=1,"resolved route retained active");
@@ -128,7 +142,7 @@ int main(){try {
         EngineFixture f;auto w=world(1);w.telemetry.pitchDegrees=6;w.gradeBand=2;
         Candidate c;c.prompt=Prompt::hill;c.origin=3;c.identity={IdentitySpace::Slope,7,0};c.kind=EventKind::Slope;c.captureTime=1;c.expiresAt=1.35;c.supported=true;put(w,c);
         auto d=f.e.decide(w,1);check(d.eligible&&d.ticket.candidate.prompt==Prompt::uphill,"unmeasured gear wording retained");
-        check(f.e.accept(1,9,w,1,false),"neutral accept");w.now=1.1;w.telemetry.time=1.1;w.telemetry.pitchValid=false;
+        check(f.e.accept(1,9,w,1,true),"neutral accept");w.now=1.1;w.telemetry.time=1.1;w.telemetry.pitchValid=false;
         check(!f.e.playbackValid(1,9,w,1.1,1),"invalid pitch supported old slope cue");
         check(SafetyValidator::neutral(Prompt::shiftDown,false)==Prompt::none,"unmeasured RPM shift fabricated");
     });
@@ -166,7 +180,7 @@ int main(){try {
         check(f.e.decide(unknown,31).eligible&&f.e.memory().speedTrend(2.2)==SpeedTrend::Unknown,"unknown speed interpreted as correct response");
     });
     test("deferred slot never becomes a stale FIFO",[]{
-        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,false),"fixture");
+        EngineFixture f;auto w=world(1);put(w,attention(w));check(f.e.decide(w,1).eligible&&f.e.accept(1,44,w,1,true),"fixture");
         auto delayed=world(5);put(delayed,attention(delayed,8));check(f.e.decide(delayed,2).mode==Mode::DEFER,"defer fixture");
         auto empty=world(14);check(!f.e.decide(empty,3).eligible,"expired deferred event replayed");
         auto fresh=world(14.1);put(fresh,attention(fresh,9));auto d=f.e.decide(fresh,4);check(d.eligible&&d.ticket.candidate.identity.id==9,"fresh event lost behind expired slot");

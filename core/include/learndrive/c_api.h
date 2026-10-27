@@ -118,6 +118,9 @@ void ld_coaching_playback_started(ld_engine*,uint64_t sequence,int prompt,double
 // No images, coordinates, road names, routes or free-form speech are exported.
 int ld_coaching_diagnostics(ld_engine*,double now,double* out,size_t capacity);
 const char* ld_coaching_diagnostics_json(ld_engine*,double now);
+// Version2 scalar interpreted context; Google-derived provider context is excluded.
+const char* ld_coaching_context_json(ld_engine*);
+int ld_coaching_delivery_event(ld_engine*,uint64_t sequence,int prompt,double now,int stage);
 int ld_spatial_publish_source(ld_engine*,uint64_t source_id,double time,const float*,size_t);
 // Lost pose/optics invalidates spatial and derived metric evidence immediately.
 // Preserves semantic boxes and speech cooldowns; rejects old-source/older work.

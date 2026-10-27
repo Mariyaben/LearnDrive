@@ -111,6 +111,35 @@ class NativeBridge:
     def diagnostics(self):
         return json.loads(self._diagnostics(self.handle))
 
+    def delivery(self,event,now,stage=8):
+        # Older frozen comparison binaries have no completion hook. Their own
+        # policy acknowledges submission; do not retrofit their semantics.
+        function=getattr(self.lib,'coaching_replay_delivery',None)
+        if function is None:return None
+        function.argtypes=[C.c_void_p,C.c_uint64,C.c_int,C.c_double,C.c_int]
+        function.restype=C.c_int
+        return bool(function(self.handle,event['sequence'],event['prompt'],now,stage))
+
+    def context(self):
+        function=self.lib.coaching_replay_context
+        function.argtypes,function.restype=[C.c_void_p],C.c_char_p
+        return json.loads(function(self.handle))
+
+    def use_hybrid(self):
+        function=self.lib.coaching_replay_use_hybrid
+        function.argtypes,function.restype=[C.c_void_p],None
+        function(self.handle)
+
+    def proposal(self,proposal,context,world):
+        function=self.lib.coaching_replay_proposal
+        function.argtypes=[C.c_void_p,*([C.c_int]*3),*([C.c_uint64]*5),C.c_double,C.c_double]
+        function.restype=C.c_int
+        # For normalized approved wording, bind by the native summary's raw index.
+        c=world['candidates'][proposal['candidate_index']] if proposal['candidate_index'] is not None else None
+        key=c['identity'] if c else {'space':0,'id':0,'scope':0}
+        return bool(function(self.handle,{'SILENCE':0,'COACH':1,'WARN':2,'DEFER':3}[proposal['decision']],proposal['instruction_id'] or 0,
+            key['space'],key['id'],key['scope'],context['source_id'],context['revision'],context['generation'],context['time'],context['time']+2))
+
 
 def percentiles(values):
     ordered = sorted(values)

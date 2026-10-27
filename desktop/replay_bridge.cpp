@@ -27,6 +27,7 @@ struct Replay {
     bool emergencies=false;
     uint64_t coachingRevision{};
     bool selectedWarning{},playingWarning{};
+    uint64_t playingSequence{};
     bool spatialEnabled=false;
     Replay(const char* model,int w,int h,const double* geometry):width(w),height(h) {
         if(!engine)throw std::runtime_error("cannot allocate replay engine");
@@ -108,15 +109,18 @@ EXPORT int replay_coaching_configure(Replay* r,int profile,uint64_t revision) {
 }
 EXPORT int replay_coaching_accepted(Replay* r,int id,double time) {
     if(!r||!r->coachingRevision||!ld_coaching_accept(r->engine,r->guidance.sequence,id,time,1))return 0;
-    r->playingWarning=r->selectedWarning;return 1;
+    r->playingWarning=r->selectedWarning;r->playingSequence=r->guidance.sequence;return 1;
 }
 EXPORT int replay_coaching_onset(Replay* r,int id,double time) {
-    if(!r||!r->coachingRevision||!ld_coaching_playback_valid(r->engine,r->guidance.sequence,id,time,r->coachingRevision))return 0;
+    if(!r||!r->coachingRevision)return 0;
+    if(!ld_coaching_playback_valid(r->engine,r->guidance.sequence,id,time,r->coachingRevision)){ld_coaching_delivery_event(r->engine,r->guidance.sequence,id,time,5);return 0;}
     ld_coaching_playback_started(r->engine,r->guidance.sequence,id,time,r->coachingRevision);return 1;
 }
+EXPORT void replay_coaching_completed(Replay* r,int id,double time){if(r)ld_coaching_delivery_event(r->engine,r->playingSequence,id,time,8);}
 EXPORT const char* replay_coaching_diagnostics(Replay* r,double time) {
     return ld_coaching_diagnostics_json(r->engine,time);
 }
+EXPORT const char* replay_coaching_context(Replay* r) {return ld_coaching_context_json(r->engine);}
 EXPORT const char* replay_guidance_reason(Replay* r){return ld_guidance_reason(r->engine);}
 EXPORT void replay_trace(Replay* r,double* out) {
     const auto& d=r->guidance;const double values[]={double(d.sequence),double(d.source_id),double(d.prompt),double(d.origin),

@@ -17,6 +17,10 @@ class NativeCore : AutoCloseable {
     private var handle = create().also { check(it != 0L) { "Native engine allocation failed" } }
     @Volatile var sourceId:Long=0; private set
     @Volatile var coachingSettings=CoachingSettings(); private set
+    private var attemptedSource=0L
+    private var attemptedRevision=0L
+    private var attemptedEvent=0L
+    private var attemptedAt=Double.NEGATIVE_INFINITY
     @Synchronized fun configureCoaching(settings:CoachingSettings) {
         check(coachingConfigure(handle,settings.profile.nativeId,settings.voiceEnabled,settings.revision)) {"Coaching settings rejected"}
         coachingSettings=settings
@@ -37,9 +41,16 @@ class NativeCore : AutoCloseable {
         val time=now()
         if(d.sourceId!=sourceId||!d.eligible||d.settingsRevision!=coachingSettings.revision||
             time<d.decidedAt||time-d.decidedAt>=.35||!guidancePending(handle,d.sequence,d.prompt,time))return null
-        val validatedWarning=coachingDiagnostics(handle,time)[4]==2.0
-        val submitted=coachingSettings.voiceEnabled&&audio.submitCoaching(d.prompt,validatedWarning) {play->
-            synchronized(this) {
+        val diagnostic=coachingDiagnostics(handle,time)
+        val validatedWarning=diagnostic[4]==2.0
+        if(coachingSettings.voiceEnabled) {
+            val event=diagnostic[6].toLong()
+            if(attemptedSource==sourceId&&attemptedRevision==d.settingsRevision&&attemptedEvent==event&&time-attemptedAt in 0.0..<.25)return null
+            attemptedSource=sourceId;attemptedRevision=d.settingsRevision;attemptedEvent=event;attemptedAt=time
+        }
+        if(coachingSettings.voiceEnabled)coachingDeliveryEvent(handle,d.sequence,d.prompt,time,1)
+        val gate=object:AudioPlaybackGate {
+          override fun start(play:(()->Boolean)->Boolean):Boolean = synchronized(this@NativeCore) {
                 var checkedAt=0.0
                 // The worker takes its monitor only after this native monitor.
                 // Revalidate inside that boundary: waiting for the audio monitor
@@ -52,7 +63,12 @@ class NativeCore : AutoCloseable {
                 if(started)coachingPlaybackStarted(handle,d.sequence,d.prompt,checkedAt,d.settingsRevision)
                 started
             }
+          override fun terminal(stage:Int) = synchronized(this@NativeCore) {
+              if(handle!=0L&&d.sourceId==sourceId&&d.settingsRevision==coachingSettings.revision)
+                  coachingDeliveryEvent(handle,d.sequence,d.prompt,now(),stage)
+          }
         }
+        val submitted=coachingSettings.voiceEnabled&&audio.submitCoaching(d.prompt,validatedWarning,gate)
         val acceptedAt=now()
         if(!coachingAccept(handle,d.sequence,d.prompt,acceptedAt,submitted)) {
             if(submitted)audio.cancel()
@@ -62,6 +78,7 @@ class NativeCore : AutoCloseable {
     }
     @Synchronized fun coachingDiagnostics(time:Double)=coachingDiagnostics(handle,time)
     @Synchronized fun coachingDiagnosticsJson(time:Double)=coachingDiagnosticsJson(handle,time)
+    @Synchronized fun temporalContext():String=temporalContext(handle)
     @Synchronized fun guidanceAccepted(d:GuidanceDecision,time:Double)=guidanceAccepted(handle,d.sequence,d.prompt,time)
     @Synchronized fun deliverGuidance(d:GuidanceDecision,submit:(Int)->Boolean,cancel:()->Unit):Boolean {
         val time=now()
@@ -146,6 +163,8 @@ class NativeCore : AutoCloseable {
     private external fun coachingPlaybackStarted(h:Long,sequence:Long,prompt:Int,time:Double,revision:Long)
     private external fun coachingDiagnostics(h:Long,time:Double):DoubleArray
     private external fun coachingDiagnosticsJson(h:Long,time:Double):String
+    private external fun temporalContext(h:Long):String
+    private external fun coachingDeliveryEvent(h:Long,sequence:Long,prompt:Int,time:Double,stage:Int)
     private external fun guidanceBegin(h:Long,id:Long,kind:Int,time:Double):Boolean
     private external fun guidanceDecide(h:Long,id:Long,t:DoubleArray,now:Double,active:Boolean,ready:Boolean,manual:Boolean,slope:Boolean,emergencies:Boolean,ht:Double,tti:Double,confidence:Double,path:Boolean):DoubleArray?
     private external fun guidanceAccepted(h:Long,sequence:Long,prompt:Int,time:Double):Boolean

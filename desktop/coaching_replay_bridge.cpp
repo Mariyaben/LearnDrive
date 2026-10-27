@@ -2,6 +2,7 @@
 // provider content, or instructor truth is inferred from these supplied fields.
 #include "learndrive/coaching/CoachingEngine.hpp"
 #include "learndrive/c_api.h"
+#include "learndrive/coaching/HybridPolicy.hpp"
 #include <cmath>
 #include <memory>
 #include <sstream>
@@ -17,6 +18,7 @@ using namespace ld::coaching;
 namespace {
 struct Replay {
     CoachingEngine engine;
+    HybridPolicy hybrid;
     SafetyValidator validator;
     std::unique_ptr<ld_engine, decltype(&ld_destroy)> legacy{ld_create(), ld_destroy};
     WorldState world{};
@@ -31,6 +33,13 @@ Identity identity(const double* p) {return {static_cast<IdentitySpace>(int(p[0])
 std::string number(double v) {if(!std::isfinite(v))return "null";std::ostringstream s;s.precision(17);s<<v;return s.str();}
 }
 COACH_EXPORT int coaching_replay_contract_version() {return 1;}
+COACH_EXPORT const char* coaching_replay_context(Replay* r) {if(!r)return nullptr;r->json=r->engine.interpretedSceneJson();return r->json.c_str();}
+COACH_EXPORT void coaching_replay_use_hybrid(Replay* r) {if(r)r->engine.setPolicy(&r->hybrid);}
+COACH_EXPORT int coaching_replay_proposal(Replay* r,int mode,int prompt,int space,uint64_t id,uint64_t scope,
+    uint64_t source,uint64_t revision,uint64_t generation,double created,double expires) {
+    if(!r)return 0;
+    return r->hybrid.propose({static_cast<Mode>(mode),static_cast<Prompt>(prompt),{static_cast<IdentitySpace>(space),id,scope},source,revision,generation,created,expires,true});
+}
 COACH_EXPORT void* coaching_replay_create(int baseline) {try{return new Replay(baseline!=0);}catch(...){return nullptr;}}
 COACH_EXPORT void coaching_replay_destroy(Replay* r) {delete r;}
 COACH_EXPORT int coaching_replay_configure(Replay* r,int profile,int voice,uint64_t revision) {
@@ -108,9 +117,13 @@ COACH_EXPORT int coaching_replay_accept(Replay* r,uint64_t sequence,int prompt,d
 }
 COACH_EXPORT int coaching_replay_playback(Replay* r,uint64_t sequence,int prompt,double now,uint64_t revision) {
     if(!r)return 0;
-    if(!r->baseline)return r->engine.playbackStarted(sequence,prompt,r->world,now,revision);
+    if(!r->baseline){const bool started=r->engine.playbackStarted(sequence,prompt,r->world,now,revision);
+        if(!started)r->engine.deliveryEvent(sequence,prompt,DeliveryStage::Expired,now);return started;}
     return sequence==r->sequence&&prompt==r->selected&&revision==r->revision&&r->voice&&r->selectedIndex>=0&&
         r->validator.validate(r->world.candidates[size_t(r->selectedIndex)],r->world,now)==Block::None;
+}
+COACH_EXPORT int coaching_replay_delivery(Replay* r,uint64_t sequence,int prompt,double now,int stage) {
+    return r&&!r->baseline&&r->engine.deliveryEvent(sequence,prompt,static_cast<DeliveryStage>(stage),now);
 }
 COACH_EXPORT int coaching_replay_validate(Replay* r,int candidate,double now) {
     if(!r||candidate<0||size_t(candidate)>=r->world.candidateCount)return int(Block::Unsupported);
