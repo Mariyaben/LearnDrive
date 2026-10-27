@@ -202,13 +202,22 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
 bool CoachingEngine::configure(int p,bool voice,uint64_t revision) noexcept {
     if(p<0||p>2||!revision||revision<revision_)return false;
     if(configured_&&revision==revision_)return p==int(profile_)&&voice==voice_;
+    if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
+        deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,lastNow_);
     profile_=static_cast<Profile>(p);voice_=voice;revision_=revision;configured_=true;
     pending_={};accepted_={};deferred_={};decision_={};return true;
 }
 void CoachingEngine::beginSource(uint64_t source) noexcept {
-    if(source==source_)return;source_=source;pending_={};accepted_={};deferred_={};decision_={};memory_.clear();ledger_.sourceChanged();
+    if(source==source_)return;
+    invalidateEvidence();source_=source;ledger_.sourceChanged();
     synchronizer_.beginSource(source);tracks_.beginSource(source);
+    interpreter_.reset(source);lastWorld_={};
     // Pacing is deliberately retained through camera/session/settings changes.
+}
+void CoachingEngine::invalidateEvidence() noexcept {
+    if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
+        deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,lastNow_);
+    pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);
 }
 double CoachingEngine::interval() const noexcept {return profile_==Profile::Minimal?20:profile_==Profile::Guided?8:12;}
 Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexcept {
@@ -230,6 +239,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         if(result==ObservationResult::Invalid||result==ObservationResult::OutOfOrder||result==ObservationResult::Stale)a.relevant=false;
     }
     tracks_.expire(w.now);memory_.observe(w);ledger_.reconcile(source_,w);
+    interpreter_.observe(w,memory_,ledger_,revision_);lastWorld_=w;
     if(deferred_.valid&&validator_.validate(deferred_.candidate,w,w.now)!=Block::None){deferred_={};++stats_.expired;}
     WorldState safe=w;safe.candidateCount=0;Block rejected=Block::None;bool duplicate=false;
     for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i) {
@@ -237,13 +247,14 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         const auto block=validator_.validate(candidate,w,w.now);
         if(block!=Block::None){rejected=block;continue;}
         auto& event=ledger_.observe(source_,candidate,w.now);
+        event.providerContent=event.providerContent||(candidate.origin==5&&w.route.provider);
         const bool worsened=candidate.urgent&&std::isfinite(candidate.tti)&&std::isfinite(event.acceptedTti)&&
             candidate.tti<=event.acceptedTti-std::max(.75,event.acceptedTti*.25);
-        if(event.acceptedAt>=0&&severity(candidate)<=event.acceptedSeverity&&
+        if(event.acceptedAt>=0&&!event.retryable&&severity(candidate)<=event.acceptedSeverity&&
            (!worsened||w.now-event.acceptedAt<2)) {duplicate=true;continue;}
         safe.candidates[safe.candidateCount++]=candidate;
     }
-    const auto choice=policy_->choose({safe,memory_});
+    const auto choice=policy_->choose({safe,memory_,&interpreter_.scene(),&ledger_});
     if(int(choice.mode)<0||int(choice.mode)>3){decision_.blocked=Block::Unsupported;return decision_;}
     policyReason_=choice.reason;
     if(choice.mode==Mode::SILENCE||choice.candidate>=safe.candidateCount) {
@@ -271,20 +282,53 @@ bool CoachingEngine::ticketValid(const Ticket& t,uint64_t sequence,int prompt,co
 bool CoachingEngine::pending(uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {return ticketValid(pending_,sequence,prompt,w,now)&&!pending_.accepted;}
 bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,double now,bool submitted) noexcept {
     if(!pending(sequence,prompt,w,now)||(submitted&&(!voice_||!w.audioReady)))return false;
+    // Voice-on failure is not intentional visual-only delivery. Keep the event
+    // eligible for a later fresh attempt and do not consume its routine interval.
+    if(voice_&&!submitted){++stats_.submissionFailed;deliveryEvent(sequence,prompt,DeliveryStage::Failed,now);return false;}
+    if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
+        deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,now);
     auto& event=ledger_.observe(source_,pending_.candidate,now);
     event.state=EventState::Accepted;event.acceptedAt=now;event.acceptedSeverity=severity(pending_.candidate);
     event.acceptedPrompt=pending_.candidate.prompt;++event.acceptances;
     event.acceptedTti=pending_.candidate.tti;
+    event.voiceSubmitted=submitted;event.visualOnly=!voice_;event.startedAt=-infinity;
+    event.deliveryStage=submitted?DeliveryStage::Submitted:DeliveryStage::VisualOnly;event.retryable=false;
     accepted_=pending_;accepted_.accepted=true;accepted_.acceptedAt=now;accepted_.voiceSubmitted=submitted;
+    accepted_.stage=event.deliveryStage;accepted_.priorOrdinary=lastOrdinary_;accepted_.priorWarning=lastWarning_;
     if(pending_.candidate.urgent)lastWarning_=now;else lastOrdinary_=now;
     ++stats_.logical;if(submitted)++stats_.voiceSubmitted;pending_={};return true;
 }
 bool CoachingEngine::playbackValid(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) const noexcept {
-    return revision==revision_&&voice_&&w.audioReady&&accepted_.accepted&&!accepted_.onset&&accepted_.voiceSubmitted&&ticketValid(accepted_,sequence,prompt,w,now);
+    return revision==revision_&&voice_&&w.audioReady&&accepted_.accepted&&!accepted_.onset&&accepted_.stage==DeliveryStage::Submitted&&accepted_.voiceSubmitted&&ticketValid(accepted_,sequence,prompt,w,now);
 }
 bool CoachingEngine::playbackStarted(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) noexcept {
     if(!playbackValid(sequence,prompt,w,now,revision)||accepted_.onset){++stats_.onsetRejected;return false;}
-    accepted_.onset=true;++stats_.playbackOnsets;return true;
+    accepted_.onset=true;++stats_.playbackOnsets;
+    for(const auto& entry:ledger_.entries())if(entry.used&&entry.number==accepted_.eventNumber) {
+        auto& event=ledger_.observe(source_,accepted_.candidate,now);event.startedAt=now;event.deliveryStage=DeliveryStage::Started;accepted_.stage=DeliveryStage::Started;break;
+    }
+    return true;
+}
+bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage stage,double now) noexcept {
+    Ticket* ticket=nullptr;
+    if(accepted_.valid&&accepted_.sequence==sequence&&int(accepted_.candidate.prompt)==prompt)ticket=&accepted_;
+    else if(pending_.valid&&pending_.sequence==sequence&&int(pending_.candidate.prompt)==prompt)ticket=&pending_;
+    if(!ticket||!std::isfinite(now)||now<ticket->decidedAt||
+       (stage!=DeliveryStage::Scheduled&&stage!=DeliveryStage::Interrupted&&stage!=DeliveryStage::Expired&&stage!=DeliveryStage::Failed&&stage!=DeliveryStage::Completed))return false;
+    if(ticket->stage==DeliveryStage::Completed||ticket->stage==DeliveryStage::VisualOnly)return stage==ticket->stage;
+    if(ticket->stage==DeliveryStage::Interrupted||ticket->stage==DeliveryStage::Expired||ticket->stage==DeliveryStage::Failed)return stage==ticket->stage;
+    if(stage==DeliveryStage::Completed&&!ticket->onset)return false;
+    ticket->stage=stage;
+    auto& event=ledger_.observe(source_,ticket->candidate,now);event.deliveryStage=stage;
+    const bool failed=stage==DeliveryStage::Interrupted||stage==DeliveryStage::Expired||stage==DeliveryStage::Failed;
+    if(failed) {
+        event.retryable=true;
+        if(ticket->accepted) {
+            if(ticket->candidate.urgent&&lastWarning_==ticket->acceptedAt)lastWarning_=ticket->priorWarning;
+            else if(!ticket->candidate.urgent&&lastOrdinary_==ticket->acceptedAt)lastOrdinary_=ticket->priorOrdinary;
+        }
+    }
+    return true;
 }
 size_t CoachingEngine::diagnostics(double now,double* out,size_t capacity) const noexcept {
     if(!out||capacity<20)return 0;
@@ -299,7 +343,11 @@ std::string CoachingEngine::diagnosticsJson(double now) const {
     const char* names[]={"enabled","profile","voice","revision","mode","block","event_id","capture_time","evidence_age","history_samples","active_events","resolved_events",
         "logical_accepted","voice_submitted","playback_onsets","onset_rejected","duplicates","deferred","speed_trend","ordinary_interval_s"};
     out<<"{";for(int i=0;i<20;++i){if(i)out<<',';out<<'"'<<names[i]<<"\":";if(std::isfinite(v[i]))out<<v[i];else out<<"null";}
-    out<<",\"heard\":false,\"timing_status\":\"experimental\",\"speed_trend_is_pedal_state\":false}";return out.str();
+    out<<",\"submission_failed\":"<<stats_.submissionFailed<<",\"delivery_stage\":"<<int(accepted_.valid?accepted_.stage:pending_.stage)<<",\"reason_code\":\""<<reasonCode()<<"\",\"heard\":false,\"timing_status\":\"experimental\",\"speed_trend_is_pedal_state\":false}";return out.str();
+}
+const char* CoachingEngine::reasonCode() const noexcept {
+    if(policyReason_&&*policyReason_>='A'&&*policyReason_<='Z')return policyReason_;
+    switch(decision_.blocked){case Block::Inactive:return "SOURCE_INACTIVE";case Block::Stale:return "STALE_EVIDENCE";case Block::Unsupported:return "UNSUPPORTED_ACTION";case Block::Cooldown:return "PACING_OR_WORKLOAD";case Block::Duplicate:return "ALREADY_ACCEPTED_EVENT";case Block::Audio:return "AUDIO_UNAVAILABLE";case Block::Revision:return "REVISION_CHANGED";case Block::CriticalDisabled:return "CRITICAL_DISABLED";case Block::DriverResponse:return "MEASURED_BRAKING_OR_SHOCK";default:return decision_.mode==Mode::WARN?"IMPORTANT_SUPPORTED_EVENT":decision_.eligible?"NEW_SUPPORTED_EVENT":"NO_SUPPORTED_EVENT";}
 }
 const char* CoachingEngine::reason() const noexcept {
     if(policyReason_&&(decision_.blocked==Block::None||decision_.mode==Mode::DEFER))return policyReason_;

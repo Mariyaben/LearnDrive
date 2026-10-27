@@ -1,6 +1,7 @@
 #pragma once
 #include "learndrive/types.hpp"
 #include "learndrive/coaching/TemporalSupport.hpp"
+#include "learndrive/coaching/TemporalSceneInterpreter.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -13,6 +14,7 @@ enum class EventKind : int { None=0, Attention=1, Approach=2, Critical=3, Route=
 enum class EventState : int { Candidate=0, Active=1, Deferred=2, Accepted=3, Resolved=4, Expired=5 };
 enum class SpeedTrend : int { Unknown=0, Steady=1, Increasing=2, Decreasing=3 };
 enum class Block : int { None=0, Inactive=1, Stale=2, Unsupported=3, Cooldown=4, Duplicate=5, Audio=6, Revision=7, CriticalDisabled=8, DriverResponse=9 };
+enum class DeliveryStage : int { Selected=0,Scheduled=1,Submitted=2,Started=3,Interrupted=4,Expired=5,Failed=6,VisualOnly=7,Completed=8 };
 struct Identity {
     IdentitySpace space=IdentitySpace::None;
     uint64_t id{},scope{};
@@ -100,6 +102,11 @@ struct Event {
     double lastConfidence{},lastCapture=-infinity;
     uint64_t acceptances{};
     double acceptedTti=infinity;
+    double startedAt=-infinity;
+    bool voiceSubmitted{},visualOnly{};
+    DeliveryStage deliveryStage=DeliveryStage::Selected;
+    bool retryable{};
+    bool providerContent{};
 };
 class EventLedger {
 public:
@@ -113,7 +120,7 @@ private:
     std::array<Event,64> events_{};
     uint64_t next_=1;
 };
-struct PolicyContext {const WorldState& world;const ShortMemory& memory;};
+struct PolicyContext {const WorldState& world;const ShortMemory& memory;const InterpretedScene* scene=nullptr;const EventLedger* ledger=nullptr;};
 struct PolicyChoice {Mode mode=Mode::SILENCE;size_t candidate{};const char* reason=nullptr;};
 class DecisionPolicy {
 public:
@@ -123,6 +130,12 @@ public:
 class BalancedPolicy final : public DecisionPolicy {
 public:
     PolicyChoice choose(const PolicyContext&) const noexcept override;
+};
+class TemporalPolicy final : public DecisionPolicy {
+public:
+    PolicyChoice choose(const PolicyContext&) const noexcept override;
+private:
+    BalancedPolicy fallback_;
 };
 class SafetyValidator {
 public:
@@ -134,6 +147,8 @@ struct Ticket {
     uint64_t sequence{},sourceId{},revision{},eventNumber{};
     double decidedAt{},acceptedAt=-infinity;
     bool valid{},accepted{},voiceSubmitted{},onset{};
+    DeliveryStage stage=DeliveryStage::Selected;
+    double priorOrdinary=-infinity,priorWarning=-infinity;
 };
 struct Decision {
     Mode mode=Mode::SILENCE;
@@ -141,12 +156,12 @@ struct Decision {
     Ticket ticket{};
     bool eligible{};
 };
-struct DeliveryStats {uint64_t logical{},voiceSubmitted{},playbackOnsets{},onsetRejected{},selectionRejected{},duplicates{},deferred{},expired{};};
+struct DeliveryStats {uint64_t logical{},voiceSubmitted{},playbackOnsets{},onsetRejected{},selectionRejected{},duplicates{},deferred{},expired{},submissionFailed{};};
 class CoachingEngine {
 public:
     bool configure(int profile,bool voice,uint64_t revision) noexcept;
     void beginSource(uint64_t source) noexcept;
-    void invalidateEvidence() noexcept {pending_={};accepted_={};deferred_={};decision_={};memory_.clear();}
+    void invalidateEvidence() noexcept;
     bool configured() const noexcept {return configured_;}
     bool voice() const noexcept {return voice_;}
     uint64_t revision() const noexcept {return revision_;}
@@ -156,25 +171,32 @@ public:
     bool accept(uint64_t sequence,int prompt,const WorldState&,double now,bool voiceSubmitted) noexcept;
     bool playbackValid(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
     bool playbackStarted(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) noexcept;
-    void setPolicy(const DecisionPolicy* policy) noexcept {policy_=policy?policy:&balanced_;pending_={};accepted_={};}
+    bool deliveryEvent(uint64_t sequence,int prompt,DeliveryStage,double now) noexcept;
+    void setPolicy(const DecisionPolicy* policy) noexcept {policy_=policy?policy:&temporal_;pending_={};accepted_={};}
     const Decision& lastDecision() const noexcept {return decision_;}
     const Ticket& acceptedTicket() const noexcept {return accepted_;}
     const ShortMemory& memory() const noexcept {return memory_;}
     const EventLedger& ledger() const noexcept {return ledger_;}
     const ObjectTracker& tracks() const noexcept {return tracks_;}
     const DeliveryStats& stats() const noexcept {return stats_;}
+    const InterpretedScene& interpretedScene() const noexcept {return interpreter_.scene();}
+    std::string interpretedSceneJson() const {return interpreter_.encode(lastWorld_,ledger_);}
     size_t diagnostics(double now,double* out,size_t capacity) const noexcept;
     std::string diagnosticsJson(double now) const;
     const char* reason() const noexcept;
+    const char* reasonCode() const noexcept;
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;
     BalancedPolicy balanced_;
-    const DecisionPolicy* policy_=&balanced_;
+    TemporalPolicy temporal_;
+    const DecisionPolicy* policy_=&temporal_;
     SafetyValidator validator_;
     ShortMemory memory_;
     EventLedger ledger_;
     ObservationSynchronizer synchronizer_;
     ObjectTracker tracks_;
+    TemporalSceneInterpreter interpreter_;
+    WorldState lastWorld_{};
     Profile profile_=Profile::Balanced;
     bool configured_{},voice_=true;
     uint64_t revision_{},source_{};

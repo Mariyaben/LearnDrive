@@ -15,6 +15,8 @@ fun interface AudioPlaybackGate {
     /** Acquire the native lock, then call play with a predicate checked at the
      * AudioTrack.play boundary, after the audio monitor has been acquired. */
     fun start(play:(()->Boolean)->Boolean):Boolean
+    /** Called outside the audio monitor: native bookkeeping may take core lock. */
+    fun terminal(stage:Int) {}
 }
 
 class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,
@@ -26,6 +28,7 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     private val audioManager=context.getSystemService(AudioManager::class.java)
     private val attributes=AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     private val focus=AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).setAudioAttributes(attributes).setOnAudioFocusChangeListener { if(it<0)cancel() }.build()
+    internal var requestFocus:()->Int={audioManager.requestAudioFocus(focus)}
     @Volatile private var active=0
     @Volatile private var pending=0
     private var activeWarning=false
@@ -87,17 +90,18 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         fun canReplace(current:Int,warning:Boolean)=AudioInterruptionPolicy.mayReplace(validatedWarning,warning,
             priority(current),mayInterrupt(id,current))
         if(!voiceEnabled||!ready||!canReplace(active,activeWarning)||!canReplace(pending,pendingWarning))return false
-        if(audioManager.requestAudioFocus(focus)!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {status("Audio focus unavailable; retry Test voice");return false}
+        if(requestFocus()!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {status("Audio focus unavailable; retry Test voice");return false}
         val token=generation.incrementAndGet();pending=id;pendingWarning=validatedWarning;track?.pause();track?.flush()
         worker.execute {
-            if(generation.get()!=token||closed)return@execute
-            val player=track?:return@execute
+            var outcome=4 // interrupted unless a later boundary proves otherwise
+            val player=track
             try {
+                if(generation.get()!=token||closed||player==null)return@execute
                 val play:(()->Boolean)->Boolean={valid->synchronized(this) {
                     if(generation.get()!=token||closed||!voiceEnabled||!valid())false
                     else {active=id;activeWarning=validatedWarning;pending=0;pendingWarning=false;player.play();true}
                 }}
-                if(!(onset?.start(play)?:play {true}))return@execute
+                if(!(onset?.start(play)?:play {true})){outcome=if(generation.get()!=token||closed)4 else 5;return@execute}
                 var offset=0
                 val chunk=(clip.sampleRate/100).coerceAtLeast(1)*clip.channels*2 // Whole PCM frames, about 10 ms.
                 while(offset<clip.bytes.size&&generation.get()==token&&!closed) {
@@ -112,9 +116,11 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
                 }
                 val frames=offset/(2*clip.channels)
                 while(player.playbackHeadPosition<frames&&generation.get()==token&&!closed)Thread.sleep(5)
-            } catch(e:Exception) {status("Audio output: ${e.message}")}
+                outcome=if(generation.get()==token&&!closed&&offset==clip.bytes.size)8 else 4
+            } catch(e:Exception) {outcome=6;status("Audio output: ${e.message}")}
             finally {
-                synchronized(this) {if(generation.get()==token){player.pause();player.flush();active=0;pending=0;activeWarning=false;pendingWarning=false;audioManager.abandonAudioFocusRequest(focus)}}
+                synchronized(this) {if(generation.get()==token){player?.pause();player?.flush();active=0;pending=0;activeWarning=false;pendingWarning=false;audioManager.abandonAudioFocusRequest(focus)}}
+                onset?.terminal(outcome)
             }
         }
         return true

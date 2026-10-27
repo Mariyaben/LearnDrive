@@ -81,6 +81,8 @@ JNIEXPORT jdoubleArray JNICALL JNI(guidanceDecide)(JNIEnv* e,jobject,jlong h,jlo
 JNIEXPORT jboolean JNICALL JNI(guidanceAccepted)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time){return ld_guidance_accepted(engine(h),sequence,prompt,time);}
 JNIEXPORT jboolean JNICALL JNI(guidancePending)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time){return ld_guidance_pending(engine(h),sequence,prompt,time);}
 JNIEXPORT jstring JNICALL JNI(guidanceReason)(JNIEnv* e,jobject,jlong h){return e->NewStringUTF(ld_guidance_reason(engine(h)));}
+JNIEXPORT jstring JNICALL JNI(temporalContext)(JNIEnv* e,jobject,jlong h){return e->NewStringUTF(ld_coaching_context_json(engine(h)));}
+JNIEXPORT void JNICALL JNI(coachingDeliveryEvent)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jint stage){ld_coaching_delivery_event(engine(h),sequence,prompt,time,stage);}
 JNIEXPORT jboolean JNICALL JNI(navigationRoute)(JNIEnv* e,jobject,jlong h,jlong id,jdoubleArray shape,jintArray maneuvers){
     ld_navigation_clear(engine(h));
     if(!shape||!maneuvers)return false;const auto n=e->GetArrayLength(shape),m=e->GetArrayLength(maneuvers);

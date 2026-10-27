@@ -44,3 +44,9 @@ $interruptionTests = Join-Path $projectRoot 'tests\AudioInterruptionPolicyTest.j
 if ($LASTEXITCODE -ne 0) { throw 'Audio interruption test compilation failed.' }
 & java -cp $outputDir ai.learndrive.mobile.AudioInterruptionPolicyTest
 if ($LASTEXITCODE -ne 0) { throw 'Audio interruption tests failed.' }
+$reasoning = Join-Path $projectRoot 'android\app\src\main\java\ai\learndrive\mobile\ReasoningGate.java'
+$reasoningTests = Join-Path $projectRoot 'tests\ReasoningGateTest.java'
+& javac --release 17 -d $outputDir $reasoning $reasoningTests
+if ($LASTEXITCODE -ne 0) { throw 'Reasoning gate compilation failed.' }
+& java -cp $outputDir ReasoningGateTest
+if ($LASTEXITCODE -ne 0) { throw 'Reasoning gate tests failed.' }

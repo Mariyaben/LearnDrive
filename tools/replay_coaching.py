@@ -54,6 +54,41 @@ def encode_world(world, now):
     return tuple((C.c_double * len(values))(*values) for values in (header, actors, candidates))
 
 
+def decode_snapshot(packed):
+    """Invert the v1 native candidate-stage diagnostic layout (no engine RPM).
+
+    This snapshot comes from perception, not invented detections. Unknown values
+    remain None and all normal input validation still applies on admission.
+    """
+    from coaching_contract import empty_world
+    if packed.get('packed_version')!=1 or len(packed.get('header',[]))!=34:raise ValueError('Unsupported packed snapshot')
+    h=list(packed['header'])
+    for i in (3,20,26,27,28,33):
+        if h[i] is not None and h[i]<0:h[i]=None  # Native missing-clock sentinel.
+    w=empty_world(h[2],int(h[0]),int(h[1]));w['capture_time']=h[33]
+    t=w['telemetry']
+    for key,index in [('time',3),('speed_kmh',4),('pitch_degrees',5),('acceleration_mps2',6)]:t[key]=h[index]
+    for key,index in [('calibrated',7),('speed_valid',8),('pitch_valid',9),('braking',10),('hard_braking',11),('shock',12)]:t[key]=bool(h[index])
+    for key,index in [('active',13),('audio_ready',14),('allow_critical',15),('simulation',16)]:w[key]=bool(h[index])
+    for key,index in [('route_id',17),('event_id',18),('epoch',19),('capture_time',20),('distance_m',21),('eta_seconds',22),('feature',23),('gps_time',26)]:w['route'][key]=h[index]
+    for key in ('route_id','event_id','epoch','feature'):w['route'][key]=int(w['route'][key])
+    w['route'].update(valid=bool(h[24]),provider=bool(h[25]))
+    w['road'].update(capture_time=h[27],bend=int(h[29]),grade_band=int(h[30]),valid=bool(h[31]))
+    w['engine'].update(capture_time=h[28],valid=bool(h[32]))
+    for a in packed['actors']:
+        if len(a)!=15:raise ValueError('Invalid actor snapshot')
+        w['actors'].append({'identity':{'space':int(a[0]),'id':int(a[1]),'scope':int(a[2])},
+            'capture_time':a[3],'confidence':a[4],'tti_seconds':a[5],'category':int(a[6]),'relevant':bool(a[7]),
+            'in_path':bool(a[8]),'optical_closing':bool(a[9]),'lead_supported':bool(a[10]),'box':a[11:15]})
+    for c in packed['candidates']:
+        if len(c)!=21:raise ValueError('Invalid candidate snapshot')
+        w['candidates'].append({'prompt':int(c[0]),'origin':int(c[1]),'identity':{'space':int(c[2]),'id':int(c[3]),'scope':int(c[4])},
+            'kind':int(c[5]),'capture_time':c[6],'max_age_seconds':c[7],'expires_at':c[8],'confidence':c[9],'tti_seconds':c[10],
+            'supported':bool(c[11]),'urgent':bool(c[12]),'critical':bool(c[13]),'mechanical_measured':bool(c[14]),
+            'actor_category':int(c[15]),'evidence_kind':int(c[16]),'box':c[17:21]})
+    validate_world(w);return w
+
+
 class NativeBridge:
     def __init__(self, library, baseline=False):
         self.path = Path(library).resolve()
@@ -110,6 +145,35 @@ class NativeBridge:
 
     def diagnostics(self):
         return json.loads(self._diagnostics(self.handle))
+
+    def delivery(self,event,now,stage=8):
+        # Older frozen comparison binaries have no completion hook. Their own
+        # policy acknowledges submission; do not retrofit their semantics.
+        function=getattr(self.lib,'coaching_replay_delivery',None)
+        if function is None:return None
+        function.argtypes=[C.c_void_p,C.c_uint64,C.c_int,C.c_double,C.c_int]
+        function.restype=C.c_int
+        return bool(function(self.handle,event['sequence'],event['prompt'],now,stage))
+
+    def context(self):
+        function=self.lib.coaching_replay_context
+        function.argtypes,function.restype=[C.c_void_p],C.c_char_p
+        return json.loads(function(self.handle))
+
+    def use_hybrid(self):
+        function=self.lib.coaching_replay_use_hybrid
+        function.argtypes,function.restype=[C.c_void_p],None
+        function(self.handle)
+
+    def proposal(self,proposal,context,world):
+        function=self.lib.coaching_replay_proposal
+        function.argtypes=[C.c_void_p,*([C.c_int]*3),*([C.c_uint64]*5),C.c_double,C.c_double]
+        function.restype=C.c_int
+        # For normalized approved wording, bind by the native summary's raw index.
+        c=world['candidates'][proposal['candidate_index']] if proposal['candidate_index'] is not None else None
+        key=c['identity'] if c else {'space':0,'id':0,'scope':0}
+        return bool(function(self.handle,{'SILENCE':0,'COACH':1,'WARN':2,'DEFER':3}[proposal['decision']],proposal['instruction_id'] or 0,
+            key['space'],key['id'],key['scope'],context['source_id'],context['revision'],context['generation'],context['time'],context['time']+2))
 
 
 def percentiles(values):

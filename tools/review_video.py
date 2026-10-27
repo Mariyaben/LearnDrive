@@ -73,6 +73,9 @@ class Native:
         signatures = {"coaching_configure": ([P, C.c_int, C.c_uint64], C.c_int),
                       "coaching_accepted": ([P, C.c_int, C.c_double], C.c_int),
                       "coaching_onset": ([P, C.c_int, C.c_double], C.c_int),
+                      "coaching_completed": ([P, C.c_int, C.c_double], None),
+                      "coaching_world": ([P], C.c_char_p),
+                      "coaching_context": ([P], C.c_char_p),
                       "coaching_diagnostics": ([P, C.c_double], C.c_char_p)}
         try:
             for name,(arguments,result) in signatures.items():
@@ -204,6 +207,7 @@ def main():
     parser.add_argument("--speeds", type=Path, help="Reviewed samples: time,speed_kmh; otherwise speed is unknown")
     parser.add_argument("--coaching-profile",choices=["legacy","minimal","balanced","guided"],default="legacy",
                         help="Explicit opt-in shared CoachingEngine policy; default retains legacy video replay behavior")
+    parser.add_argument("--save-temporal-context",action="store_true",help="Save actual native scalar summaries for local model shadow evaluation")
     parser.add_argument("--mode", choices=["spatial", "semantic"], default="spatial",
                         help="Spatial uses explicitly assumed optics; semantic matches uncalibrated Android MP4")
     parser.add_argument("--test-speed-kmh", type=float,
@@ -227,6 +231,7 @@ def main():
     parser.add_argument("--research-emergencies", action="store_true",
                         help="Enable unvalidated emergency phrases for explicit lab review")
     args = parser.parse_args()
+    if args.save_temporal_context and args.coaching_profile=="legacy":raise ValueError("Temporal summaries require an explicit coaching profile")
     spatial = args.mode == "spatial"
     if args.test_speed_kmh is not None:
         if args.speeds or not math.isfinite(args.test_speed_kmh) or not 0 <= args.test_speed_kmh <= 160:
@@ -328,6 +333,7 @@ def main():
             durations[prompt] = clip.getnframes() / clip.getframerate()
     events, startup_events, observations, candidate_counts, publications = [], [], [], {}, []
     playing, playing_until, tick = 0, 0, 0
+    temporal_contexts=[];temporal_worlds=[]
     latency = args.latency_ms / 1000
     def speed_at(t):
         return speed_timeline.at(t).speed_kmh
@@ -336,6 +342,7 @@ def main():
         while tick / 100 < deadline - 1e-8:
             now = tick / 100
             if now >= playing_until:
+                if playing and args.coaching_profile!='legacy':native.coaching_completed(handle,playing,now)
                 playing = 0
             speed_observation = speed_timeline.at(now - args.pre_roll_seconds)
             speed = speed_observation.speed_kmh
@@ -362,6 +369,10 @@ def main():
             if args.coaching_profile != "legacy":
                 traces[-1].update(settings_revision=1,coaching_profile=args.coaching_profile,
                                   coaching=json.loads(native.coaching_diagnostics(handle,now)))
+                if args.save_temporal_context and tick%100==0:
+                    temporal_contexts.append(json.loads(native.coaching_context(handle)))
+                if args.save_temporal_context and tick%10==0:
+                    temporal_worlds.append({'published_at':now,'profile':1,'voice':True,'revision':1,'native_world':json.loads(native.coaching_world(handle))})
             selected = int(decision[0])
             if selected:
                 candidate_counts[str(selected)] = candidate_counts.get(str(selected), 0) + 1
@@ -489,6 +500,13 @@ def main():
             "Completion delays are explicit test assumptions, not measured device stage timings",
             "Do not treat monocular emergency events as validated collision detections"]}
     (args.output / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    if args.save_temporal_context:
+        for context in temporal_contexts:
+            context['evidence_provenance']={'kind':'recorded_native_perception','source_sha256':report['sha256'],
+                'native_library_sha256':report['native_library_sha256'],'review_tool_sha256':report['review_tool_sha256'],
+                'google_content':False,'evaluation_permission':'user-requested local evaluation; no redistribution clearance claimed'}
+        (args.output/'temporal-contexts.jsonl').write_text(''.join(json.dumps(c,allow_nan=False)+'\n' for c in temporal_contexts),encoding='utf-8')
+        (args.output/'temporal-worlds.json').write_text(json.dumps({'evidence_kind':'recorded_native_perception','provenance':report['sha256'],'rows':temporal_worlds},allow_nan=False),encoding='utf-8')
     (args.output / "observations.json").write_text(json.dumps(observations, allow_nan=False) + "\n", encoding="utf-8")
     with (args.output / "guidance.csv").open("w", newline="", encoding="utf-8") as target:
         writer = csv.DictWriter(target, fieldnames=["time", "prompt", "text", "duration", "speed_kmh", "speed_source",
