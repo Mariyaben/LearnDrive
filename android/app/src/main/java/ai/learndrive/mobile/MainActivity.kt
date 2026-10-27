@@ -38,6 +38,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var core:NativeCore
     private lateinit var sensors:Sensors
     private lateinit var audio:AudioWorker
+    private lateinit var pretrained:PretrainedShadow
+    private lateinit var reasoningStatus:TextView
+    private var lastReasoningSummary=Double.NEGATIVE_INFINITY
+    private val modelImport=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->
+        if(uri!=null&&::pretrained.isInitialized)pretrained.importModel(uri)
+    }
     private lateinit var coachingPreferences:CoachingPreferences
     @Volatile private var coachingSettings=CoachingSettings()
     private lateinit var preview:PreviewView
@@ -239,6 +245,7 @@ class MainActivity : ComponentActivity() {
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings)
+        pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
         preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FIT_CENTER;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
         overlay=DetectionOverlay(this)
         cameraFrame=FrameLayout(this).apply {addView(preview,FrameLayout.LayoutParams(-1,-1));addView(this@MainActivity.overlay,FrameLayout.LayoutParams(-1,-1))}
@@ -318,6 +325,20 @@ class MainActivity : ComponentActivity() {
             setOnCheckedChangeListener {_,enabled->changeCoachingSettings(coachingSettings.profile,enabled)}
         })
         moreOptions.addView(text("Minimal keeps essential cues. Balanced spaces routine coaching. Guided adds more reminders. Visual coaching continues with voice off.",12f))
+        reasoningStatus=text("Local pretrained AI is experimental, optional and off. It never speaks or controls live guidance.",12f)
+        moreOptions.addView(reasoningStatus)
+        val shadowToggle=Switch(this).apply {
+            tag="pretrained-shadow";text="Experimental local AI shadow";setTextColor(CoachStyle.text);isChecked=false
+            isEnabled=BuildConfig.PRETRAINED_RUNTIME_AVAILABLE
+            setOnCheckedChangeListener {_,enabled->
+                if(enabled&&(setup.isMonitoring()||knownMoving()))isChecked=false
+                else pretrained.setEnabled(enabled)
+            }
+        }
+        moreOptions.addView(shadowToggle)
+        moreOptions.addView(button("Import pretrained GGUF model") {
+            if(!setup.isMonitoring()&&!knownMoving()){shadowToggle.isChecked=false;modelImport.launch(arrayOf("*/*"))}
+        })
         moreOptions.addView(button("Enable GPS speed") {requestPermissions(includeLocation=true)})
         moreOptions.addView(button("Recalibrate level reference") {normalizePhone()})
         referenceSkip=button("Skip inclination lessons") {setup.skipLevelReference();publishOptions();updateSetupUi()}
@@ -493,6 +514,7 @@ class MainActivity : ComponentActivity() {
             if(::audio.isInitialized){audio.cancel();audio.setVoiceEnabled(voice)}
             coachingPreferences.save(updated)
         }
+        if(::pretrained.isInitialized)pretrained.cancel()
         coachCaption.clear()
         if(::researchEmergencies.isInitialized)publishOptions()
     }
@@ -869,6 +891,7 @@ class MainActivity : ComponentActivity() {
             if(::audio.isInitialized)audio.cancel()
         }
         journal?.offer(GuidanceTrace.source(token.toLong(),kind,time))
+        if(::pretrained.isInitialized)pretrained.cancel()
         return token
     }
     private fun loadOfflineRoute() {
@@ -1137,6 +1160,7 @@ class MainActivity : ComponentActivity() {
         }
         if(key!=traceKey||t-traceAt>=1.0)emitDecision()
         val delivery=if(!road||setup.isMonitoring())core.deliverCoaching(decision,audio) else null
+        if(pretrained.canOffer&&t-lastReasoningSummary>=1.5){lastReasoningSummary=t;pretrained.offer(core.temporalContext(),cameraThermal)}
         if(delivery!=null) {
             // Audio can become available between sampled ticks. Preserve the
             // exact eligible decision before its acceptance acknowledgement.
@@ -1309,9 +1333,9 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart(){super.onStart();routeMap.onStart();googleNavigation?.onStart()}
     override fun onResume() {super.onResume();routeMap.onResume();googleNavigation?.onResume();resumed=true;loadOfflineRoute();if(::sensors.isInitialized)sensors.start();if(mode=="Camera"){inference.execute {visionFailure=null};startCamera()};main.post(tick);rules.post(ruleTick)}
-    override fun onPause() {resumed=false;levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();synchronized(evidenceLock){journal?.stop("backgrounded")};if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};setup.stop();practiceReview.discard();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
+    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();synchronized(evidenceLock){journal?.stop("backgrounded")};if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};setup.stop();practiceReview.discard();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
-    override fun onLowMemory(){super.onLowMemory();if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);journal?.stop("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
+    override fun onDestroy() {if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);journal?.stop("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }
