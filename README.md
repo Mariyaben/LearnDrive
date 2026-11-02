@@ -1,6 +1,14 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.6.0 (experimental).** The native temporal coach
+**Current Android candidate: 0.7.0 (experimental).** The first task-based lesson
+connects a parked junction-preparation goal to sequenced guidance, delivery
+tracking, measured response, quiet execution and bounded local practice records.
+See the [complete coach specification](docs/coach/PRODUCT_SPECIFICATION.md),
+[execution plan](docs/coach/EXECUTION_PLAN.md) and
+[first lesson contract](docs/coach/JUNCTION_LESSON.md).
+This is a first curriculum increment, not a complete or instructor-qualified coach.
+
+The native temporal coach
 interprets encounter changes, uncertainty and actual cue delivery. Optional local
 pretrained Qwen3/SmolLM2 inference runs in a separate shadow worker and has no
 live speech authority. No model training is required. Model import and shadow

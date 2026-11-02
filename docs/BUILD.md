@@ -2,9 +2,9 @@
 
 ## Android
 
-The current Android source is **0.5.0**, adding the
-[Balanced Coaching Engine](coaching/ENGINE.md) and
-[structured replay](coaching/STRUCTURED_REPLAY.md). Current build/test evidence and
+The current Android source is **0.7.0**, adding the
+[junction task lesson](coach/JUNCTION_LESSON.md) above the native temporal policy,
+with [structured replay](coaching/STRUCTURED_REPLAY.md). Current build/test evidence and
 physical qualification limits are in the
 [implementation report](coaching/IMPLEMENTATION_REPORT.md).
 It retains a stable Start action and automatic

@@ -63,7 +63,7 @@ public:
     void beginSource(uint64_t source) noexcept;
     ObservationResult observe(uint64_t source,double captureTime,double speedKmh,
         bool speedValid,double now) noexcept;
-    MotionTrend trend(double now) const noexcept;
+    MotionTrend trend(double now,double since=-infinity) const noexcept;
     size_t sampleCount(double now) const noexcept;
 private:
     struct Sample {double time=-infinity,speed{};bool valid{};};

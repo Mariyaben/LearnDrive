@@ -9,7 +9,7 @@ namespace ld::coaching {
 namespace {
 bool fresh(double now,double at,double age=maxVisionAgeSeconds) noexcept {return cognition::fresh(now,at,age);}
 bool sameEvent(const Event& e,uint64_t source,const Candidate& c) noexcept {
-    return e.used&&e.sourceId==source&&e.identity==c.identity&&e.kind==c.kind;
+    return e.used&&e.sourceId==source&&e.identity==c.identity&&e.kind==c.kind&&e.lessonStep==c.lessonStep&&(!c.lessonStep||e.lessonEpoch==c.lessonEpoch);
 }
 int severity(const Candidate& c) noexcept {return c.critical?3:c.urgent?2:1;}
 bool terminal(EventState s) noexcept {return s==EventState::Resolved||s==EventState::Expired;}
@@ -40,8 +40,8 @@ bool ShortMemory::observe(const WorldState& w) noexcept {
 size_t ShortMemory::size(double now) const noexcept {
     size_t n=0;for(size_t i=0;i<count_;++i)if(fresh(now,samples_[i].time,10.000001))++n;return n;
 }
-SpeedTrend ShortMemory::speedTrend(double now) const noexcept {
-    return static_cast<SpeedTrend>(vehicle_.trend(now));
+SpeedTrend ShortMemory::speedTrend(double now,double since) const noexcept {
+    return static_cast<SpeedTrend>(vehicle_.trend(now,since));
 }
 Event& EventLedger::observe(uint64_t source,const Candidate& c,double now) noexcept {
     for(auto& e:events_)if(sameEvent(e,source,c)) {
@@ -55,7 +55,7 @@ Event& EventLedger::observe(uint64_t source,const Candidate& c,double now) noexc
     for(auto& e:events_)if(!e.used){slot=&e;break;}
     if(!slot)for(auto& e:events_)if(terminal(e.state)&&(!slot||e.lastSeen<slot->lastSeen))slot=&e;
     if(!slot)slot=&*std::min_element(events_.begin(),events_.end(),[](const Event& a,const Event& b){return a.lastSeen<b.lastSeen;});
-    *slot={next_++,source,c.identity,c.kind,EventState::Active,now,now,-infinity,0,true};slot->lastPrompt=c.prompt;slot->lastCapture=c.captureTime;slot->lastConfidence=c.confidence;return *slot;
+    *slot={next_++,source,c.identity,c.kind,EventState::Active,now,now,-infinity,0,true};slot->lessonStep=c.lessonStep;slot->lessonEpoch=c.lessonEpoch;slot->lastPrompt=c.prompt;slot->lastCapture=c.captureTime;slot->lastConfidence=c.confidence;return *slot;
 }
 void EventLedger::reconcile(uint64_t source,const WorldState& w) noexcept {
     for(auto& e:events_)if(e.used&&!terminal(e.state)) {
@@ -83,7 +83,7 @@ PolicyChoice BalancedPolicy::choose(const PolicyContext& c) const noexcept {
     size_t chosen=0;int best=-1;
     for(size_t i=0;i<std::min(c.world.candidateCount,c.world.candidates.size());++i) {
         const auto& candidate=c.world.candidates[i];if(!candidate.supported||candidate.prompt==Prompt::none)continue;
-        const int rank=(candidate.urgent?100:0)+ld::priority(candidate.prompt);
+        const int rank=(candidate.urgent?100:0)+(candidate.lessonStep?3:0)+ld::priority(candidate.prompt);
         if(rank>best){best=rank;chosen=i;}
     }
     if(best<0)return {};
@@ -120,6 +120,7 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
     if(!w.active)return Block::Inactive;
     if(!std::isfinite(now)||now<w.now||!w.sourceId||!fresh(now,w.telemetry.time,.15))return Block::Stale;
     if(!c.supported||c.prompt==Prompt::none||int(c.prompt)<0||int(c.prompt)>promptCount||!c.identity.id||c.origin<1||c.origin>5)return Block::Unsupported;
+    if(int(c.prompt)>=56&&(c.origin!=5||!c.lessonStep))return Block::Unsupported;
     if(!std::isfinite(c.maxAge)||c.maxAge<=0||c.maxAge>(c.origin==5?(w.route.provider?3.:2.5):maxVisionAgeSeconds)||
        !std::isfinite(c.expiresAt)||c.expiresAt<=c.captureTime||!std::isfinite(c.confidence)||c.confidence<0||c.confidence>1||std::isnan(c.tti))return Block::Unsupported;
     const auto space=c.identity.space;
@@ -147,7 +148,8 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
             !fresh(now,w.route.captureTime,w.route.provider?3.:2.5)||!fresh(now,w.route.gpsTime,2.5))return Block::Unsupported;
         const bool left=c.prompt==Prompt::mapLeftTurn||c.prompt==Prompt::mapLeftTurnNear||c.prompt==Prompt::mapLeftTurn50;
         const bool right=c.prompt==Prompt::mapRightTurn||c.prompt==Prompt::mapRightTurnNear||c.prompt==Prompt::mapRightTurn50;
-        if(int(c.prompt)<47||int(c.prompt)>55||(w.route.provider&&int(c.prompt)>=52))return Block::Unsupported;
+        if(int(c.prompt)>=56){if(!TaskCoach::evidence(c,w,now))return Block::Unsupported;}
+        else if(c.lessonStep||int(c.prompt)<47||int(c.prompt)>55||(w.route.provider&&int(c.prompt)>=52))return Block::Unsupported;
         if((left&&w.route.feature!=4)||(right&&w.route.feature!=5)||
            (c.prompt==Prompt::mapLeftBend&&w.route.feature!=1)||(c.prompt==Prompt::mapRightBend&&w.route.feature!=2)||
            (c.prompt==Prompt::mapJunction&&w.route.feature!=3))return Block::Unsupported;
@@ -217,7 +219,7 @@ void CoachingEngine::beginSource(uint64_t source) noexcept {
 void CoachingEngine::invalidateEvidence() noexcept {
     if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
         deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,lastNow_);
-    pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);
+    pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);task_.sourceChanged();
 }
 double CoachingEngine::interval() const noexcept {return profile_==Profile::Minimal?20:profile_==Profile::Guided?8:12;}
 Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexcept {
@@ -231,7 +233,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     if(camera==ObservationResult::OutOfOrder||camera==ObservationResult::Invalid) {
         // Independent telemetry/navigation can proceed after a visual-clock
         // rejection. A bad frame cannot support an actor or bend candidate.
-        if(std::isfinite(w.captureTime)){w.actorCount=0;w.roadValid=false;}
+        if(std::isfinite(w.captureTime)){w.actorCount=0;w.roadValid=false;}w.captureTime=-infinity;
     }
     if(w.route.valid)synchronizer_.accept(ObservationChannel::Navigation,source_,0,w.route.captureTime,w.now,w.route.provider?3:2.5);
     for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){auto&a=w.actors[i];
@@ -239,12 +241,23 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         if(result==ObservationResult::Invalid||result==ObservationResult::OutOfOrder||result==ObservationResult::Stale)a.relevant=false;
     }
     tracks_.expire(w.now);memory_.observe(w);ledger_.reconcile(source_,w);
+    task_.observe(w,memory_,ledger_);
+    if(task_.enabled()) {
+        size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i)
+            if(w.candidates[i].origin!=5||w.route.feature<3||w.route.feature>5)w.candidates[kept++]=w.candidates[i];
+        w.candidateCount=kept;const auto lesson=task_.proposal(w);
+        if(lesson.prompt!=Prompt::none){
+            if(kept<w.candidates.size())w.candidates[w.candidateCount++]=lesson;
+            else for(size_t i=kept;i>0;--i)if(!w.candidates[i-1].urgent){w.candidates[i-1]=lesson;break;}
+        }
+    }
     interpreter_.observe(w,memory_,ledger_,revision_);lastWorld_=w;
     if(deferred_.valid&&validator_.validate(deferred_.candidate,w,w.now)!=Block::None){deferred_={};++stats_.expired;}
     WorldState safe=w;safe.candidateCount=0;Block rejected=Block::None;bool duplicate=false;
     for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i) {
         auto candidate=w.candidates[i];candidate.prompt=SafetyValidator::neutral(candidate.prompt,candidate.mechanicalMeasured);
-        const auto block=validator_.validate(candidate,w,w.now);
+        auto block=validator_.validate(candidate,w,w.now);
+        if(block==Block::None&&!task_.valid(candidate,w,w.now,ledger_))block=Block::Unsupported;
         if(block!=Block::None){rejected=block;continue;}
         auto& event=ledger_.observe(source_,candidate,w.now);
         event.providerContent=event.providerContent||(candidate.origin==5&&w.route.provider);
@@ -277,7 +290,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
 }
 bool CoachingEngine::ticketValid(const Ticket& t,uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {
     return t.valid&&sequence==t.sequence&&prompt==int(t.candidate.prompt)&&t.sourceId==source_&&w.sourceId==source_&&
-        t.revision==revision_&&now>=t.decidedAt&&validator_.validate(t.candidate,w,now)==Block::None;
+        t.revision==revision_&&now>=t.decidedAt&&validator_.validate(t.candidate,w,now)==Block::None&&task_.valid(t.candidate,w,now,ledger_);
 }
 bool CoachingEngine::pending(uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {return ticketValid(pending_,sequence,prompt,w,now)&&!pending_.accepted;}
 bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,double now,bool submitted) noexcept {
@@ -343,7 +356,7 @@ std::string CoachingEngine::diagnosticsJson(double now) const {
     const char* names[]={"enabled","profile","voice","revision","mode","block","event_id","capture_time","evidence_age","history_samples","active_events","resolved_events",
         "logical_accepted","voice_submitted","playback_onsets","onset_rejected","duplicates","deferred","speed_trend","ordinary_interval_s"};
     out<<"{";for(int i=0;i<20;++i){if(i)out<<',';out<<'"'<<names[i]<<"\":";if(std::isfinite(v[i]))out<<v[i];else out<<"null";}
-    out<<",\"submission_failed\":"<<stats_.submissionFailed<<",\"delivery_stage\":"<<int(accepted_.valid?accepted_.stage:pending_.stage)<<",\"reason_code\":\""<<reasonCode()<<"\",\"heard\":false,\"timing_status\":\"experimental\",\"speed_trend_is_pedal_state\":false}";return out.str();
+    out<<",\"submission_failed\":"<<stats_.submissionFailed<<",\"delivery_stage\":"<<int(accepted_.valid?accepted_.stage:pending_.stage)<<",\"reason_code\":\""<<reasonCode()<<"\",\"heard\":false,\"timing_status\":\"experimental\",\"speed_trend_is_pedal_state\":false,\"task\":"<<task_.json()<<'}';return out.str();
 }
 const char* CoachingEngine::reasonCode() const noexcept {
     if(policyReason_&&*policyReason_>='A'&&*policyReason_<='Z')return policyReason_;

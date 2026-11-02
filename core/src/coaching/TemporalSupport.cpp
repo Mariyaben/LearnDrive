@@ -95,12 +95,12 @@ ObservationResult VehicleStateEstimator::observe(uint64_t source,double capture,
     }
     return ObservationResult::Accepted;
 }
-MotionTrend VehicleStateEstimator::trend(double now) const noexcept {
+MotionTrend VehicleStateEstimator::trend(double now,double since) const noexcept {
     if(!latest_.valid||!recent(now,latest_.time,maxVisionAgeSeconds)||latest_.time-segmentStart_<1)return MotionTrend::Unknown;
     const Sample* reference=nullptr;
     for(size_t i=0;i<count_;++i) {
         const auto& sample=samples_[i];const double span=latest_.time-sample.time;
-        if(sample.valid&&sample.time>=segmentStart_&&span>=1&&span<=2.5&&(!reference||sample.time<reference->time))reference=&sample;
+        if(sample.valid&&sample.time>=since&&sample.time>=segmentStart_&&span>=1&&span<=2.5&&(!reference||sample.time<reference->time))reference=&sample;
     }
     if(!reference)return MotionTrend::Unknown;
     const double delta=latest_.speed-reference->speed;

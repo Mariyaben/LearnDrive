@@ -38,7 +38,7 @@ native_text = (project / "core/include/learndrive/types.hpp").read_text(encoding
 prompt_count = int(re.search(r"promptCount=(\d+)", native_text).group(1))
 enum_text = re.search(r"enum class Prompt.*?\{(.*?)\};", native_text, re.S).group(1)
 ids = {name: int(value) for name, value in re.findall(r"(\w+)=(\d+)", enum_text)}
-native_phrases = {ids[name]: phrase for name, phrase in re.findall(r'case Prompt::(\w+): return "([^"]*)";', native_text)}
+native_phrases = {ids[name]: phrase for name, phrase in re.findall(r'case Prompt::(\w+):\s*return "([^"]*)";', native_text)}
 render_script = (project / "tools/render_android_prompts.ps1").read_text(encoding="utf-8")
 render_phrases = re.findall(r"'([^']*)'", re.search(r"\$phrases = @\((.*?)\)\s*for", render_script, re.S).group(1))
 assert render_phrases == [native_phrases[i] for i in range(1, prompt_count + 1)], "Recorded text differs from native prompt IDs"

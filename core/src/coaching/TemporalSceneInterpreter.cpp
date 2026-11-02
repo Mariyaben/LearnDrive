@@ -18,6 +18,8 @@ bool same(const EncounterEpisode& e,const ActorObservation& a) noexcept {
 }
 InstructionMeaning instructionMeaning(int p) noexcept {
     switch(static_cast<Prompt>(p)) {
+    case Prompt::junctionPlanLeft:case Prompt::junctionPlanRight:case Prompt::junctionPlan:return InstructionMeaning::TurnPreparation;
+    case Prompt::junctionApproach:return InstructionMeaning::ApproachPreparation;
     case Prompt::pedestrianSpace:case Prompt::riderSpace:case Prompt::roadUserQuiet:case Prompt::roadUser:case Prompt::watchPedestrians:return InstructionMeaning::RoadUserSpace;
     case Prompt::vehicleSpace:case Prompt::keepSafeGap:case Prompt::holdLaneDistance:return InstructionMeaning::FollowingGap;
     case Prompt::mapLeftTurn:case Prompt::mapRightTurn:case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:case Prompt::mapJunction:return InstructionMeaning::TurnPreparation;

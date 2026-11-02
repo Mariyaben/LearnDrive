@@ -42,8 +42,9 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     watchPedestrians=39, prepareBend=40, observeSign=41, brakeHarder=42, emergencyStop=43,
     pedestrianSpace=44, riderSpace=45, vehicleSpace=46,
     mapLeftBend=47,mapRightBend=48,mapJunction=49,mapLeftTurn=50,mapRightTurn=51,
-    mapLeftTurnNear=52,mapRightTurnNear=53,mapLeftTurn50=54,mapRightTurn50=55 };
-constexpr int promptCount=55;
+    mapLeftTurnNear=52,mapRightTurnNear=53,mapLeftTurn50=54,mapRightTurn50=55,
+    junctionPlanLeft=56,junctionPlanRight=57,junctionPlan=58,junctionApproach=59 };
+constexpr int promptCount=59;
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -77,7 +78,8 @@ inline int priority(Prompt p) {
     case Prompt::imageClose:case Prompt::imageCloseGear:case Prompt::gentleUp:case Prompt::gentleDown:
     case Prompt::steepUp:case Prompt::steepDownGear:case Prompt::steepDown:case Prompt::verySteepUp:case Prompt::verySteepDown:
     case Prompt::prepareBend:case Prompt::mapLeftBend:case Prompt::mapRightBend:case Prompt::mapJunction:case Prompt::mapLeftTurn:case Prompt::mapRightTurn:
-    case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:return 2;
+    case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:
+    case Prompt::junctionPlanLeft:case Prompt::junctionPlanRight:case Prompt::junctionPlan:case Prompt::junctionApproach:return 2;
     case Prompt::ease:case Prompt::close:case Prompt::closeGear:case Prompt::holdLaneDistance:case Prompt::keepSafeGap:
     case Prompt::slowSmoothly:case Prompt::watchPedestrians:return 3;
     case Prompt::brake:return 4;
@@ -88,6 +90,10 @@ inline int priority(Prompt p) {
 }
 inline const char* promptText(Prompt p) {
     switch(p) {
+    case Prompt::junctionPlanLeft:return "For the left turn: check mirrors, plan your signal, and prepare your road position";
+    case Prompt::junctionPlanRight:return "For the right turn: check mirrors, plan your signal, and prepare your road position";
+    case Prompt::junctionPlan:return "For this junction: check mirrors and prepare your approach";
+    case Prompt::junctionApproach:return "Set a suitable approach speed. Prepare to give way";
     case Prompt::hill: return "Uphill. Lower gear if needed";
     case Prompt::ease: return "Ease off accelerator";
     case Prompt::brake: return "Brake gently";
@@ -147,7 +153,7 @@ inline const char* promptText(Prompt p) {
     }
 }
 inline bool mayInterrupt(Prompt next,Prompt current) {
-    const bool map=int(next)>=int(Prompt::mapLeftBend)&&int(next)<=int(Prompt::mapRightTurn50);
+    const bool map=int(next)>=int(Prompt::mapLeftBend)&&int(next)<=int(Prompt::junctionApproach);
     if(map&&current!=Prompt::none)return false; // Routine map cues never interrupt speech.
     if(priority(next)>priority(current))return true;
     const bool image=current==Prompt::imageClose||current==Prompt::imageCloseGear||current==Prompt::closeQuiet||current==Prompt::closeGearQuiet;

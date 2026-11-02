@@ -79,6 +79,10 @@ class NativeCore : AutoCloseable {
     @Synchronized fun coachingDiagnostics(time:Double)=coachingDiagnostics(handle,time)
     @Synchronized fun coachingDiagnosticsJson(time:Double)=coachingDiagnosticsJson(handle,time)
     @Synchronized fun temporalContext():String=temporalContext(handle)
+    @Synchronized fun junctionLesson(enabled:Boolean)=junctionLesson(handle,enabled)
+    @Synchronized fun taskContext():String=taskContext(handle)
+    @Synchronized fun taskSpeechAllowed():Boolean=taskSpeechAllowed(handle)
+    @Synchronized fun taskExecutionQuiet():Boolean=taskExecutionQuiet(handle)
     @Synchronized fun guidanceAccepted(d:GuidanceDecision,time:Double)=guidanceAccepted(handle,d.sequence,d.prompt,time)
     @Synchronized fun deliverGuidance(d:GuidanceDecision,submit:(Int)->Boolean,cancel:()->Unit):Boolean {
         val time=now()
@@ -164,6 +168,10 @@ class NativeCore : AutoCloseable {
     private external fun coachingDiagnostics(h:Long,time:Double):DoubleArray
     private external fun coachingDiagnosticsJson(h:Long,time:Double):String
     private external fun temporalContext(h:Long):String
+    private external fun junctionLesson(h:Long,enabled:Boolean)
+    private external fun taskContext(h:Long):String
+    private external fun taskSpeechAllowed(h:Long):Boolean
+    private external fun taskExecutionQuiet(h:Long):Boolean
     private external fun coachingDeliveryEvent(h:Long,sequence:Long,prompt:Int,time:Double,stage:Int)
     private external fun guidanceBegin(h:Long,id:Long,kind:Int,time:Double):Boolean
     private external fun guidanceDecide(h:Long,id:Long,t:DoubleArray,now:Double,active:Boolean,ready:Boolean,manual:Boolean,slope:Boolean,emergencies:Boolean,ht:Double,tti:Double,confidence:Double,path:Boolean):DoubleArray?

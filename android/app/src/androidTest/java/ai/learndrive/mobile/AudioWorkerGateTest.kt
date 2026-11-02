@@ -14,6 +14,17 @@ import java.util.concurrent.atomic.AtomicReference
  * freshness itself is covered by the native acceptance/onset contract tests. */
 class AudioWorkerGateTest {
     private fun field(name:String)=AudioWorker::class.java.getDeclaredField(name).apply {isAccessible=true}
+    @Test fun quietExecutionCancelsRoutineButPreservesValidatedWarning() {
+        val audio=AudioWorker(InstrumentationRegistry.getInstrumentation().targetContext,{_,_->true},59) {}
+        try {
+            synchronized(audio){
+                field("pending").setInt(audio,56);field("pendingWarning").setBoolean(audio,false)
+                assertTrue(audio.cancelRoutine());assertEquals(0,field("pending").getInt(audio))
+                field("pending").setInt(audio,44);field("pendingWarning").setBoolean(audio,true)
+                assertFalse(audio.cancelRoutine());assertEquals(44,field("pending").getInt(audio))
+            }
+        }finally {audio.close()}
+    }
     @Test fun cancellationCannotBeFollowedByAnOldPcmWrite() {
         val audio=AudioWorker(InstrumentationRegistry.getInstrumentation().targetContext,{_,_->true},55) {}
         val write=AudioWorker::class.java.getDeclaredMethod("writeCurrent",Int::class.javaPrimitiveType,Function0::class.java).apply {isAccessible=true}

@@ -140,6 +140,11 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         if(current==0||!matches(current))return false
         cancel();return true
     }
+    /** A task workload boundary must preserve independently validated warnings. */
+    @Synchronized fun cancelRoutine():Boolean {
+        if((pending!=0&&pendingWarning)||(active!=0&&activeWarning)||(pending==0&&active==0))return false
+        cancel();return true
+    }
     @Synchronized fun preempt() {
         generation.incrementAndGet();pending=0;active=0;activeWarning=false;pendingWarning=false
         track?.pause();track?.flush();track?.stop()

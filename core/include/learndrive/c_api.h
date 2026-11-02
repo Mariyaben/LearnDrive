@@ -120,6 +120,10 @@ int ld_coaching_diagnostics(ld_engine*,double now,double* out,size_t capacity);
 const char* ld_coaching_diagnostics_json(ld_engine*,double now);
 // Version2 scalar interpreted context; Google-derived provider context is excluded.
 const char* ld_coaching_context_json(ld_engine*);
+void ld_coaching_junction_lesson(ld_engine*,int enabled);
+const char* ld_coaching_task_json(ld_engine*);
+int ld_coaching_task_speech_allowed(ld_engine*);
+int ld_coaching_task_execution_quiet(ld_engine*);
 // Diagnostic packed snapshot for matched local replay. Excludes provider data.
 const char* ld_coaching_world_snapshot_json(ld_engine*);
 int ld_coaching_delivery_event(ld_engine*,uint64_t sequence,int prompt,double now,int stage);

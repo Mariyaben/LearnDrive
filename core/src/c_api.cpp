@@ -626,6 +626,18 @@ const char* ld_coaching_context_json(ld_engine* e) {
     if(!e)return "{}";
     try{e->intelligenceContext=e->coaching.interpretedSceneJson();return e->intelligenceContext.c_str();}catch(...){return "{}";}
 }
+void ld_coaching_junction_lesson(ld_engine* e,int enabled){if(e)e->coaching.enableJunctionLesson(enabled!=0);}
+const char* ld_coaching_task_json(ld_engine* e){
+    if(!e)return "{}";try{e->intelligenceContext=e->coaching.task().json();return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+int ld_coaching_task_speech_allowed(ld_engine* e){
+    if(!e)return 0;using P=ld::coaching::TaskPhase;const auto phase=e->coaching.task().progress().phase;
+    return phase==P::Preparing||phase==P::AwaitingDelivery||phase==P::ObservingResponse||phase==P::Approach;
+}
+int ld_coaching_task_execution_quiet(ld_engine* e){
+    if(!e)return 0;const auto& s=e->coaching.task().progress();
+    return e->coaching.task().enabled()&&s.phase==ld::coaching::TaskPhase::ExecutionQuiet&&s.leadSeconds>=0&&s.leadSeconds<8;
+}
 const char* ld_coaching_world_snapshot_json(ld_engine* e) {
     if(!e||e->coachingWorld.route.provider)return "{}";
     try {

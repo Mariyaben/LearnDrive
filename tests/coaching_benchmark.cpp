@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -21,11 +22,12 @@ void operator delete(void* p) noexcept {std::free(p);}
 void operator delete[](void* p) noexcept {std::free(p);}
 void operator delete(void* p,std::size_t) noexcept {std::free(p);}
 void operator delete[](void* p,std::size_t) noexcept {std::free(p);}
-int main() {
+int main(int argc,char**) {
     using namespace ld;using namespace ld::coaching;
     constexpr size_t ticks=20000;
     auto engine=std::make_unique<CoachingEngine>();
     engine->configure(1,false,1);engine->beginSource(1);
+    const bool task=argc>1;if(task)engine->enableJunctionLesson(true);
     std::vector<double> samples(ticks);
     WorldState w;w.sourceId=1;w.active=true;w.actorCount=1;w.candidateCount=1;
     size_t accepted=0;
@@ -33,6 +35,7 @@ int main() {
     for(size_t i=0;i<ticks;++i) {
         w.now=1+i*.01;w.captureTime=w.now;w.frameSequence=i+1;
         w.telemetry={w.now,30,0,0,1,true,true,true,false,false,false};
+        if(task){const double lead=35-std::fmod(i*.01,40.);w.route={17,1+i/4000,2,w.now,lead*30/3.6,lead,w.now,4,lead>=0,true};}
         auto& a=w.actors[0];a.identity={IdentitySpace::Attention,1+i/1250,0};
         a.captureTime=w.now;a.confidence=.9;a.category=0;a.relevant=true;
         a.x=.4f;a.y=.3f;a.w=.1f;a.h=.4f;
@@ -51,6 +54,6 @@ int main() {
         <<",\"ordinary_cpp_allocations\":"<<allocations.load()<<",\"logical_accepted\":"<<accepted
         <<",\"p50_us\":"<<samples[ticks/2]<<",\"p95_us\":"<<samples[ticks*95/100]
         <<",\"p99_us\":"<<samples[ticks*99/100]<<",\"max_us\":"<<samples.back()
-        <<",\"phone_performance_measured\":false}\n";
+        <<",\"task_enabled\":"<<(task?"true":"false")<<",\"phone_performance_measured\":false}\n";
     return allocations.load()==0&&accepted>0?0:1;
 }

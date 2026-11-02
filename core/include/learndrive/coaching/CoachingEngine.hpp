@@ -2,6 +2,7 @@
 #include "learndrive/types.hpp"
 #include "learndrive/coaching/TemporalSupport.hpp"
 #include "learndrive/coaching/TemporalSceneInterpreter.hpp"
+#include "learndrive/coaching/TaskCoach.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -45,6 +46,8 @@ struct Candidate {
     bool supported{},urgent{},critical{},mechanicalMeasured{};
     int actorCategory=-1,evidenceKind{};
     float x{},y{},w{},h{};
+    int lessonStep{}; // Native task action, zero for the existing candidate producers.
+    uint64_t lessonEpoch{};
 };
 struct WorldState {
     uint64_t sourceId{},frameSequence{};
@@ -81,7 +84,7 @@ public:
     void clear() noexcept;
     bool observe(const WorldState&) noexcept;
     size_t size(double now) const noexcept;
-    SpeedTrend speedTrend(double now) const noexcept;
+    SpeedTrend speedTrend(double now,double since=-infinity) const noexcept;
     const std::array<MemorySample,101>& samples() const noexcept {return samples_;}
 private:
     std::array<MemorySample,101> samples_{};
@@ -107,6 +110,8 @@ struct Event {
     DeliveryStage deliveryStage=DeliveryStage::Selected;
     bool retryable{};
     bool providerContent{};
+    int lessonStep{};
+    uint64_t lessonEpoch{};
 };
 class EventLedger {
 public:
@@ -185,6 +190,8 @@ public:
     std::string diagnosticsJson(double now) const;
     const char* reason() const noexcept;
     const char* reasonCode() const noexcept;
+    void enableJunctionLesson(bool enabled) noexcept {if(task_.enabled()!=enabled){invalidateEvidence();task_.enable(enabled);}}
+    const TaskCoach& task() const noexcept {return task_;}
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;
     BalancedPolicy balanced_;
@@ -196,6 +203,7 @@ private:
     ObservationSynchronizer synchronizer_;
     ObjectTracker tracks_;
     TemporalSceneInterpreter interpreter_;
+    TaskCoach task_;
     WorldState lastWorld_{};
     Profile profile_=Profile::Balanced;
     bool configured_{},voice_=true;

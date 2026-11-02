@@ -248,5 +248,21 @@ int main(){try {
         check(!f.e.deliveryEvent(1,44,DeliveryStage::Completed,1.2),"late completion claimed interrupted audio delivered");
         auto fresh=world(1.3);put(fresh,attention(fresh));check(f.e.decide(fresh,2).eligible&&f.e.accept(2,44,fresh,1.3,true),"fresh retry lost after interruption");
     });
+    test("C API combines real native navigation and camera paths into a task sequence",[]{
+        // Supplied frames, GPS and times are synthetic contract inputs.
+        Native e(ld_create(),ld_destroy);Frames frames;
+        check(ld_guidance_begin(e.get(),1,LD_SOURCE_CAMERA,0)&&ld_coaching_configure(e.get(),1,0,1),"configure");
+        ld_coaching_junction_lesson(e.get(),1);
+        ld_navigation_turn turn{1,1,2,1,11,LD_TURN_NAVIGATING,0,LD_MANEUVER_LEFT,250,30};
+        check(ld_navigation_turn_update(e.get(),&turn),"turn fixture");
+        check(ld_navigation_fix(e.get(),1,10,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,11,10,76,3,30,.5,1,0,1),"GPS fixture");frames.publish(e.get(),11,1,false);
+        auto q=request(11);ld_guidance_result d{};check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==56,"task planning missing through C API");
+        check(ld_coaching_accept(e.get(),d.sequence,d.prompt,11,0),"visual acceptance");
+        check(ld_navigation_fix(e.get(),1,24,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,25,10,76,3,30,.5,1,0,1),"approach GPS fixture");
+        turn.sequence=2;turn.received_at=25;turn.estimated_remaining_m=142;turn.estimated_remaining_seconds=17;
+        check(ld_navigation_turn_update(e.get(),&turn),"approach turn");frames.publish(e.get(),25,1,false);q=request(25);
+        check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==59,"task sequence missing through C API");
+        ld_navigation_turn_unavailable(e.get());check(!ld_guidance_pending(e.get(),d.sequence,d.prompt,25.01),"lost provider evidence retained task ticket");
+    });
     std::cout<<passed<<" coaching groups passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

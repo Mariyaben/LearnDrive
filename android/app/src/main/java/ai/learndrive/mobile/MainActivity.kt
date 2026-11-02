@@ -41,6 +41,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var pretrained:PretrainedShadow
     private lateinit var reasoningStatus:TextView
     private var lastReasoningSummary=Double.NEGATIVE_INFINITY
+    @Volatile private var junctionLesson=false
+    private lateinit var lessonStatus:TextView
+    private lateinit var learningRecords:LearningRecordStore
+    private var lessonBaseline=org.json.JSONObject()
+    private var lessonUiPhase="WAITING_FOR_ROUTE"
+    private var lastLessonUi=0.0
     private val modelImport=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->
         if(uri!=null&&::pretrained.isInitialized)pretrained.importModel(uri)
     }
@@ -307,6 +313,33 @@ class MainActivity : ComponentActivity() {
         val optionsToggle=button("More setup options") {}
         optionsToggle.setOnClickListener {val opening=moreOptions.visibility==View.GONE;moreOptions.visibility=if(opening)View.VISIBLE else View.GONE;optionsToggle.text=if(opening)"Hide setup options" else "More setup options"}
         setupUtilities.addView(optionsToggle,LinearLayout.LayoutParams(0,CoachStyle.dp(this,48),1f));setupPanel.addView(moreOptions)
+        learningRecords=LearningRecordStore(getSharedPreferences("learning_records",MODE_PRIVATE))
+        moreOptions.addView(text("Practice focus",13f))
+        val lessonChoice=Spinner(this).apply {
+            tag="practice-focus"
+            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("General practice","Junction preparation · pilot"))
+        }
+        lessonChoice.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
+                if(setup.isMonitoring()||knownMoving()){lessonChoice.setSelection(if(junctionLesson)1 else 0);return}
+                val enabled=position==1
+                if(enabled==junctionLesson)return
+                synchronized(core){audio.cancel();core.junctionLesson(enabled);junctionLesson=enabled}
+                pretrained.setEnabled(false);moreOptions.findViewWithTag<Switch>("pretrained-shadow")?.isChecked=false
+                coachCaption.clear();lastLessonUi=0.0;lessonUiPhase="WAITING_FOR_ROUTE"
+                if(enabled)android.app.AlertDialog.Builder(this@MainActivity).setTitle("Junction preparation practice")
+                    .setMessage("Goal: prepare observation, signal/position planning and approach before a junction. Select a route; fresh camera and measured GPS speed are needed. The pilot gives an early planning cue, checks measured speed trend, and may give one approach reminder. It stays quiet in the final approach. Mirror checks, signals, position and control use remain unobserved. Practise with your instructor; this pilot is not validated teaching.")
+                    .setPositiveButton("Understood",null).show()
+            }
+            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
+        }
+        moreOptions.addView(lessonChoice)
+        moreOptions.addView(button("Practice goal and saved records") {
+            if(!setup.isMonitoring()&&!knownMoving())android.app.AlertDialog.Builder(this).setTitle("Practice goal and records")
+                .setMessage(learningRecords.text(junctionLesson)).setPositiveButton("Done",null)
+                .setNeutralButton("Clear saved records") {_,_->learningRecords.clear()}.show()
+        })
+        lessonStatus=text("",12f).apply {visibility=View.GONE};setupPanel.addView(lessonStatus)
         moreOptions.addView(text("Coaching level",13f))
         val coachingProfile=Spinner(this).apply {
             tag="coaching-profile"
@@ -331,7 +364,7 @@ class MainActivity : ComponentActivity() {
             tag="pretrained-shadow";text="Experimental local AI shadow";setTextColor(CoachStyle.text);isChecked=false
             isEnabled=BuildConfig.PRETRAINED_RUNTIME_AVAILABLE
             setOnCheckedChangeListener {_,enabled->
-                if(enabled&&(setup.isMonitoring()||knownMoving()))isChecked=false
+                if(enabled&&(setup.isMonitoring()||knownMoving()||junctionLesson))isChecked=false
                 else pretrained.setEnabled(enabled)
             }
         }
@@ -443,7 +476,7 @@ class MainActivity : ComponentActivity() {
         fallbackControls.visibility=if(filmedVideo.isChecked)View.VISIBLE else View.GONE
         gpsButton.isEnabled=!filmedVideo.isChecked
         filmedVideo.setOnCheckedChangeListener {_,testing ->
-            setup.stop();practiceReview.discard()
+            setup.stop();finishPractice(true)
             videoControls.visibility=if(testing&&!phoneSlope.isChecked)View.VISIBLE else View.GONE
             phoneSlope.visibility=if(testing)View.VISIBLE else View.GONE
             gpsButton.isEnabled=!testing
@@ -728,7 +761,7 @@ class MainActivity : ComponentActivity() {
         if(!canStartRoad())return false
         val t=now();val up=core.cameraUp(t)
         if(!setup.start(t,up[0],up[1],up[2]))return false
-        levelStart.cancel();practiceReview.start(t);sessionStartDialog?.dismiss()
+        levelStart.cancel();practiceReview.start(t);lessonBaseline=org.json.JSONObject(core.taskContext());sessionStartDialog?.dismiss()
         audio.cancel();activeMap.setFollowing(true)
         if(useGoogle)googleNavigation?.startGuidance()
         startCamera();publishOptions();updateSetupUi();return true
@@ -750,8 +783,13 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    private fun endRoadSession() {
+    private fun finishPractice(interrupted:Boolean):PracticeSessionReview.Review? {
         val review=practiceReview.finish(now())
+        if(review!=null&&::learningRecords.isInitialized)learningRecords.record(junctionLesson,review.durationSeconds,interrupted,lessonBaseline,org.json.JSONObject(core.taskContext()))
+        return review
+    }
+    private fun endRoadSession() {
+        val review=finishPractice(false)
         if(review!=null)lastPracticeReview=review
         setup.stop();audio.cancel();coachCaption.clear();googleNavigation?.stopGuidance();showSetup=true
         if(resumed&&mode=="Camera")startCamera()
@@ -876,7 +914,7 @@ class MainActivity : ComponentActivity() {
         } else resetPhoneReference(false)
     }
     private fun resetPhoneReference(confirmed:Boolean) {
-        audio.cancel();setup.stop();practiceReview.discard();val previousId=core.calibrationId();core.reset();lastVision=null;lastCompletedVision=null
+        audio.cancel();setup.stop();finishPractice(true);val previousId=core.calibrationId();core.reset();lastVision=null;lastCompletedVision=null
         if(confirmed)check(setup.requestLevelReference(previousId))
         if(resumed&&mode=="Camera")startCamera() else {beginSource(captureSource());publishOptions()}
     }
@@ -940,7 +978,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun switchMode(next:String) {
         levelStart.cancel();sessionStartDialog?.dismiss()
-        setup.stop();practiceReview.discard()
+        setup.stop();finishPractice(true)
         googleNavigation?.stopGuidance();coachCaption.clear()
         beginSource(captureSource(next));cameraRunning=false;videoRunning=false;player?.close();player=null;camera?.unbindAll();audio.cancel();lastVision=null;overlay.result=null
         visionError=null;cameraError=null;lastCameraFrameAt=0.0;cameraThermal=0
@@ -1160,6 +1198,8 @@ class MainActivity : ComponentActivity() {
         }
         if(key!=traceKey||t-traceAt>=1.0)emitDecision()
         val delivery=if(!road||setup.isMonitoring())core.deliverCoaching(decision,audio) else null
+        if(junctionLesson&&!core.taskSpeechAllowed())audio.cancelIfPrompt {it in 56..59}
+        if(junctionLesson&&core.taskExecutionQuiet())audio.cancelRoutine()
         if(pretrained.canOffer&&t-lastReasoningSummary>=1.5){lastReasoningSummary=t;pretrained.offer(core.temporalContext(),cameraThermal)}
         if(delivery!=null) {
             // Audio can become available between sampled ticks. Preserve the
@@ -1210,7 +1250,7 @@ class MainActivity : ComponentActivity() {
                 val checkMount=setup.update(t,calibrationId,measured.calibrated,fresh,up[0],up[1],up[2],measured.speed,measured.speedValid)
                 if(previousReference!=0L&&!setup.levelAllowed(calibrationId)){audio.cancel();coachCaption.clear()}
                 if(checkMount) {
-                    practiceReview.discard()
+                    finishPractice(true)
                     audio.cancel();core.reset();startCamera();publishOptions()
                 }
             }
@@ -1319,13 +1359,30 @@ class MainActivity : ComponentActivity() {
             if(mode=="Camera"&&issue!=null)coachCaption.clear()
             val caption=coachCaption.presentation(visionNow,core.sourceId,captionActive,
                 if(useGoogle||loadedRoute)core.navigationContext(visionNow) else null)
+            if(junctionLesson&&visionNow-lastLessonUi>=.5){
+                lessonUiPhase=org.json.JSONObject(core.taskContext()).optString("phase","WAITING_FOR_ROUTE");lastLessonUi=visionNow
+            }
             dashboard.setCoachPresentation(caption?.text?:when {
                     roadSource()&&!setup.isMonitoring()->"Your next session starts here."
+                    roadSource()&&junctionLesson->when(lessonUiPhase){
+                        "WAITING_FOR_ROUTE"->"Choose a destination to practise junction preparation."
+                        "EVIDENCE_UNAVAILABLE"->"Waiting for reliable road and location data."
+                        "EXECUTION_QUIET"->"Focus on driving. Your instructor leads."
+                        "AWAITING_DELIVERY"->"Junction preparation guidance"
+                        "OBSERVING_RESPONSE"->"Continue preparing with your instructor."
+                        else->"Preparing for the next junction."
+                    }
                     mode=="Desk"->"Desk test · simulated driving"
                     mode=="MP4"->"Recorded video test"
                     options.filmedVideo->"Screen test · recorded scene only"
                     else->roadHealth.idleCaption
-                },caption?.context?:if(roadSource()&&setup.isMonitoring())"Supervised practice · advisory cues" else "YOUR NEXT STEP")
+                },caption?.context?:if(roadSource()&&setup.isMonitoring()){
+                    if(junctionLesson)"JUNCTION PREPARATION · PILOT" else "Supervised practice · advisory cues"
+                }else "YOUR NEXT STEP")
+            if(::lessonStatus.isInitialized){
+                lessonStatus.visibility=if(junctionLesson)View.VISIBLE else View.GONE
+                if(junctionLesson)lessonStatus.setUiText("Junction practice · "+lessonUiPhase.replace('_',' ').lowercase()+"\nMirror, signal, position and control actions unobserved · outcome unassessed")
+            }
             updateSetupUi()
             if(showLab||mode!="Camera")updateEvidenceUi()
             main.postDelayed(this,50)
@@ -1333,7 +1390,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart(){super.onStart();routeMap.onStart();googleNavigation?.onStart()}
     override fun onResume() {super.onResume();routeMap.onResume();googleNavigation?.onResume();resumed=true;loadOfflineRoute();if(::sensors.isInitialized)sensors.start();if(mode=="Camera"){inference.execute {visionFailure=null};startCamera()};main.post(tick);rules.post(ruleTick)}
-    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();synchronized(evidenceLock){journal?.stop("backgrounded")};if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};setup.stop();practiceReview.discard();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
+    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();synchronized(evidenceLock){journal?.stop("backgrounded")};if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};finishPractice(true);setup.stop();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}

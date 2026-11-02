@@ -29,7 +29,11 @@ try {
         'Left bend ahead. Prepare early', 'Right bend ahead. Prepare early',
         'Junction ahead. Check for traffic', 'Left turn ahead. Check for traffic', 'Right turn ahead. Check for traffic',
         'Left turn in about ten metres', 'Right turn in about ten metres',
-        'Left turn in about fifty metres', 'Right turn in about fifty metres')
+        'Left turn in about fifty metres', 'Right turn in about fifty metres',
+        'For the left turn: check mirrors, plan your signal, and prepare your road position',
+        'For the right turn: check mirrors, plan your signal, and prepare your road position',
+        'For this junction: check mirrors and prepare your approach',
+        'Set a suitable approach speed. Prepare to give way')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         $outputPath = Join-Path $assetDirectory ('prompt-{0}.wav' -f ($index + 1))

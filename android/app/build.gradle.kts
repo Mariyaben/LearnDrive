@@ -17,8 +17,8 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 30
-        versionName = "0.6.0"
+        versionCode = 31
+        versionName = "0.7.0"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
         buildConfigField("boolean", "PRETRAINED_RUNTIME_AVAILABLE", (rootProject.file("../.tools/intelligence/android/llama-b11932/libllama.so").isFile && rootProject.file("../.tools/intelligence/include/llama.h").isFile).toString())
@@ -66,7 +66,7 @@ dependencies {
 }
 
 val offlineAssets = listOf("navigation-valhalla-config.json", "supercombo.onnx", "supercombo-manifest.json", "COMMA-LICENSE.txt", "detector.onnx", "road.onnx", "model-manifest.json", "TwinLite-LICENSE.txt", "YOLO-LICENSE.txt") +
-    (1..55).map { "audio/prompt-$it.wav" }
+    (1..59).map { "audio/prompt-$it.wav" }
 val verifyOfflineAssets = tasks.register("verifyOfflineAssets") {
     inputs.files(offlineAssets.map { file("src/main/assets/$it") })
     doLast {
