@@ -17,6 +17,7 @@ $sources += Join-Path $projectRoot 'core\src\coaching\CoachingEngine.cpp'
 $sources += Join-Path $projectRoot 'core\src\coaching\TemporalSupport.cpp'
 $sources += Join-Path $projectRoot 'core\src\coaching\TemporalSceneInterpreter.cpp'
 $sources += Join-Path $projectRoot 'core\src\coaching\TaskCoach.cpp'
+$sources += Join-Path $projectRoot 'core\src\coaching\DriveCoach.cpp'
 $include = Join-Path $projectRoot 'core\include'
 $testExe = Join-Path $outputDir 'core_tests.exe'
 & $ZigPath c++ -std=c++17 -O2 '-Wall' '-Wextra' '-Wpedantic' "-I$include" @sources (Join-Path $projectRoot 'tests\core_tests.cpp') -o $testExe
@@ -40,6 +41,7 @@ foreach ($target in @(@{Name='test_reflex_suppression'; Source='core\tests\test_
     @{Name='temporal_interpreter_tests'; Source='tests\temporal_interpreter_tests.cpp'},
     @{Name='coaching_engine_tests'; Source='tests\coaching_engine_tests.cpp'},
     @{Name='task_coach_tests'; Source='tests\task_coach_tests.cpp'},
+    @{Name='drive_coach_tests'; Source='tests\drive_coach_tests.cpp'},
     @{Name='test_priority_arbiter'; Source='core\tests\test_priority_arbiter.cpp'},
     @{Name='test_perception_geometry'; Source='core\tests\test_perception_geometry.cpp'})) {
     $exe = Join-Path $outputDir ($target.Name + '.exe')

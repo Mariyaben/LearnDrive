@@ -83,8 +83,11 @@ JNIEXPORT jboolean JNICALL JNI(guidancePending)(JNIEnv*,jobject,jlong h,jlong se
 JNIEXPORT jstring JNICALL JNI(guidanceReason)(JNIEnv* e,jobject,jlong h){return e->NewStringUTF(ld_guidance_reason(engine(h)));}
 JNIEXPORT jstring JNICALL JNI(temporalContext)(JNIEnv* e,jobject,jlong h){return e->NewStringUTF(ld_coaching_context_json(engine(h)));}
 JNIEXPORT void JNICALL JNI(junctionLesson)(JNIEnv*,jobject,jlong h,jboolean enabled){ld_coaching_junction_lesson(engine(h),enabled);}
+JNIEXPORT void JNICALL JNI(automaticCoaching)(JNIEnv*,jobject,jlong h,jboolean enabled){ld_coaching_automatic(engine(h),enabled);}
+JNIEXPORT jstring JNICALL JNI(driveContext)(JNIEnv* env,jobject,jlong h){return env->NewStringUTF(ld_coaching_drive_json(engine(h)));}
 JNIEXPORT jstring JNICALL JNI(taskContext)(JNIEnv* e,jobject,jlong h){return e->NewStringUTF(ld_coaching_task_json(engine(h)));}
 JNIEXPORT jboolean JNICALL JNI(taskSpeechAllowed)(JNIEnv*,jobject,jlong h){return ld_coaching_task_speech_allowed(engine(h));}
+JNIEXPORT jboolean JNICALL JNI(coachingContinuationValid)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jlong revision){return ld_coaching_continuation_valid(engine(h),uint64_t(sequence),prompt,time,uint64_t(revision));}
 JNIEXPORT jboolean JNICALL JNI(taskExecutionQuiet)(JNIEnv*,jobject,jlong h){return ld_coaching_task_execution_quiet(engine(h));}
 JNIEXPORT void JNICALL JNI(coachingDeliveryEvent)(JNIEnv*,jobject,jlong h,jlong sequence,jint prompt,jdouble time,jint stage){ld_coaching_delivery_event(engine(h),sequence,prompt,time,stage);}
 JNIEXPORT jboolean JNICALL JNI(navigationRoute)(JNIEnv* e,jobject,jlong h,jlong id,jdoubleArray shape,jintArray maneuvers){

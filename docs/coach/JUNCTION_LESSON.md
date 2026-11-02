@@ -1,11 +1,12 @@
 # Junction preparation: first task contract
 
-Experimental software pilot, not instructor-qualified. Version 0.7.0.
+Experimental software task, not instructor-qualified. Version 0.7.1.
 
-Select **More setup options → Practice focus → Junction preparation · pilot**
-while parked, choose a destination, and use the existing supervised-session flow.
-The map, camera and coach remain in the same dashboard. The goal and saved records
-are accessible while parked. General practice remains available.
+Use the normal supervised-session flow. A chosen destination adds junction context;
+the task activates automatically when that context is relevant. The map, camera
+and coach remain in the same dashboard. Road-user, bend and hill support remains
+available as the situation develops. Records cover the whole session. The 0.7.0
+lesson selector has been removed; it was a development restriction.
 
 ## Objective and sequence
 
@@ -32,7 +33,7 @@ boundary. Changed evidence can still cancel an in-progress recording.
 Minimal/Balanced/Guided retain their existing 20/12/8-second routine intervals.
 The lesson gets priority over routine announcements but does not bypass pacing.
 If pacing or late arrival misses a step, skip it rather than compress the sequence.
-Junction route announcements are replaced within this explicit pilot. Non-junction
+Junction route announcements are replaced within this automatic task. Non-junction
 map context and independent urgent evidence retain their existing paths.
 
 ## Evidence and delivery

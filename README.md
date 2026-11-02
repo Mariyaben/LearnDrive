@@ -1,12 +1,15 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.0 (experimental).** The first task-based lesson
-connects a parked junction-preparation goal to sequenced guidance, delivery
-tracking, measured response, quiet execution and bounded local practice records.
+**Current Android candidate: 0.7.1 (experimental).** Automatic coaching coordinates
+supported road-user, bend, hill and junction guidance throughout one supervised
+session. No lesson selection is required. A destination adds junction preparation;
+supported camera and terrain guidance can operate without a route. Speech tracks
+delivery and current supporting evidence. Local records cover the whole drive.
+See [automatic drive behavior and evidence](docs/coach/AUTOMATIC_DRIVE.md).
 See the [complete coach specification](docs/coach/PRODUCT_SPECIFICATION.md),
 [execution plan](docs/coach/EXECUTION_PLAN.md) and
 [first lesson contract](docs/coach/JUNCTION_LESSON.md).
-This is a first curriculum increment, not a complete or instructor-qualified coach.
+Full curriculum coverage and dependable human-coach teaching remain unqualified.
 
 The native temporal coach
 interprets encounter changes, uncertainty and actual cue delivery. Optional local

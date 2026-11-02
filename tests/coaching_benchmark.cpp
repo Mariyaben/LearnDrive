@@ -22,12 +22,13 @@ void operator delete(void* p) noexcept {std::free(p);}
 void operator delete[](void* p) noexcept {std::free(p);}
 void operator delete(void* p,std::size_t) noexcept {std::free(p);}
 void operator delete[](void* p,std::size_t) noexcept {std::free(p);}
-int main(int argc,char**) {
+int main(int argc,char** argv) {
     using namespace ld;using namespace ld::coaching;
     constexpr size_t ticks=20000;
     auto engine=std::make_unique<CoachingEngine>();
     engine->configure(1,false,1);engine->beginSource(1);
-    const bool task=argc>1;if(task)engine->enableJunctionLesson(true);
+    const bool task=argc>1;const bool automatic=task&&std::string(argv[1])=="--automatic";
+    if(automatic)engine->enableAutomaticCoaching(true);else if(task)engine->enableJunctionLesson(true);
     std::vector<double> samples(ticks);
     WorldState w;w.sourceId=1;w.active=true;w.actorCount=1;w.candidateCount=1;
     size_t accepted=0;
@@ -54,6 +55,6 @@ int main(int argc,char**) {
         <<",\"ordinary_cpp_allocations\":"<<allocations.load()<<",\"logical_accepted\":"<<accepted
         <<",\"p50_us\":"<<samples[ticks/2]<<",\"p95_us\":"<<samples[ticks*95/100]
         <<",\"p99_us\":"<<samples[ticks*99/100]<<",\"max_us\":"<<samples.back()
-        <<",\"task_enabled\":"<<(task?"true":"false")<<",\"phone_performance_measured\":false}\n";
+        <<",\"task_enabled\":"<<(task?"true":"false")<<",\"automatic\":"<<(automatic?"true":"false")<<",\"phone_performance_measured\":false}\n";
     return allocations.load()==0&&accepted>0?0:1;
 }

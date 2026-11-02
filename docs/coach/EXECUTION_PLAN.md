@@ -10,10 +10,10 @@ Detection and map announcements alone do not meet the target.
 | Order | Work | Concrete exit condition | Current status |
 |---|---|---|---|
 | 1 | Specify all curriculum domains; audit what the phone actually measures | Every domain has a capability gap; unknown actions remain explicit | Written |
-| 2 | Implement one task through the complete software path | Parked goal selection → native sequence → audio/visual delivery evidence → measured response → quiet execution → bounded record | Junction-preparation pilot implemented; host checks pass and Android builds; phone/teaching gates open |
+| 2 | Integrate tasks into one automatic supervised drive | Context → native sequence → audio/visual delivery evidence → measured response → quiet execution → whole-drive record | Junction sequence and automatic arbitration for supported road-user/bend/hill cues implemented; host checks pass; phone/teaching gates open |
 | 3 | Qualify that first lesson | Full-interval replay review, Android delivery/lifecycle checks, instructor assessment of omissions, timing and workload | Open; software checks alone do not close this |
 | 4 | Resolve foundation defects | Semantic duplicate policy agrees with pacing; no stale instruction during slow inference; stable interruption/recovery; sustained phone measurements | Open; individual faults must have reproductions and acceptance evidence |
-| 5 | Add speed/space and bend/hill preparation tasks | Each has the same episode contract, response/unknown distinction and adverse-condition tests | Existing cues are inputs; task sequences not implemented |
+| 5 | Expand speed/space and bend/hill preparation tasks | Each has the same episode contract, response/unknown distinction and adverse-condition tests | Supported cues share automatic arbitration; richer teaching sequences remain open |
 | 6 | Add moving-off/stopping and observation routines | Parked instruction plus properly scoped live opportunities; no inferred control use or permission to move | Not implemented |
 | 7 | Add junction variants, roundabouts and position planning | Reliable relevant context and manoeuvre-specific review; ambiguous geometry/priority leads to silence or instructor handover | Not implemented |
 | 8 | Add lane changes, overtaking, reversing, parking, difficult conditions and recovery | Surrounding evidence and teaching contract are sufficient for each enabled instruction | Not implemented; current forward phone view has coverage gaps |

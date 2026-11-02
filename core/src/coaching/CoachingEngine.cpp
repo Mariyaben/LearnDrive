@@ -219,7 +219,7 @@ void CoachingEngine::beginSource(uint64_t source) noexcept {
 void CoachingEngine::invalidateEvidence() noexcept {
     if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
         deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,lastNow_);
-    pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);task_.sourceChanged();
+    pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);task_.sourceChanged();drive_.sourceChanged();
 }
 double CoachingEngine::interval() const noexcept {return profile_==Profile::Minimal?20:profile_==Profile::Guided?8:12;}
 Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexcept {
@@ -252,6 +252,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         }
     }
     interpreter_.observe(w,memory_,ledger_,revision_);lastWorld_=w;
+    drive_.observe(w,task_,accepted_);
     if(deferred_.valid&&validator_.validate(deferred_.candidate,w,w.now)!=Block::None){deferred_={};++stats_.expired;}
     WorldState safe=w;safe.candidateCount=0;Block rejected=Block::None;bool duplicate=false;
     for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i) {
@@ -267,7 +268,8 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
            (!worsened||w.now-event.acceptedAt<2)) {duplicate=true;continue;}
         safe.candidates[safe.candidateCount++]=candidate;
     }
-    const auto choice=policy_->choose({safe,memory_,&interpreter_.scene(),&ledger_});
+    const PolicyContext context{safe,memory_,&interpreter_.scene(),&ledger_};
+    const auto choice=drive_.enabled()?drive_.choose(context):policy_->choose(context);
     if(int(choice.mode)<0||int(choice.mode)>3){decision_.blocked=Block::Unsupported;return decision_;}
     policyReason_=choice.reason;
     if(choice.mode==Mode::SILENCE||choice.candidate>=safe.candidateCount) {
@@ -286,11 +288,11 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         deferred_=ticket;return decision_;
     }
     // A single fresh slot is chosen anew every tick, never a FIFO of old cues.
-    deferred_={};pending_=ticket;decision_.eligible=true;event.state=EventState::Active;return decision_;
+    deferred_={};pending_=ticket;decision_.eligible=true;event.state=EventState::Active;drive_.selected(c,w.now);return decision_;
 }
 bool CoachingEngine::ticketValid(const Ticket& t,uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {
     return t.valid&&sequence==t.sequence&&prompt==int(t.candidate.prompt)&&t.sourceId==source_&&w.sourceId==source_&&
-        t.revision==revision_&&now>=t.decidedAt&&validator_.validate(t.candidate,w,now)==Block::None&&task_.valid(t.candidate,w,now,ledger_);
+        t.revision==revision_&&now>=t.decidedAt&&validator_.validate(t.candidate,w,now)==Block::None&&task_.valid(t.candidate,w,now,ledger_)&&drive_.valid(t.candidate,w,now);
 }
 bool CoachingEngine::pending(uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {return ticketValid(pending_,sequence,prompt,w,now)&&!pending_.accepted;}
 bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,double now,bool submitted) noexcept {
@@ -306,6 +308,7 @@ bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,dou
     event.acceptedTti=pending_.candidate.tti;
     event.voiceSubmitted=submitted;event.visualOnly=!voice_;event.startedAt=-infinity;
     event.deliveryStage=submitted?DeliveryStage::Submitted:DeliveryStage::VisualOnly;event.retryable=false;
+    if(event.visualOnly)drive_.delivered(pending_.candidate,now);
     accepted_=pending_;accepted_.accepted=true;accepted_.acceptedAt=now;accepted_.voiceSubmitted=submitted;
     accepted_.stage=event.deliveryStage;accepted_.priorOrdinary=lastOrdinary_;accepted_.priorWarning=lastWarning_;
     if(pending_.candidate.urgent)lastWarning_=now;else lastOrdinary_=now;
@@ -322,6 +325,33 @@ bool CoachingEngine::playbackStarted(uint64_t sequence,int prompt,const WorldSta
     }
     return true;
 }
+bool CoachingEngine::continuationValid(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) const noexcept {
+    const auto& t=accepted_;
+    if(!t.valid||!t.onset||t.stage!=DeliveryStage::Started||t.sequence!=sequence||int(t.candidate.prompt)!=prompt||
+        revision!=revision_||t.revision!=revision_||t.sourceId!=source_||w.sourceId!=source_)return false;
+    // Onset still uses the immutable original ticket. Once speaking, require
+    // fresh evidence for the SAME event to continue, never a replacement actor.
+    auto c=t.candidate;auto currentWorld=w;
+    if(c.identity.space==IdentitySpace::Route)c.captureTime=w.route.captureTime;
+    else if(c.kind==EventKind::Slope)c.captureTime=w.telemetry.time;
+    else if(c.kind==EventKind::Bend)c.captureTime=w.roadCaptureTime;
+    else if(c.kind==EventKind::Shift)c.captureTime=w.engineCaptureTime;
+    else {
+        const ActorObservation* current=nullptr;
+        for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i)if(w.actors[i].identity==c.identity){current=&w.actors[i];break;}
+        if(!current){
+            // A brief detector dropout may retain the last independently
+            // observed actor only within its original 350 ms evidence budget.
+            for(const auto& sample:memory_.samples())for(const auto& a:sample.observations)
+                if(a.identity==c.identity&&a.relevant&&fresh(now,a.captureTime)&&(!current||a.captureTime>current->captureTime))current=&a;
+            if(!current||currentWorld.actorCount==currentWorld.actors.size())return false;
+            currentWorld.actors[currentWorld.actorCount++]=*current;
+        }
+        c.captureTime=current->captureTime;c.confidence=current->confidence;c.tti=current->tti;
+    }
+    c.expiresAt=c.captureTime+c.maxAge;
+    return validator_.validate(c,currentWorld,now)==Block::None&&task_.valid(c,currentWorld,now,ledger_)&&drive_.valid(c,currentWorld,now);
+}
 bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage stage,double now) noexcept {
     Ticket* ticket=nullptr;
     if(accepted_.valid&&accepted_.sequence==sequence&&int(accepted_.candidate.prompt)==prompt)ticket=&accepted_;
@@ -333,6 +363,7 @@ bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage st
     if(stage==DeliveryStage::Completed&&!ticket->onset)return false;
     ticket->stage=stage;
     auto& event=ledger_.observe(source_,ticket->candidate,now);event.deliveryStage=stage;
+    if(stage==DeliveryStage::Completed)drive_.delivered(ticket->candidate,now);
     const bool failed=stage==DeliveryStage::Interrupted||stage==DeliveryStage::Expired||stage==DeliveryStage::Failed;
     if(failed) {
         event.retryable=true;

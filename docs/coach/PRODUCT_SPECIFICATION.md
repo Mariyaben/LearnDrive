@@ -46,7 +46,8 @@ do not establish that the action happened. Unknown remains unknown.
 
 ## First complete software episode: junction preparation
 
-Explicit parked opt-in; general practice remains available. With a fresh route,
+Automatically activated in a normal supervised session when route context applies;
+the learner does not select a lesson. With a fresh route,
 qualified GPS and measured speed, offer an early observation/signal/position-planning
 lesson. After completed or intentional visual delivery, observe speed trend. Offer
 one approach-speed/give-way preparation reminder only if there is still sufficient

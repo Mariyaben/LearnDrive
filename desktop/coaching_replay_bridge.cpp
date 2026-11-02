@@ -35,6 +35,8 @@ std::string number(double v) {if(!std::isfinite(v))return "null";std::ostringstr
 COACH_EXPORT int coaching_replay_contract_version() {return 1;}
 COACH_EXPORT const char* coaching_replay_context(Replay* r) {if(!r)return nullptr;r->json=r->engine.interpretedSceneJson();return r->json.c_str();}
 COACH_EXPORT void coaching_replay_use_hybrid(Replay* r) {if(r)r->engine.setPolicy(&r->hybrid);}
+COACH_EXPORT void coaching_replay_automatic(Replay* r,int enabled) {if(r)r->engine.enableAutomaticCoaching(enabled!=0);}
+COACH_EXPORT const char* coaching_replay_drive_context(Replay* r) {if(!r)return nullptr;r->json=r->engine.drive().json(r->engine.task());return r->json.c_str();}
 COACH_EXPORT int coaching_replay_proposal(Replay* r,int mode,int prompt,int space,uint64_t id,uint64_t scope,
     uint64_t source,uint64_t revision,uint64_t generation,double created,double expires) {
     if(!r)return 0;

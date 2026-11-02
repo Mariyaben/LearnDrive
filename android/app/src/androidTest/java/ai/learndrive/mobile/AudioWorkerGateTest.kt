@@ -14,6 +14,24 @@ import java.util.concurrent.atomic.AtomicReference
  * freshness itself is covered by the native acceptance/onset contract tests. */
 class AudioWorkerGateTest {
     private fun field(name:String)=AudioWorker::class.java.getDeclaredField(name).apply {isAccessible=true}
+    @Test fun evidenceLossInterruptsPcmWithoutCallingTheCoreUnderTheAudioMonitor() {
+        val audio=AudioWorker(InstrumentationRegistry.getInstrumentation().targetContext,{_,_->true},59) {}
+        try {
+            val deadline=SystemClock.elapsedRealtime()+15000
+            while(!audio.ready&&SystemClock.elapsedRealtime()<deadline)Thread.sleep(20)
+            assertTrue(audio.ready)
+            val finished=CountDownLatch(1);val terminal=AtomicInteger();val checks=AtomicInteger()
+            val held=java.util.concurrent.atomic.AtomicBoolean(false)
+            val gate=object:AudioPlaybackGate {
+                override fun start(play:(()->Boolean)->Boolean)=play {true}
+                override fun continuePlaying():Boolean {held.set(Thread.holdsLock(audio));checks.incrementAndGet();return false}
+                override fun terminal(stage:Int){terminal.set(stage);finished.countDown()}
+            }
+            assertTrue(audio.submit(56,gate));assertTrue(finished.await(2,TimeUnit.SECONDS))
+            assertFalse(held.get());assertEquals(1,checks.get());assertEquals(4,terminal.get())
+            assertEquals(0,field("active").getInt(audio))
+        }finally {audio.close()}
+    }
     @Test fun quietExecutionCancelsRoutineButPreservesValidatedWarning() {
         val audio=AudioWorker(InstrumentationRegistry.getInstrumentation().targetContext,{_,_->true},59) {}
         try {

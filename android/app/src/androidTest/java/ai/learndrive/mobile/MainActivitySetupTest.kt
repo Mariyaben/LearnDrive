@@ -30,6 +30,17 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion=29)
 class MainActivitySetupTest {
+    @Test fun normalStartupEnablesAutomaticCoachingWithoutALessonSelectorOrAutoStarting() {
+        ActivityScenario.launch(MainActivity::class.java).use {scenario->scenario.onActivity {activity->
+            val content=activity.findViewById<View>(android.R.id.content)
+            assertNull(content.findViewWithTag<View>("practice-focus"))
+            val core=field("core").get(activity) as NativeCore
+            val state=org.json.JSONObject(core.driveContext())
+            assertTrue(state.getBoolean("automatic"));assertTrue(state.getJSONObject("junction").getBoolean("enabled"))
+            val setup=field("setup").get(activity) as DriveSetup
+            assertFalse("Automatic task selection must not automatically admit a session",setup.isMonitoring())
+        }}
+    }
     private fun field(name:String)=MainActivity::class.java.getDeclaredField(name).apply {isAccessible=true}
     private val completedField=runCatching {field("lastCompletedVision")}.getOrNull()
     private val refresh=MainActivity::class.java.getDeclaredMethod("updateSetupUi").apply {isAccessible=true}

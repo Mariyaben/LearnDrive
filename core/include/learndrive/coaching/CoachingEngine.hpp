@@ -3,6 +3,7 @@
 #include "learndrive/coaching/TemporalSupport.hpp"
 #include "learndrive/coaching/TemporalSceneInterpreter.hpp"
 #include "learndrive/coaching/TaskCoach.hpp"
+#include "learndrive/coaching/DriveCoach.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -176,6 +177,7 @@ public:
     bool accept(uint64_t sequence,int prompt,const WorldState&,double now,bool voiceSubmitted) noexcept;
     bool playbackValid(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
     bool playbackStarted(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) noexcept;
+    bool continuationValid(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
     bool deliveryEvent(uint64_t sequence,int prompt,DeliveryStage,double now) noexcept;
     void setPolicy(const DecisionPolicy* policy) noexcept {policy_=policy?policy:&temporal_;pending_={};accepted_={};}
     const Decision& lastDecision() const noexcept {return decision_;}
@@ -192,6 +194,8 @@ public:
     const char* reasonCode() const noexcept;
     void enableJunctionLesson(bool enabled) noexcept {if(task_.enabled()!=enabled){invalidateEvidence();task_.enable(enabled);}}
     const TaskCoach& task() const noexcept {return task_;}
+    void enableAutomaticCoaching(bool enabled) noexcept {if(drive_.enabled()!=enabled){enableJunctionLesson(enabled);drive_.enable(enabled);}}
+    const DriveCoach& drive() const noexcept {return drive_;}
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;
     BalancedPolicy balanced_;
@@ -204,6 +208,7 @@ private:
     ObjectTracker tracks_;
     TemporalSceneInterpreter interpreter_;
     TaskCoach task_;
+    DriveCoach drive_;
     WorldState lastWorld_{};
     Profile profile_=Profile::Balanced;
     bool configured_{},voice_=true;

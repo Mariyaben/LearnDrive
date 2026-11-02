@@ -41,11 +41,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var pretrained:PretrainedShadow
     private lateinit var reasoningStatus:TextView
     private var lastReasoningSummary=Double.NEGATIVE_INFINITY
-    @Volatile private var junctionLesson=false
-    private lateinit var lessonStatus:TextView
     private lateinit var learningRecords:LearningRecordStore
     private var lessonBaseline=org.json.JSONObject()
-    private var lessonUiPhase="WAITING_FOR_ROUTE"
+    private var lessonUiPhase="WATCHING_ROAD"
+    private var drivingTask="OBSERVING"
     private var lastLessonUi=0.0
     private val modelImport=registerForActivityResult(ActivityResultContracts.OpenDocument()){uri->
         if(uri!=null&&::pretrained.isInitialized)pretrained.importModel(uri)
@@ -250,7 +249,7 @@ class MainActivity : ComponentActivity() {
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
-        coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings)
+        coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
         preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FIT_CENTER;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
         overlay=DetectionOverlay(this)
@@ -314,32 +313,12 @@ class MainActivity : ComponentActivity() {
         optionsToggle.setOnClickListener {val opening=moreOptions.visibility==View.GONE;moreOptions.visibility=if(opening)View.VISIBLE else View.GONE;optionsToggle.text=if(opening)"Hide setup options" else "More setup options"}
         setupUtilities.addView(optionsToggle,LinearLayout.LayoutParams(0,CoachStyle.dp(this,48),1f));setupPanel.addView(moreOptions)
         learningRecords=LearningRecordStore(getSharedPreferences("learning_records",MODE_PRIVATE))
-        moreOptions.addView(text("Practice focus",13f))
-        val lessonChoice=Spinner(this).apply {
-            tag="practice-focus"
-            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("General practice","Junction preparation · pilot"))
-        }
-        lessonChoice.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
-                if(setup.isMonitoring()||knownMoving()){lessonChoice.setSelection(if(junctionLesson)1 else 0);return}
-                val enabled=position==1
-                if(enabled==junctionLesson)return
-                synchronized(core){audio.cancel();core.junctionLesson(enabled);junctionLesson=enabled}
-                pretrained.setEnabled(false);moreOptions.findViewWithTag<Switch>("pretrained-shadow")?.isChecked=false
-                coachCaption.clear();lastLessonUi=0.0;lessonUiPhase="WAITING_FOR_ROUTE"
-                if(enabled)android.app.AlertDialog.Builder(this@MainActivity).setTitle("Junction preparation practice")
-                    .setMessage("Goal: prepare observation, signal/position planning and approach before a junction. Select a route; fresh camera and measured GPS speed are needed. The pilot gives an early planning cue, checks measured speed trend, and may give one approach reminder. It stays quiet in the final approach. Mirror checks, signals, position and control use remain unobserved. Practise with your instructor; this pilot is not validated teaching.")
-                    .setPositiveButton("Understood",null).show()
-            }
-            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
-        }
-        moreOptions.addView(lessonChoice)
-        moreOptions.addView(button("Practice goal and saved records") {
-            if(!setup.isMonitoring()&&!knownMoving())android.app.AlertDialog.Builder(this).setTitle("Practice goal and records")
-                .setMessage(learningRecords.text(junctionLesson)).setPositiveButton("Done",null)
+        moreOptions.addView(text("Automatic coaching responds to the road, bends, hills and route context throughout your session. No lesson selection is needed. A destination adds junction preparation.",12f))
+        moreOptions.addView(button("Practice records") {
+            if(!setup.isMonitoring()&&!knownMoving())android.app.AlertDialog.Builder(this).setTitle("Practice records")
+                .setMessage(learningRecords.text(true)).setPositiveButton("Done",null)
                 .setNeutralButton("Clear saved records") {_,_->learningRecords.clear()}.show()
         })
-        lessonStatus=text("",12f).apply {visibility=View.GONE};setupPanel.addView(lessonStatus)
         moreOptions.addView(text("Coaching level",13f))
         val coachingProfile=Spinner(this).apply {
             tag="coaching-profile"
@@ -364,7 +343,7 @@ class MainActivity : ComponentActivity() {
             tag="pretrained-shadow";text="Experimental local AI shadow";setTextColor(CoachStyle.text);isChecked=false
             isEnabled=BuildConfig.PRETRAINED_RUNTIME_AVAILABLE
             setOnCheckedChangeListener {_,enabled->
-                if(enabled&&(setup.isMonitoring()||knownMoving()||junctionLesson))isChecked=false
+                if(enabled&&(setup.isMonitoring()||knownMoving()))isChecked=false
                 else pretrained.setEnabled(enabled)
             }
         }
@@ -761,7 +740,7 @@ class MainActivity : ComponentActivity() {
         if(!canStartRoad())return false
         val t=now();val up=core.cameraUp(t)
         if(!setup.start(t,up[0],up[1],up[2]))return false
-        levelStart.cancel();practiceReview.start(t);lessonBaseline=org.json.JSONObject(core.taskContext());sessionStartDialog?.dismiss()
+        levelStart.cancel();practiceReview.start(t);lessonBaseline=org.json.JSONObject(core.driveContext());sessionStartDialog?.dismiss()
         audio.cancel();activeMap.setFollowing(true)
         if(useGoogle)googleNavigation?.startGuidance()
         startCamera();publishOptions();updateSetupUi();return true
@@ -785,7 +764,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun finishPractice(interrupted:Boolean):PracticeSessionReview.Review? {
         val review=practiceReview.finish(now())
-        if(review!=null&&::learningRecords.isInitialized)learningRecords.record(junctionLesson,review.durationSeconds,interrupted,lessonBaseline,org.json.JSONObject(core.taskContext()))
+        if(review!=null&&::learningRecords.isInitialized)learningRecords.record(true,review.durationSeconds,interrupted,lessonBaseline,org.json.JSONObject(core.driveContext()))
         return review
     }
     private fun endRoadSession() {
@@ -1198,8 +1177,8 @@ class MainActivity : ComponentActivity() {
         }
         if(key!=traceKey||t-traceAt>=1.0)emitDecision()
         val delivery=if(!road||setup.isMonitoring())core.deliverCoaching(decision,audio) else null
-        if(junctionLesson&&!core.taskSpeechAllowed())audio.cancelIfPrompt {it in 56..59}
-        if(junctionLesson&&core.taskExecutionQuiet())audio.cancelRoutine()
+        if(!core.taskSpeechAllowed())audio.cancelIfPrompt {it in 56..59}
+        if(core.taskExecutionQuiet())audio.cancelRoutine()
         if(pretrained.canOffer&&t-lastReasoningSummary>=1.5){lastReasoningSummary=t;pretrained.offer(core.temporalContext(),cameraThermal)}
         if(delivery!=null) {
             // Audio can become available between sampled ticks. Preserve the
@@ -1359,30 +1338,33 @@ class MainActivity : ComponentActivity() {
             if(mode=="Camera"&&issue!=null)coachCaption.clear()
             val caption=coachCaption.presentation(visionNow,core.sourceId,captionActive,
                 if(useGoogle||loadedRoute)core.navigationContext(visionNow) else null)
-            if(junctionLesson&&visionNow-lastLessonUi>=.5){
-                lessonUiPhase=org.json.JSONObject(core.taskContext()).optString("phase","WAITING_FOR_ROUTE");lastLessonUi=visionNow
+            if(visionNow-lastLessonUi>=.5){
+                val state=org.json.JSONObject(core.driveContext());lessonUiPhase=state.optString("phase","WATCHING_ROAD")
+                drivingTask=state.optString("task","OBSERVING");lastLessonUi=visionNow
             }
             dashboard.setCoachPresentation(caption?.text?:when {
                     roadSource()&&!setup.isMonitoring()->"Your next session starts here."
-                    roadSource()&&junctionLesson->when(lessonUiPhase){
-                        "WAITING_FOR_ROUTE"->"Choose a destination to practise junction preparation."
+                    roadSource()->when(lessonUiPhase){
+                        "WATCHING_ROAD"->"Coaching adapts as the drive develops."
                         "EVIDENCE_UNAVAILABLE"->"Waiting for reliable road and location data."
                         "EXECUTION_QUIET"->"Focus on driving. Your instructor leads."
-                        "AWAITING_DELIVERY"->"Junction preparation guidance"
+                        "DELIVERING"->"Driving guidance"
                         "OBSERVING_RESPONSE"->"Continue preparing with your instructor."
-                        else->"Preparing for the next junction."
+                        else->when(drivingTask){
+                            "BEND"->"Preparing for the bend."
+                            "HILL"->"Adapting to the hill."
+                            "ROAD_USER_SPACE"->"Giving road users space."
+                            "JUNCTION"->"Preparing for the junction."
+                            else->roadHealth.idleCaption
+                        }
                     }
                     mode=="Desk"->"Desk test · simulated driving"
                     mode=="MP4"->"Recorded video test"
                     options.filmedVideo->"Screen test · recorded scene only"
                     else->roadHealth.idleCaption
                 },caption?.context?:if(roadSource()&&setup.isMonitoring()){
-                    if(junctionLesson)"JUNCTION PREPARATION · PILOT" else "Supervised practice · advisory cues"
+                    "AUTOMATIC COACH · "+drivingTask.replace('_',' ')
                 }else "YOUR NEXT STEP")
-            if(::lessonStatus.isInitialized){
-                lessonStatus.visibility=if(junctionLesson)View.VISIBLE else View.GONE
-                if(junctionLesson)lessonStatus.setUiText("Junction practice · "+lessonUiPhase.replace('_',' ').lowercase()+"\nMirror, signal, position and control actions unobserved · outcome unassessed")
-            }
             updateSetupUi()
             if(showLab||mode!="Camera")updateEvidenceUi()
             main.postDelayed(this,50)

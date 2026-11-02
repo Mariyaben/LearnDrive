@@ -67,6 +67,10 @@ class NativeCore : AutoCloseable {
               if(handle!=0L&&d.sourceId==sourceId&&d.settingsRevision==coachingSettings.revision)
                   coachingDeliveryEvent(handle,d.sequence,d.prompt,now(),stage)
           }
+          override fun continuePlaying():Boolean = synchronized(this@NativeCore) {
+              handle!=0L&&d.sourceId==sourceId&&d.settingsRevision==coachingSettings.revision&&
+                  coachingContinuationValid(handle,d.sequence,d.prompt,now(),d.settingsRevision)
+          }
         }
         val submitted=coachingSettings.voiceEnabled&&audio.submitCoaching(d.prompt,validatedWarning,gate)
         val acceptedAt=now()
@@ -80,6 +84,8 @@ class NativeCore : AutoCloseable {
     @Synchronized fun coachingDiagnosticsJson(time:Double)=coachingDiagnosticsJson(handle,time)
     @Synchronized fun temporalContext():String=temporalContext(handle)
     @Synchronized fun junctionLesson(enabled:Boolean)=junctionLesson(handle,enabled)
+    @Synchronized fun automaticCoaching(enabled:Boolean)=automaticCoaching(handle,enabled)
+    @Synchronized fun driveContext():String=driveContext(handle)
     @Synchronized fun taskContext():String=taskContext(handle)
     @Synchronized fun taskSpeechAllowed():Boolean=taskSpeechAllowed(handle)
     @Synchronized fun taskExecutionQuiet():Boolean=taskExecutionQuiet(handle)
@@ -169,6 +175,9 @@ class NativeCore : AutoCloseable {
     private external fun coachingDiagnosticsJson(h:Long,time:Double):String
     private external fun temporalContext(h:Long):String
     private external fun junctionLesson(h:Long,enabled:Boolean)
+    private external fun automaticCoaching(h:Long,enabled:Boolean)
+    private external fun coachingContinuationValid(h:Long,sequence:Long,prompt:Int,time:Double,revision:Long):Boolean
+    private external fun driveContext(h:Long):String
     private external fun taskContext(h:Long):String
     private external fun taskSpeechAllowed(h:Long):Boolean
     private external fun taskExecutionQuiet(h:Long):Boolean

@@ -17,6 +17,8 @@ fun interface AudioPlaybackGate {
     fun start(play:(()->Boolean)->Boolean):Boolean
     /** Called outside the audio monitor: native bookkeeping may take core lock. */
     fun terminal(stage:Int) {}
+    /** Called outside the audio monitor, at most ten times a second. */
+    fun continuePlaying():Boolean=true
 }
 
 class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,
@@ -103,8 +105,15 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
                 }}
                 if(!(onset?.start(play)?:play {true})){outcome=if(generation.get()!=token||closed)4 else 5;return@execute}
                 var offset=0
+                var contextCheckAt=0L
+                fun contextCurrent():Boolean {
+                    val t=android.os.SystemClock.elapsedRealtime()
+                    if(t-contextCheckAt<100)return true
+                    contextCheckAt=t;return onset?.continuePlaying()?:true
+                }
                 val chunk=(clip.sampleRate/100).coerceAtLeast(1)*clip.channels*2 // Whole PCM frames, about 10 ms.
                 while(offset<clip.bytes.size&&generation.get()==token&&!closed) {
+                    if(!contextCurrent())return@execute
                     // Cancellation flushes under the same monitor. An old
                     // worker must never append a chunk after that flush.
                     val count=writeCurrent(token) {
@@ -115,7 +124,7 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
                     if(count==0)Thread.sleep(2)
                 }
                 val frames=offset/(2*clip.channels)
-                while(player.playbackHeadPosition<frames&&generation.get()==token&&!closed)Thread.sleep(5)
+                while(player.playbackHeadPosition<frames&&generation.get()==token&&!closed){if(!contextCurrent())return@execute;Thread.sleep(5)}
                 outcome=if(generation.get()==token&&!closed&&offset==clip.bytes.size)8 else 4
             } catch(e:Exception) {outcome=6;status("Audio output: ${e.message}")}
             finally {
