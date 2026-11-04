@@ -4,6 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 using namespace ld;
 using namespace ld::coaching;
@@ -261,8 +262,26 @@ int main(){try {
         check(ld_navigation_fix(e.get(),1,24,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,25,10,76,3,30,.5,1,0,1),"approach GPS fixture");
         turn.sequence=2;turn.received_at=25;turn.estimated_remaining_m=142;turn.estimated_remaining_seconds=17;
         check(ld_navigation_turn_update(e.get(),&turn),"approach turn");frames.publish(e.get(),25,1,false);q=request(25);
-        check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==59,"task sequence missing through C API");
+        check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==60,"task sequence missing through C API");
         ld_navigation_turn_unavailable(e.get());check(!ld_guidance_pending(e.get(),d.sequence,d.prompt,25.01),"lost provider evidence retained task ticket");
+    });
+    test("speech continuation never pairs an old attention box with a newer frame's clock",[]{
+        // Regression from real-video replay: a frame published between rule ticks
+        // made the accepted actor's confidence 0 and truncated speech mid-phrase.
+        Native e(ld_create(),ld_destroy);Frames frames;
+        check(ld_guidance_begin(e.get(),1,LD_SOURCE_RECORDING,0)&&ld_coaching_configure(e.get(),1,1,1),"configure");
+        ld_coaching_automatic(e.get(),1);ld_coaching_task_scheduling(e.get(),0); // Attention-actor plumbing (0.7.1 path).
+        ld_guidance_result d{};double t=.1;bool spoken=false;
+        for(;t<3&&!spoken;t+=.125){frames.publish(e.get(),t);auto q=request(t);q.audio_ready=1;
+            check(ld_guidance_decide(e.get(),&q,&d),"decide");
+            if(d.eligible&&d.actor_id){check(ld_coaching_accept(e.get(),d.sequence,d.prompt,t,1),"accept");
+                ld_coaching_playback_started(e.get(),d.sequence,d.prompt,t,1);spoken=true;}}
+        check(spoken,"no attention cue in fixture");t-=.125;
+        check(ld_coaching_continuation_valid(e.get(),d.sequence,d.prompt,t+.01,1),"continuation fixture");
+        frames.box[0]=230;frames.box[4]=.95f; // Newer frame, moved box: no IoU match with the coach's box.
+        double hazard[3];check(ld_spatial_semantics_source(e.get(),1,t+.125,frames.box.data(),frames.box.size(),1,1,hazard),"newer frame");
+        check(ld_coaching_continuation_valid(e.get(),d.sequence,d.prompt,t+.13,1),"stale box paired with newer frame truncated speech");
+        check(std::string(ld_coaching_continuation_reason(e.get(),d.sequence,d.prompt,t+.13,1))=="OK","continuation reason");
     });
     std::cout<<passed<<" coaching groups passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

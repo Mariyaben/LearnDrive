@@ -62,9 +62,9 @@ int main(){try {
         Fixture f(true);auto w=scene(1);check(f.decide(w).eligible&&f.p->accept(1,56,w,1,true),"submit");
         check(f.p->playbackStarted(1,56,w,1,1)&&f.p->deliveryEvent(1,56,DeliveryStage::Completed,6.8),"complete");
         check(!f.decide(scene(7,24)).eligible,"extra planning");
-        w=scene(14,17);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionApproach,"approach missing");
-        check(f.p->accept(f.sequence,59,w,14,true)&&f.p->playbackStarted(f.sequence,59,w,14,1),"approach onset");
-        check(f.p->deliveryEvent(f.sequence,59,DeliveryStage::Completed,18),"approach completion");
+        w=scene(14,17);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionBrakeGearDown,"approach missing");
+        check(f.p->accept(f.sequence,60,w,14,true)&&f.p->playbackStarted(f.sequence,60,w,14,1),"approach onset");
+        check(f.p->deliveryEvent(f.sequence,60,DeliveryStage::Completed,18),"approach completion");
         check(!f.decide(scene(28,10)).eligible,"repeated approach");
         check(f.p->task().progress().planningCompletions==1&&f.p->task().progress().approachCompletions==1,"step counters");
     });
@@ -82,7 +82,7 @@ int main(){try {
         Fixture f;f.visual(scene(1));
         for(int i=0;i<=130;++i){const double time=1.1+i*.1;f.decide(scene(time,i<120?25:17,30-i*.1));}
         check(f.p->task().progress().speedReductionObserved,"post-delivery slowing not observed");
-        auto d=f.decide(scene(15,16,17));check(!d.eligible,"redundant approach cue after slowing");
+        auto d=f.decide(scene(15,16,17));check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionGearDown,"approach not adapted after slowing");
     });
     test("pre-delivery slowing cannot be called a post-delivery response",[]{
         Fixture f;for(int i=0;i<=20;++i)f.decide(scene(1+i*.1,30,35-i*.15));

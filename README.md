@@ -1,6 +1,12 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.1 (experimental).** Automatic coaching coordinates
+**Current Android candidate: 0.7.3 (experimental, host-tested only).** A risk-reasoning coach
+decides what to do about the most dangerous road user (crossing, oncoming, pedestrians) and
+gives instructor-style control instructions; see the
+[first real-drive review](docs/reviews/2026-11-04-real-drive-risk-coach.md). It schedules speech
+around the known upcoming junction task (see
+[task-aware scheduling](docs/reviews/2026-11-04-task-aware-scheduling.md) and the
+[architecture review](docs/coach/ARCHITECTURE_REVIEW.md)). Automatic coaching coordinates
 supported road-user, bend, hill and junction guidance throughout one supervised
 session. No lesson selection is required. A destination adds junction preparation;
 supported camera and terrain guidance can operate without a route. Speech tracks

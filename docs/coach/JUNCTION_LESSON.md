@@ -1,6 +1,7 @@
 # Junction preparation: first task contract
 
-Experimental software task, not instructor-qualified. Version 0.7.1.
+Experimental software task, not instructor-qualified. Version 0.7.2 (task-aware
+scheduling; see [../reviews/2026-11-04-task-aware-scheduling.md](../reviews/2026-11-04-task-aware-scheduling.md)).
 
 Use the normal supervised-session flow. A chosen destination adds junction context;
 the task activates automatically when that context is relevant. The map, camera
@@ -30,8 +31,14 @@ navigation. These timing windows are experimental. The 13-second approach onset
 threshold leaves room for the approximately 3.8-second recording before the quiet
 boundary. Changed evidence can still cancel an in-progress recording.
 
-Minimal/Balanced/Guided retain their existing 20/12/8-second routine intervals.
-The lesson gets priority over routine announcements but does not bypass pacing.
+Minimal/Balanced/Guided retain their existing 20/12/8-second routine intervals for
+unrelated routine cues. Since 0.7.2 the approach step follows its own planning step
+after min(interval, 8 s), so the profile no longer silently removes it. A routine
+non-urgent, non-closing cue is withheld (`RESERVED_FOR_UPCOMING_TASK`) when accepting
+it would leave the next pending step under 3 s of its window. Started lesson speech is
+not cut off by its onset window; it continues while the episode evidence is fresh and
+lead is at least 8 s. Once lead falls below 8 s, routine quiet is held for up to 10 s
+through route/GPS/camera loss, until fresh navigation shows a different event.
 If pacing or late arrival misses a step, skip it rather than compress the sequence.
 Junction route announcements are replaced within this automatic task. Non-junction
 map context and independent urgent evidence retain their existing paths.

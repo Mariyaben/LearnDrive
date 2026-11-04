@@ -2,7 +2,8 @@
 
 ## Android
 
-The current Android source is **0.7.1**, adding the
+The current Android source is **0.7.3** (risk-reasoning coach, [real-drive review](reviews/2026-11-04-real-drive-risk-coach.md); 0.7.2 task-aware scheduling,
+[review](reviews/2026-11-04-task-aware-scheduling.md)). 0.7.1 added the
 [junction task lesson](coach/JUNCTION_LESSON.md) above the native temporal policy,
 with [structured replay](coaching/STRUCTURED_REPLAY.md). Current build/test evidence and
 physical qualification limits are in the

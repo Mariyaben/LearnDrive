@@ -68,6 +68,15 @@ int main() {
     test("nonfinite samples rejected",[]{auto f=calibrated();check(!f.gps(5.02,NAN,.5),"NaN GPS accepted");f.imu({NAN,{0,gravity,0},{},{},true});check(f.snapshot(5.01).pitchValid,"NaN corrupted IMU");});
     test("shock detected",[]{auto f=calibrated();f.imu({5.02,{15,gravity,0},{},{15,0,0},true});check(f.snapshot(5.02).shock,"shock missed");});
     test("pitch tracks gravity after settling",[]{auto f=calibrated();double r=10*pi/180;for(int i=502;i<1000;++i)f.imu({i*.01,{0,gravity*std::cos(r),-gravity*std::sin(r)},{},{},true});near(f.snapshot(9.99).pitchDegrees,10,.1);});
+    test("a phone knocked or re-seated in its mount invalidates the level reference",[]{
+        // 2026-11-04 drive: after a remount, false "Very steep uphill" cues for minutes.
+        auto f=calibrated();const double r=10*pi/180;
+        for(int i=502;i<800;++i){const double t=i*.01;const bool moving=i<520; // 0.18 s of fast hand rotation (~60 deg/s), then settled
+            const double a=moving?r*(i-502)/18.:r;
+            f.imu({t,{0,gravity*std::cos(a),-gravity*std::sin(a)},moving?Vec3{1.05,0,0}:Vec3{},{},true});}
+        check(!f.snapshot(7.99).calibrated,"remounted phone kept its old level reference");
+        // A slow grade change (no fast rotation) keeps the reference: covered by "pitch tracks gravity after settling".
+    });
     test("normalized plane removes landscape rotation and mount pitch",[]{
         for(double roll:{-90.,0.,90.,180.})for(double slope:{-12.,12.}) {
             SensorFusion f;const double r=roll*pi/180,p=slope*pi/180;
@@ -647,7 +656,7 @@ int main() {
         float boxes[84]{};boxes[0]=160;boxes[1]=210;boxes[2]=120;boxes[3]=180;boxes[6]=.8f;float road[2]={2,-2};double hazard[3];int prompt=0;
         for(int i=0;i<=10;++i){double t=10.1+i*.125;check(ld_vision(e,t,boxes,84,84,1,1,0,road,road,1,1,hazard),"vision failed");ld_telemetry measured{};measured.time=t+.02;
             auto selected=ld_video_telemetry(measured,3,0);check(selected.speed_valid&&selected.speed==3,"video speed lost");prompt=ld_camera_decide_telemetry(e,selected,1,1);}
-        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==59,"prompt count mismatch");ld_destroy(e);
+        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==86,"prompt count mismatch");ld_destroy(e);
     });
     test("slope bands agree through the native ABI at each boundary",[]{
         const std::array<std::pair<double,int>,10> boundaries{{{0,0},{1.999,0},{2,1},{4.999,1},{5,2},{7.999,2},{8,3},{11.999,3},{12,4},{30,4}}};

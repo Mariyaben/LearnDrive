@@ -67,6 +67,23 @@ class Native:
         if not result:
             raise RuntimeError(self.error(handle).decode("utf-8", "replace"))
 
+    def _bind(self, signatures):
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self.lib, "replay_" + name)
+            function.argtypes, function.restype = arguments, result
+            setattr(self, name, function)
+
+    def bind_automatic(self):
+        self._bind({"coaching_automatic": ([P, C.c_int, C.c_int], None),
+                    "coaching_continue": ([P, C.c_int, C.c_double], C.c_int),
+                    "coaching_drive": ([P], C.c_char_p),
+                    "coaching_continue_reason": ([P, C.c_int, C.c_double], C.c_char_p)})
+
+    def bind_navigation(self):
+        self._bind({"live_navigation": ([P], C.c_int),
+                    "navigation": ([P, C.c_double, C.c_uint64, C.c_int, C.c_int, C.c_double, C.c_double, C.c_double], C.c_int),
+                    "navigation_unavailable": ([P], None)})
+
     def configure_coaching(self, handle, profile):
         if profile == "legacy":
             return
@@ -228,10 +245,23 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "build/video-review/replay")
     parser.add_argument("--library", type=Path, default=ROOT / "build/native-spatial/liblearndrive_replay.dll")
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--speeds-as-live", action="store_true",
+                        help="Treat --speeds samples as live measured speed (camera source). Use only for speed recorded by the same drive, e.g. read from the app's own speedometer; labelled in the report")
+    parser.add_argument("--policy-independent-cache", action="store_true",
+                        help="Reuse detector inference across coaching-policy rebuilds (recorded in the report)")
+    parser.add_argument("--automatic", action="store_true", help="Use the automatic whole-drive coordinator (as the Android app does)")
+    parser.add_argument("--scheduling", choices=["on", "off"], default="on",
+                        help="Task-aware scheduling of automatic coaching; off reproduces 0.7.1")
+    parser.add_argument("--navigation", type=Path, help="SYNTHETIC navigation overlay JSON: "
+                        '{"turns":[{"at":s,"maneuver":"left|right","appear_lead_s":45}],"unavailable":[[a,b]]}')
     parser.add_argument("--research-emergencies", action="store_true",
                         help="Enable unvalidated emergency phrases for explicit lab review")
     args = parser.parse_args()
     if args.save_temporal_context and args.coaching_profile=="legacy":raise ValueError("Temporal summaries require an explicit coaching profile")
+    if (args.automatic or args.navigation) and args.coaching_profile=="legacy":raise ValueError("Automatic coaching/navigation overlay requires an explicit coaching profile")
+    overlay = json.loads(args.navigation.read_text(encoding="utf-8")) if args.navigation else None
+    turns = sorted(overlay.get("turns", []), key=lambda t: t["at"]) if overlay else []
+    nav_gaps = overlay.get("unavailable", []) if overlay else []
     spatial = args.mode == "spatial"
     if args.test_speed_kmh is not None:
         if args.speeds or not math.isfinite(args.test_speed_kmh) or not 0 <= args.test_speed_kmh <= 160:
@@ -275,7 +305,7 @@ def main():
                "python_ort_binaries": {p.name: digest(p) for p in sorted((Path(ort.__file__).parent / "capi").glob("*"))
                    if p.suffix.lower() in (".pyd", ".dll", ".so", ".dylib")}}
     provenance = inference_provenance(ROOT, args.video, ASSETS, args.library.resolve(), geometry.tolist(),
-        args.fps, args.semantic_hz, spatial, runtime, decoder, Path(__file__))
+        args.fps, args.semantic_hz, spatial, runtime, decoder, Path(__file__), args.policy_independent_cache)
     cache_key = inference_key(provenance)
     cache = args.output.parent / (("model-cache-v2-" if spatial else "semantic-cache-v2-") + cache_key + ".npz")
     tensor = np.empty((1, 3, 320, 320), np.float32)
@@ -322,7 +352,15 @@ def main():
     handle = native.create(b"", width, height, ptr(geometry) if spatial else None)
     if not handle:
         raise RuntimeError("Native policy initialization failed")
+    if overlay is not None or args.speeds_as_live:
+        if args.speeds_as_live and not args.speeds:raise ValueError("--speeds-as-live needs --speeds from the same drive")
+        native.bind_navigation()
+        if not native.live_navigation(handle):raise RuntimeError("Live replay source rejected")
     native.configure_coaching(handle,args.coaching_profile)
+    if args.coaching_profile != "legacy":
+        native.bind_automatic()
+        native.coaching_automatic(handle, int(args.automatic), int(args.scheduling == "on"))
+    interruptions, nav_sequence, last_nav = [], 0, -math.inf
     native.emergencies(handle, int(args.research_emergencies))
     box_buffer, road, decision = np.empty(64 * 6, np.float32), np.empty(13, np.float64), np.empty(8, np.float64)
     trace = np.empty(22, np.float64)
@@ -338,9 +376,37 @@ def main():
     def speed_at(t):
         return speed_timeline.at(t).speed_kmh
     def evaluate_until(deadline):
-        nonlocal tick, playing, playing_until
+        nonlocal tick, playing, playing_until, last_nav, nav_sequence
         while tick / 100 < deadline - 1e-8:
             now = tick / 100
+            if overlay is not None and now - last_nav >= .5 - 1e-9:
+                last_nav = now
+                if any(a <= now < b for a, b in nav_gaps):
+                    native.navigation_unavailable(handle)
+                else:
+                    speed_now = speed_timeline.at(now - args.pre_roll_seconds).speed_kmh
+                    upcoming = [(i, t) for i, t in enumerate(turns) if t["at"] >= now - args.pre_roll_seconds]
+                    nav_sequence += 1
+                    if upcoming and upcoming[0][1]["at"] - (now - args.pre_roll_seconds) <= upcoming[0][1].get("appear_lead_s", 45):
+                        i, t = upcoming[0]; lead = t["at"] - (now - args.pre_roll_seconds)
+                        # Remaining path length: integrate the speed timeline up to the turn
+                        # (exact for simulator ground truth; lead x speed for a constant test speed).
+                        meters, x = 0.0, now - args.pre_roll_seconds
+                        while x < t["at"]:
+                            sample = speed_timeline.at(x).speed_kmh
+                            meters += (sample if sample is not None else (speed_now or 0)) / 3.6 * min(.1, t["at"] - x); x += .1
+                        native.navigation(handle, now, nav_sequence, i, {"left": 1, "right": 2}[t["maneuver"]], meters, lead,
+                                          speed_now if speed_now is not None else math.nan)
+                    else:
+                        step = upcoming[0][0] if upcoming else len(turns)
+                        native.navigation(handle, now, nav_sequence, step, 8, 900.0, 120.0,
+                                          speed_now if speed_now is not None else math.nan)
+            if playing and args.coaching_profile != 'legacy' and now < playing_until and (cause := native.coaching_continue_reason(handle, playing, now).decode()) != "OK":
+                native.coaching_continue(handle, playing, now)  # records the interrupted delivery stage
+                interruptions.append({"time": round(now - args.pre_roll_seconds, 4), "prompt": playing,
+                                      "text": native.prompt(playing).decode(), "reason": cause,
+                                      "spoken_fraction": round(1 - (playing_until - now) / durations[playing], 3)})
+                playing, playing_until = 0, now
             if now >= playing_until:
                 if playing and args.coaching_profile!='legacy':native.coaching_completed(handle,playing,now)
                 playing = 0
@@ -455,6 +521,8 @@ def main():
         evaluate_until(len(outputs) / args.fps + latency + args.spatial_extra_latency_ms / 1000 + args.pre_roll_seconds)
     finally:
         decoded.close()
+        if args.coaching_profile != "legacy":
+            drive_state = native.coaching_drive(handle).decode()
         native.destroy(handle)
     with (args.output / "decisions.jsonl").open("w", encoding="utf-8") as trace_file:
         for entry in traces:
@@ -493,7 +561,11 @@ def main():
         "frames": len(outputs), "timing_scope": "Supercombo per analyzed frame" if spatial else "semantic detector on semantic frames only",
         "host_inference_ms": {"p50": float(np.percentile(ms, 50)),
             "p95": float(np.percentile(ms, 95)), "max": float(max(ms))},
-        "events": events, "startup_events": startup_events, "candidate_tick_counts": candidate_counts,
+        "events": events, "startup_events": startup_events, "interruptions": interruptions,
+        "automatic": args.automatic, "task_scheduling": args.scheduling, "speeds_as_live": args.speeds_as_live,
+        "policy_independent_cache": args.policy_independent_cache,
+        "navigation_overlay": {"synthetic": True, "turns": turns, "unavailable": nav_gaps} if overlay else None,
+        "final_drive": json.loads(drive_state) if args.coaching_profile != "legacy" else None, "candidate_tick_counts": candidate_counts,
         "limitations": ["No ground-truth depth, collision labels, calibrated optics or recorded IMU",
             "Headless shared-core replay, not a physical Android camera/audio test",
             "Idealized fixed-rate completion timeline; does not reproduce Android serial workload, frame drops, XNNPACK, GPS or navigation",
@@ -514,6 +586,8 @@ def main():
         writer.writeheader(); writer.writerows(events)
     for event in events:
         print(f"{event['time']:6.2f}s [{event['source']}] {event['text']}")
+    for item in interruptions:
+        print(f"{item['time']:6.2f}s INTERRUPTED {item['text']} ({item['reason']}, {item['spoken_fraction']:.0%} spoken)")
     print(f"{len(outputs)} frames; {len(events)} spoken events; {args.output / 'report.json'}")
     if args.render:
         render(args.video, args.output, observations, events, args.fps, latency)

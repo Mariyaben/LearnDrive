@@ -1042,7 +1042,8 @@ class MainActivity : ComponentActivity() {
                             val thermal=if(android.os.Build.VERSION.SDK_INT>=29)getSystemService(PowerManager::class.java).currentThermalStatus else 0
                             cameraThermal=thermal
                             if(CameraVisionHealth.shouldAnalyze(now(),lastRender,thermal)) {
-                                analysisBusy=true;lastRender=now();val result=model().frame(image,token.toLong(),sourceKind) { semantic ->
+                                analysisBusy=true;lastRender=now();model().thermalStatus=thermal
+                                val result=model().frame(image,token.toLong(),sourceKind) { semantic ->
                                     if(token==generation.get()){
                                         lastSemanticVision=PublishedSemantic(token.toLong(),semantic)
                                         lastVision=semantic;rules.post {evaluate()}
@@ -1177,7 +1178,7 @@ class MainActivity : ComponentActivity() {
         }
         if(key!=traceKey||t-traceAt>=1.0)emitDecision()
         val delivery=if(!road||setup.isMonitoring())core.deliverCoaching(decision,audio) else null
-        if(!core.taskSpeechAllowed())audio.cancelIfPrompt {it in 56..59}
+        if(!core.taskSpeechAllowed())audio.cancelIfPrompt {it in 56..62}
         if(core.taskExecutionQuiet())audio.cancelRoutine()
         if(pretrained.canOffer&&t-lastReasoningSummary>=1.5){lastReasoningSummary=t;pretrained.offer(core.temporalContext(),cameraThermal)}
         if(delivery!=null) {

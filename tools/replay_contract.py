@@ -34,20 +34,30 @@ def inference_key(provenance):
     return hashlib.sha256(canonical_json(provenance).encode("utf-8")).hexdigest()
 
 
+POLICY_SOURCES = ("core/src/coaching/", "core/include/learndrive/coaching/", "core/src/c_api.cpp",
+                  "core/include/learndrive/c_api.h", "core/include/learndrive/types.hpp")
+
+
 def inference_provenance(root, video, assets, library, geometry, fps, semantic_hz,
-                         spatial, runtime, decoder, reviewer):
+                         spatial, runtime, decoder, reviewer, policy_independent=False):
+    """Strict by default: any core source or binary change invalidates the cache.
+
+    policy_independent=True is an explicit opt-in for iterating on coaching policy
+    over the same video: coaching-policy sources, the replay tool and the native
+    binary hash leave the key (perception sources stay). Reports record the mode."""
     root, assets, library = Path(root), Path(assets), Path(library)
     sources = sorted(p for base in (root / "core/src", root / "core/include")
-                     for p in base.rglob("*") if p.is_file())
-    sources += [root / "desktop/replay_bridge.cpp", Path(reviewer),
-                Path(__file__)]
+                     for p in base.rglob("*") if p.is_file() and not (policy_independent and
+                     str(p.relative_to(root)).replace("\\", "/").startswith(POLICY_SOURCES)))
+    sources += [root / "desktop/replay_bridge.cpp", Path(__file__)] + ([] if policy_independent else [Path(reviewer)])
     source_hashes = {str(p.relative_to(root)).replace("\\", "/"): file_sha256(p) for p in sources}
     native_runtime = {p.name: file_sha256(p) for p in sorted(library.parent.glob("onnxruntime*.dll"))}
     return {"schema_version": CACHE_SCHEMA,
             "video_sha256": file_sha256(video),
             "models": {"detector.onnx": file_sha256(assets / "detector.onnx"),
                        "supercombo.onnx": file_sha256(assets / "supercombo.onnx") if spatial else None},
-            "native_library_sha256": file_sha256(library),
+            "native_library_sha256": None if policy_independent else file_sha256(library),
+            "policy_independent_cache": bool(policy_independent),
             "native_runtime_sha256": native_runtime, "source_sha256": source_hashes,
             "runtime": runtime, "decoder": decoder,
             "input": {"spatial": bool(spatial), "geometry": list(geometry) if spatial else None,

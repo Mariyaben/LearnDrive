@@ -16,8 +16,12 @@ public final class CameraVisionHealthTest {
             check(Double.isFinite(CameraVisionHealth.intervalSeconds(3)), "severe heat silently disables inference");
             for (int state=1;state<=3;state++)
                 check(CameraVisionHealth.intervalSeconds(state)>CameraVisionHealth.intervalSeconds(state-1), "heat does not reduce workload");
-            check(!CameraVisionHealth.shouldAnalyze(10.3,10,3), "hot phone runs at its normal cadence");
-            check(CameraVisionHealth.shouldAnalyze(11.5,10,3), "severe heat never allows another frame");
+            check(!CameraVisionHealth.shouldAnalyze(10.15,10,3), "hot phone runs at its normal cadence");
+            check(CameraVisionHealth.shouldAnalyze(10.21,10,3), "severe heat starves the 350 ms coaching gate");
+            // Detector cadence plus inference must stay inside the native capture-age gate.
+            check(CameraVisionHealth.intervalSeconds(3)+.1<RoadCoachingStatus.MAX_CAPTURE_AGE_SECONDS, "severe heat makes evidence stale");
+            check(CameraVisionHealth.spatialAllowed(0)&&CameraVisionHealth.spatialAllowed(1), "cool phone loses spatial inference");
+            check(!CameraVisionHealth.spatialAllowed(2)&&!CameraVisionHealth.spatialAllowed(3), "heat keeps the optional spatial model");
         });
         test("critical heat pauses and cooling restores analysis", () -> {
             for (int state=4;state<=6;state++) {

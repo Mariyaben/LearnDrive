@@ -112,6 +112,7 @@ int ld_coaching_accept(ld_engine*,uint64_t sequence,int prompt,double now,int vo
 int ld_coaching_playback_valid(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
 void ld_coaching_playback_started(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
 int ld_coaching_continuation_valid(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
+const char* ld_coaching_continuation_reason(ld_engine*,uint64_t sequence,int prompt,double now,uint64_t revision);
 // 20 values: enabled,profile,voice,revision,mode,block,event,capture,age,
 // historyCount,activeEvents,resolvedEvents,logicalAccepted,voiceSubmitted,
 // playbackOnsets,onsetRejected,duplicates,deferred,speedTrend,ordinaryInterval.
@@ -123,6 +124,8 @@ const char* ld_coaching_diagnostics_json(ld_engine*,double now);
 const char* ld_coaching_context_json(ld_engine*);
 void ld_coaching_junction_lesson(ld_engine*,int enabled);
 void ld_coaching_automatic(ld_engine*,int enabled);
+// Task-aware scheduling of automatic coaching (default on); off reproduces 0.7.1.
+void ld_coaching_task_scheduling(ld_engine*,int enabled);
 const char* ld_coaching_drive_json(ld_engine*);
 const char* ld_coaching_task_json(ld_engine*);
 int ld_coaching_task_speech_allowed(ld_engine*);

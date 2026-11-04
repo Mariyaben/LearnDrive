@@ -8,7 +8,9 @@ namespace ld::coaching {
 namespace {
 DriveTask domain(const Candidate& c) noexcept {
     switch(instructionMeaning(int(c.prompt))){
-    case InstructionMeaning::TurnPreparation:case InstructionMeaning::ApproachPreparation:return DriveTask::Junction;
+    case InstructionMeaning::TurnPreparation:case InstructionMeaning::ApproachPreparation:case InstructionMeaning::JunctionEntry:return DriveTask::Junction;
+    case InstructionMeaning::VehicleControl:return DriveTask::Vehicle;
+    case InstructionMeaning::RoadUserControl:case InstructionMeaning::RoadUserYield:return DriveTask::Space;
     case InstructionMeaning::BendPreparation:return DriveTask::Bend;
     case InstructionMeaning::GradePreparation:return DriveTask::Grade;
     case InstructionMeaning::VehicleShift:return DriveTask::Vehicle;
@@ -33,13 +35,23 @@ int rank(const Candidate& c,const WorldState& w) noexcept {
     // Validated urgent evidence always wins. A developing closing conflict takes
     // precedence over pedagogy, without granting it warning/cooldown authority.
     if(c.urgent)return 1000+priority(c.prompt);
-    if(c.kind==EventKind::Approach||c.kind==EventKind::Attention)
-        for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){const auto& a=w.actors[i];
-            if(a.identity==c.identity&&a.relevant&&a.opticalClosing&&(a.inPath||a.leadSupported)&&std::isfinite(a.tti)&&a.tti>0&&a.tti<=12)return 100;}
+    if(c.origin==7) {
+        // Risk-ranked road-user instruction: a static road user in the path stays
+        // below a timed junction lesson (80); a closing or higher-risk one outranks it.
+        const int level=c.evidenceKind/2;const bool closing=c.evidenceKind%2;
+        return 60+level*20+(closing?10:0)-(level==1&&!closing?15:0);
+    }
+    if(DriveCoach::developingConflict(c,w))return 100;
     if(c.lessonStep)return 80;
     switch(domain(c)){case DriveTask::Bend:return 65;case DriveTask::Space:return 60;case DriveTask::Grade:return 55;
-    case DriveTask::Vehicle:return 45;default:return 40;}
+    case DriveTask::Vehicle:return c.origin==6?58:45;default:return 40;}
 }
+}
+bool DriveCoach::developingConflict(const Candidate& c,const WorldState& w) noexcept {
+    if(c.kind!=EventKind::Approach&&c.kind!=EventKind::Attention)return false;
+    for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){const auto& a=w.actors[i];
+        if(a.identity==c.identity&&a.relevant&&a.opticalClosing&&(a.inPath||a.leadSupported)&&std::isfinite(a.tti)&&a.tti>0&&a.tti<=12)return true;}
+    return false;
 }
 void DriveCoach::enable(bool value) noexcept {if(enabled_==value)return;enabled_=value;deliveries_={};sourceChanged();}
 void DriveCoach::sourceChanged() noexcept {task_=DriveTask::Observing;phase_=enabled_?"WATCHING_ROAD":"OFF";lastDelivery_=-1;}
@@ -50,7 +62,7 @@ void DriveCoach::observe(const WorldState& w,const TaskCoach& junction,const Tic
         task_=DriveTask::Observing;phase_="EVIDENCE_UNAVAILABLE";return;
     }
     const auto& j=junction.progress();
-    if(j.phase==TaskPhase::ExecutionQuiet&&j.leadSeconds>=0&&j.leadSeconds<8){task_=DriveTask::Junction;phase_="EXECUTION_QUIET";return;}
+    if((j.phase==TaskPhase::ExecutionQuiet&&j.leadSeconds>=0&&j.leadSeconds<executionQuietLead)||junction.quietHeld(w.now)){task_=DriveTask::Junction;phase_="EXECUTION_QUIET";return;}
     if(delivery.valid&&(delivery.stage==DeliveryStage::Submitted||delivery.stage==DeliveryStage::Started)){
         task_=domain(delivery.candidate);phase_="DELIVERING";return;
     }
@@ -86,6 +98,8 @@ PolicyChoice DriveCoach::choose(const PolicyContext& context) const noexcept {
 bool DriveCoach::valid(const Candidate& c,const WorldState& w,double now) const noexcept {
     if(!enabled_||c.urgent)return true;
     if(!w.active||!cognition::fresh(now,w.captureTime))return false;
+    if(c.prompt==Prompt::moveOffPrep)return w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh<=3;
+    if(c.origin==7)return true; // Risk instructions also apply while stopped (waiting at a junction).
     const auto d=domain(c);
     if(d==DriveTask::Grade||d==DriveTask::Bend||d==DriveTask::Junction)
         return w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>3&&w.telemetry.speedKmh<=300;
