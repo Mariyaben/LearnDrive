@@ -66,6 +66,10 @@ struct WorldState {
     Telemetry telemetry{};
     bool active{},audioReady{},allowCritical{},simulation{};
     double roadCaptureTime=-infinity,engineCaptureTime=-infinity;
+    // Lane lines near the car (normalized image x), from the lane model on marked roads.
+    double laneTime=-infinity;
+    float laneLeft=-1,laneRight=-1;
+    bool laneValid{};
     int roadBend{},gradeBand{};
     bool roadValid{},engineValid{};
     // Independent vehicle input. A candidate's mechanicalMeasured flag cannot

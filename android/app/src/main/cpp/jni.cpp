@@ -157,6 +157,22 @@ JNIEXPORT jintArray JNICALL JNI(promptFragments)(JNIEnv* e,jobject,jint id) {
     if(out&&n>0)e->SetIntArrayRegion(out,0,n,fragments);return out;
 }
 JNIEXPORT jint JNICALL JNI(fragmentCount)(JNIEnv*,jobject) {return ld_fragment_count();}
+JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint roadClass,jlongArray nodes,jdoubleArray latLon) {
+    const jsize n=e->GetArrayLength(nodes);if(n<2||e->GetArrayLength(latLon)!=2*n)return JNI_FALSE;
+    std::vector<int64_t> ids(size_t(n));std::vector<double> ll(size_t(2*n));
+    e->GetLongArrayRegion(nodes,0,n,reinterpret_cast<jlong*>(ids.data()));e->GetDoubleArrayRegion(latLon,0,2*n,ll.data());
+    return ld_road_way(engine(h),way,roadClass,ids.data(),ll.data(),size_t(n))?JNI_TRUE:JNI_FALSE;
+}
+JNIEXPORT jdoubleArray JNICALL JNI(roadJunction)(JNIEnv* e,jobject,jlong h,jdouble now) {double v[4]{};ld_road_junction(engine(h),now,v,4);return output(e,v,4);}
+JNIEXPORT jboolean JNICALL JNI(laneMap)(JNIEnv* e,jobject,jlong h,jlong source,jdouble time,jfloatArray drivable,jfloatArray lanes,jint width,jint height) {
+    const jsize n=jsize(2)*width*height;if(width<=0||height<=0||e->GetArrayLength(drivable)!=n||e->GetArrayLength(lanes)!=n)return JNI_FALSE;
+    auto* road=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(drivable,nullptr));
+    auto* lane=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(lanes,nullptr));
+    const int ok=road&&lane?ld_lane_map(engine(h),uint64_t(source),time,road,lane,width,height):0;
+    if(lane)e->ReleasePrimitiveArrayCritical(lanes,lane,JNI_ABORT);
+    if(road)e->ReleasePrimitiveArrayCritical(drivable,road,JNI_ABORT);
+    return ok?JNI_TRUE:JNI_FALSE;
+}
 JNIEXPORT void JNICALL JNI(drivingReset)(JNIEnv*,jobject,jlong h) {ld_driving_reset(engine(h));}
 JNIEXPORT void JNICALL JNI(engineSample)(JNIEnv*,jobject,jlong h,jdouble t,jint gear,jint maxGear,jdouble rpm,jdouble lower,jdouble upper,jboolean load) {ld_engine_sample(engine(h),t,gear,maxGear,rpm,lower,upper,load);}
 JNIEXPORT jint JNICALL JNI(drivingAdvice)(JNIEnv* e,jobject,jlong h,jdoubleArray a,jboolean ready,jboolean manual,jboolean slope) {

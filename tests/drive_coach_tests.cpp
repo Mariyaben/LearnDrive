@@ -170,6 +170,15 @@ int main(int argc,char** argv){try {
         const auto flat=run(0),down=run(-6);
         std::cout<<"    flat: "<<flat<<"\n    downhill: "<<down<<std::endl;
         check(down.rfind("Downhill.",0)==0&&down.find("Change down")!=std::string::npos,"downhill plan does not set the scene or lacks engine braking");});
+    test("lane keeping: sustained drift right on a marked lane means keep left; no lane lines, no lane advice",[]{
+        Fixture f(1);int said=0;
+        for(int i=10;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;
+            w.laneValid=true;w.laneTime=t;w.laneLeft=.05f;w.laneRight=.55f; // car (image centre) well right of the lane centre
+            const int p=f.accept(w);if(p)said=p;}
+        const auto* u=f.e->utterance(said);std::string text=u?"":promptText(static_cast<Prompt>(said));
+        if(u)for(size_t q=0;q<u->count;++q){text+=fragmentText(static_cast<Fragment>(u->fragments[q]));text+=' ';}
+        check(text.find("Keep left")!=std::string::npos,"drift right did not produce keep-left advice");
+        Fixture g(1);for(int i=10;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;check(!g.decide(w).eligible,"lane advice without lane lines");}});
     test("route loss does not disable supported camera or hill tasks",[]{Fixture f;auto w=road(1);junction(w);check(f.accept(w)==56,"plan");
         w=road(14);user(w,99);check(f.accept(w)==64,"route loss disabled camera");w=road(27);hill(w);check(f.accept(w)==int(Prompt::gentleUp),"route loss disabled terrain");});
     test("stationary or unknown speed does not trigger power or bend instruction",[]{for(bool unknown:{false,true}){Fixture f;auto w=road(1);hill(w);bend(w);w.telemetry.speedKmh=0;w.telemetry.speedValid=!unknown;

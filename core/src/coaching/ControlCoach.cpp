@@ -19,7 +19,7 @@ Prompt upPrompt(int g) noexcept {
 const GearBands defaultBands{};
 }
 void ControlCoach::reset() noexcept {
-    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=-1;stopCued_=moveOffCued_=false;
+    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=-1;stopCued_=moveOffCued_=false;
     lastQuietEvent_=0;active_={};
 }
 void ControlCoach::propose(int prompt,double now,double seconds) noexcept {
@@ -73,6 +73,19 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
             }
         }
     } else candidateGear_=0;
+    // Lane keeping: only with lane lines consistently seen (marked roads), sustained
+    // drift (>28% of the lane width for 1.5 s), away from junctions, at most every 20 s.
+    // The centre of the lane between the left edge and the centre line is where to be.
+    const bool laneFresh=w.laneValid&&cognition::fresh(now,w.laneTime,.6)&&w.laneRight-w.laneLeft>.15&&w.laneRight-w.laneLeft<.95;
+    const bool nearJunction=j.event&&j.leadSeconds>=0&&j.leadSeconds<10;
+    if(laneFresh&&v>15&&!nearJunction) {
+        const double offset=(.5-(w.laneLeft+w.laneRight)*.5)/(w.laneRight-w.laneLeft); // + = car right of lane centre
+        if(offset>.28){if(driftRightSince_<0)driftRightSince_=now;}else driftRightSince_=-1;
+        if(offset<-.28){if(driftLeftSince_<0)driftLeftSince_=now;}else driftLeftSince_=-1;
+        const bool due=lastLaneCue_<0||now-lastLaneCue_>=20;
+        if(due&&driftRightSince_>=0&&now-driftRightSince_>=1.5){lastLaneCue_=now;driftRightSince_=-1;propose(int(Prompt::driftRightKeepLeft),now,3);}
+        if(due&&driftLeftSince_>=0&&now-driftLeftSince_>=1.5){lastLaneCue_=now;driftLeftSince_=-1;propose(int(Prompt::driftLeftCentre),now,3);}
+    } else driftLeftSince_=driftRightSince_=-1;
     // Hills: measured, calibrated phone pitch only.
     const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
     const int band=pitch?w.gradeBand:0;const int sign=band>=2?1:band<=-2?-1:0;
@@ -102,6 +115,7 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::moveOffPrep:return v<=3;
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
+    case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::downhillSecond:case Prompt::downhillThird:case Prompt::uphillSecond:case Prompt::uphillThird: {
         if(!w.telemetry.calibrated||!w.telemetry.pitchValid||!std::isfinite(w.telemetry.pitchDegrees)||v<=3)return false;
         if(c.prompt==Prompt::downhillSecond)return w.gradeBand<=-3;

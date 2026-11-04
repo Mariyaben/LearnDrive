@@ -56,7 +56,9 @@ try {
         'Oncoming vehicle. Keep left and ease off',
         'Person on the left. Ease off and give them space',
         'Person on the right. Ease off and give them space',
-        'It has passed. Look both ways again before you move off')
+        'It has passed. Look both ways again before you move off',
+        'You are drifting left. Move back to the centre of your lane',
+        'You are drifting right. Keep left')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         $outputPath = Join-Path $assetDirectory ('prompt-{0}.wav' -f ($index + 1))

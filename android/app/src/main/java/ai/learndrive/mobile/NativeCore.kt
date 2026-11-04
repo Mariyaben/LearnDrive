@@ -124,6 +124,16 @@ class NativeCore : AutoCloseable {
     @Synchronized fun navigationTurn(provider:Int,session:Long,routeEpoch:Long,sequence:Long,receivedAt:Double,
         state:Int,stepNumber:Int,maneuver:Int,remainingMeters:Double,remainingSeconds:Double):Boolean =
         navigationTurn(handle,provider,session,routeEpoch,sequence,receivedAt,state,stepNumber,maneuver,remainingMeters,remainingSeconds)
+    /** OpenStreetMap road for junction-ahead coaching without a destination. */
+    @Synchronized fun roadWay(id:Long,roadClass:Int,nodes:LongArray,latLon:DoubleArray):Boolean=roadWay(handle,id,roadClass,nodes,latLon)
+    /** valid, distance m, node id, road ends (T-junction). */
+    @Synchronized fun roadJunction(now:Double):DoubleArray=roadJunction(handle,now)
+    private external fun roadWay(h:Long,id:Long,roadClass:Int,nodes:LongArray,latLon:DoubleArray):Boolean
+    private external fun roadJunction(h:Long,now:Double):DoubleArray
+    /** Lane model logits (drivable, lanes: 2 x height x width) for the frame just prepared. */
+    @Synchronized fun laneMap(source:Long,time:Double,drivable:FloatArray,lanes:FloatArray,width:Int,height:Int):Boolean=
+        laneMap(handle,source,time,drivable,lanes,width,height)
+    private external fun laneMap(h:Long,source:Long,time:Double,drivable:FloatArray,lanes:FloatArray,width:Int,height:Int):Boolean
     @Synchronized fun navigationFix(t:Double,lat:Double,lon:Double,accuracy:Double,speed:Double,speedAccuracy:Double,speedValid:Boolean,bearing:Double,bearingValid:Boolean)=
         navigationFix(handle,sourceId,t,lat,lon,accuracy,speed,speedAccuracy,speedValid,bearing,bearingValid)
     @Synchronized fun navigationContext(t:Double)=navigationContext(handle,t)

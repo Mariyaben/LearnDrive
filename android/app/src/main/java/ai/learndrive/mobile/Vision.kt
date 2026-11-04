@@ -125,6 +125,9 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         override fun close()=session.close()
     }
     private val detector=try {Model("detector.onnx",listOf("output0"))}catch(e:Exception){tensor.close();throw e}
+    // Lane and drivable-area model (TwinLiteNet): optional, for lane keeping on marked roads.
+    private val lanes=try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){null}
+    private var laneTime=Double.NEGATIVE_INFINITY
     private val capability=VisionCapabilityPolicy()
     private val spatial=try {SpatialVision(context,core)}catch(e:Exception){capability.spatialUnavailable();null}
     val providerStatus get()="${capability.profile()} · ${if(capability.spatialEnabled())"Supercombo ${spatial?.providerStatus}" else capability.reason()} · semantic detector ${detector.provider} · Advanced unavailable"
@@ -259,11 +262,16 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         }
         // ONNX YOLOv8 coordinates are pixels in the 320x320 model image.
         val hazard=core.spatialLabels(frame.sourceId,time,detector.values[0],count,channelFirst)
+        // Same prepared input; at most 4 Hz and only while heat allows optional models.
+        if(lanes!=null&&time-laneTime>=.25&&CameraVisionHealth.spatialAllowed(thermalStatus)) {
+            laneTime=time
+            runCatching {lanes.run();core.laneMap(frame.sourceId,time,lanes.values[0],lanes.values[1],320,320)}
+        }
         val detections=core.boxes().toList().chunked(6).map {Detection(it[0],it[1],it[2],it[3],it[4],it[5].toInt())}
         val swapped=rotation==90||rotation==270
         val shape=RoadShape.from(core.roadShape());val completed=now()
         return VisionResult(time,hazard[0],hazard[1],hazard[2]!=0.0,(completed-started)*1000,detections,
             if(swapped)crop.height() else crop.width(),if(swapped)crop.width() else crop.height(),shape,completed)
     }
-    override fun close() {spatial?.close();detector.close();tensor.close()}
+    override fun close() {spatial?.close();lanes?.close();detector.close();tensor.close()}
 }
