@@ -159,7 +159,7 @@ JNIEXPORT jintArray JNICALL JNI(promptFragments)(JNIEnv* e,jobject,jint id) {
 JNIEXPORT jint JNICALL JNI(fragmentCount)(JNIEnv*,jobject) {return ld_fragment_count();}
 JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint roadClass,jlongArray nodes,jdoubleArray latLon) {
     const jsize n=e->GetArrayLength(nodes);if(n<2||e->GetArrayLength(latLon)!=2*n)return JNI_FALSE;
-    std::vector<int64_t> ids(size_t(n));std::vector<double> ll(size_t(2*n));
+    std::vector<int64_t> ids(static_cast<size_t>(n));std::vector<double> ll(static_cast<size_t>(2*n));
     e->GetLongArrayRegion(nodes,0,n,reinterpret_cast<jlong*>(ids.data()));e->GetDoubleArrayRegion(latLon,0,2*n,ll.data());
     return ld_road_way(engine(h),way,roadClass,ids.data(),ll.data(),size_t(n))?JNI_TRUE:JNI_FALSE;
 }
@@ -202,6 +202,23 @@ JNIEXPORT jboolean JNICALL JNI(prepare)(JNIEnv* e,jobject,jlong h,jobject y,jint
     auto ptr=[&](jobject b){return static_cast<uint8_t*>(e->GetDirectBufferAddress(b));};
     auto bytes=[&](jobject b){auto n=e->GetDirectBufferCapacity(b);return n<0?size_t(0):size_t(n);};
     return ld_preprocess(engine(h),ptr(y),bytes(y),yr,yp,ptr(u),bytes(u),ur,up,ptr(v),bytes(v),vr,vp,w,height,rot,size,ptr(tensor),bytes(tensor),dtype,layout,scale,zp,full,gray);
+}
+JNIEXPORT jboolean JNICALL JNI(zoomPrepare)(JNIEnv* e,jobject,jlong h,jobject y,jint yr,jint yp,jobject u,jint ur,jint up,jobject v,jint vr,jint vp,jint w,jint height,jint rot,jint size,jobject tensor,jboolean full,jfloat horizon) {
+    auto ptr=[&](jobject b){return static_cast<uint8_t*>(e->GetDirectBufferAddress(b));};
+    auto bytes=[&](jobject b){auto n=e->GetDirectBufferCapacity(b);return n<0?size_t(0):size_t(n);};
+    return ld_preprocess_zoom(engine(h),ptr(y),bytes(y),yr,yp,ptr(u),bytes(u),ur,up,ptr(v),bytes(v),vr,vp,w,height,rot,size,ptr(tensor),bytes(tensor),0,1,1.f,0,full,horizon)?JNI_TRUE:JNI_FALSE;
+}
+JNIEXPORT jint JNICALL JNI(zoomMerge)(JNIEnv* e,jobject,jlong h,jfloatArray full,jfloatArray zoom,jint candidates,jfloatArray out) {
+    const jsize n=jsize(84)*candidates;
+    if(candidates<=0||e->GetArrayLength(full)!=n||e->GetArrayLength(zoom)!=n||e->GetArrayLength(out)!=2*n)return 0;
+    auto* a=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(full,nullptr));
+    auto* b=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(zoom,nullptr));
+    auto* o=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(out,nullptr));
+    const int merged=a&&b&&o?ld_zoom_merge(engine(h),a,b,candidates,o,size_t(2)*n):0;
+    if(o)e->ReleasePrimitiveArrayCritical(out,o,0);
+    if(b)e->ReleasePrimitiveArrayCritical(zoom,b,JNI_ABORT);
+    if(a)e->ReleasePrimitiveArrayCritical(full,a,JNI_ABORT);
+    return merged;
 }
 JNIEXPORT jdoubleArray JNICALL JNI(vision)(JNIEnv* e,jobject,jlong h,jdouble t,jfloatArray d,jint c,jint n,jboolean cf,jboolean normalized,jfloatArray road,jfloatArray lane,jint w,jint height) {
     auto dv=floats(e,d),rv=floats(e,road),lv=floats(e,lane);if(rv.size()!=size_t(w)*height*2||lv.size()!=rv.size())return nullptr;

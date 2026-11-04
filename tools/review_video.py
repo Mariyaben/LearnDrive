@@ -50,6 +50,8 @@ class Native:
             "frame": ([P, P, C.c_double, P], C.c_int),
             "cached_frame": ([P, C.c_double, P], C.c_int),
             "prepare": ([P, P, P], C.c_int),
+            "prepare_zoom": ([P, P, P, C.c_float], C.c_int),
+            "zoom_merge": ([P, P, P, C.c_int, P, C.c_size_t], C.c_int),
             "labels": ([P, C.c_double, P, C.c_size_t, C.c_int], C.c_int),
             "boxes": ([P, P, C.c_size_t], C.c_size_t), "road": ([P, P], C.c_int),
             "tick": ([P, C.c_double, C.c_double, C.c_int, C.c_int, P], None),
@@ -104,6 +106,23 @@ class Native:
             raise RuntimeError("Selected coaching profile needs an updated learndrive_replay build; legacy v2 remains available") from error
         if not self.coaching_configure(handle,{"minimal":0,"balanced":1,"guided":2}[profile],1):
             raise RuntimeError("Native coaching profile configuration rejected")
+
+
+ZOOM_CACHED_CANDIDATES = 256
+
+
+def decodable_candidates(raw, keep=ZOOM_CACHED_CANDIDATES):
+    """The columns the native decoder can use: argmax over all classes is a road-user class
+    (person, bicycle, car, motorcycle, bus, truck) with score >= 0.4. It keeps at most the best
+    200 of those before NMS, so the best `keep` (>= 200) give identical boxes. Original order is
+    preserved; unused columns are zero (score 0 is never decoded)."""
+    scores = raw[4:84]
+    best, cls = scores.max(0), scores.argmax(0)
+    useful = np.flatnonzero(np.isin(cls, (0, 1, 2, 3, 5, 7)) & (best >= np.float32(0.4)))
+    useful = np.sort(useful[np.argsort(-best[useful], kind="stable")][:keep])
+    out = np.zeros((raw.shape[0], keep), np.float32)
+    out[:, :useful.size] = raw[:, useful]
+    return out
 
 
 def ptr(array):
@@ -245,6 +264,9 @@ def main():
                         help="Let startup speech finish before the clip begins")
     parser.add_argument("--output", type=Path, default=ROOT / "build/video-review/replay")
     parser.add_argument("--library", type=Path, default=ROOT / "build/native-spatial/liblearndrive_replay.dll")
+    parser.add_argument("--detector-zoom", action="store_true",
+                        help="Second detector pass on a 2x crop of the road ahead, as Android runs it when the phone is cool")
+    parser.add_argument("--zoom-horizon", type=float, default=0.58, help="Zoom crop centre as a fraction of the frame height")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--speeds-as-live", action="store_true",
                         help="Treat --speeds samples as live measured speed (camera source). Use only for speed recorded by the same drive, e.g. read from the app's own speedometer; labelled in the report")
@@ -305,6 +327,9 @@ def main():
                "platform": platform.platform(), "machine": platform.machine(),
                "python_ort_binaries": {p.name: digest(p) for p in sorted((Path(ort.__file__).parent / "capi").glob("*"))
                    if p.suffix.lower() in (".pyd", ".dll", ".so", ".dylib")}}
+    if args.detector_zoom:
+        runtime["detector_zoom"] = {"horizon": args.zoom_horizon, "merge": "native ld_zoom_merge",
+                                    "cached_candidates": ZOOM_CACHED_CANDIDATES}
     provenance = inference_provenance(ROOT, args.video, ASSETS, args.library.resolve(), geometry.tolist(),
         args.fps, args.semantic_hz, spatial, runtime, decoder, Path(__file__), args.policy_independent_cache)
     cache_key = inference_key(provenance)
@@ -329,7 +354,14 @@ def main():
                 started = time.perf_counter()
                 if timestamp - last_semantic >= 1 / args.semantic_hz - 1e-9:
                     native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
-                    detections.append(detector.run(None, {"images": tensor})[0][0])
+                    found = np.ascontiguousarray(detector.run(None, {"images": tensor})[0][0], np.float32)
+                    if args.detector_zoom:
+                        native.require(handle, native.prepare_zoom(handle, ptr(frame), ptr(tensor), args.zoom_horizon))
+                        zoomed = np.ascontiguousarray(detector.run(None, {"images": tensor})[0][0], np.float32)
+                        merged = np.empty((found.shape[0], found.shape[1] * 2), np.float32)
+                        native.require(handle, native.zoom_merge(handle, ptr(found), ptr(zoomed), found.shape[1], ptr(merged), merged.size))
+                        found = decodable_candidates(merged)  # bounded cache; same decoded boxes
+                    detections.append(found)
                     semantic_indices.append(index); last_semantic = timestamp
                     if not spatial:
                         inference_ms.append((time.perf_counter() - started) * 1000)
@@ -577,6 +609,7 @@ def main():
         "events": events, "startup_events": startup_events, "interruptions": interruptions,
         "automatic": args.automatic, "task_scheduling": args.scheduling, "speeds_as_live": args.speeds_as_live,
         "policy_independent_cache": args.policy_independent_cache,
+        "detector_zoom": {"horizon": args.zoom_horizon} if args.detector_zoom else None,
         "navigation_overlay": {"synthetic": True, "turns": turns, "unavailable": nav_gaps} if overlay else None,
         "final_drive": json.loads(drive_state) if args.coaching_profile != "legacy" else None, "candidate_tick_counts": candidate_counts,
         "limitations": ["No ground-truth depth, collision labels, calibrated optics or recorded IMU",

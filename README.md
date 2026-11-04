@@ -1,6 +1,12 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.3 (experimental, host-tested only).** A risk-reasoning coach
+**Current Android candidate: 0.7.4 (experimental, host-tested only).** One situation planner
+composes each instruction from everything relevant at that moment (hill, junction, the most
+dangerous road users) instead of fixed sentences; junctions ahead are coached without a
+destination from OpenStreetMap roads; lane keeping uses lane lines on marked roads; and an
+opt-in instructor recording feeds the
+[instructor benchmark](docs/coach/INSTRUCTOR_BENCHMARK.md). See the
+[0.7.4 review](docs/reviews/2026-11-04-holistic-coach.md). A risk-reasoning coach
 decides what to do about the most dangerous road user (crossing, oncoming, pedestrians) and
 gives instructor-style control instructions; see the
 [first real-drive review](docs/reviews/2026-11-04-real-drive-risk-coach.md). It schedules speech

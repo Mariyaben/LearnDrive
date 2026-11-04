@@ -18,7 +18,12 @@ see [the learner coaching review](reviews/2026-10-17-learner-coaching-fixes.md).
 2. Read the capture description and explicitly start. It records device/model
    versions, source/frame metadata, sampled detections and telemetry, decisions
    and accepted audio submissions. No images, video, microphone audio, GPS
-   coordinates, phone identifiers or document URI/path are saved.
+   coordinates, phone identifiers or document URI/path are saved in the journal.
+   Optional: **With instructor audio** also records the microphone to a separate
+   private M4A file for the [instructor benchmark](coach/INSTRUCTOR_BENCHMARK.md),
+   only after a second consent dialog (everyone in the car agrees) and the Android
+   microphone permission. It stops with the diagnostics and on backgrounding; the
+   journal records only its start/stop times. Export and Delete cover both files.
 3. Exercise the normal parked setup or a lab source. The diagnostic capture
    spans source changes, preserving IDs and source labels.
 4. End the road session to return to setup; open lab settings and Stop diagnostics.

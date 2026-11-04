@@ -173,6 +173,28 @@ int main() {
     test("short plane rejected instead of out of bounds read",[]{uint8_t y[]={20},u[]={128};float tensor[12];bool threw=false;try{preprocess({2,2,0,{y,1,2,1},{u,1,1,1},{u,1,1,1}},2,tensor,48,0,0,1,0);}catch(...){threw=true;}check(threw,"invalid plane accepted");});
     test("INT8 quantization and NCHW layout",[]{uint8_t y[]={255,255,255,255},uv[]={128};int8_t t[12];preprocess({2,2,0,{y,4,2,1},{uv,1,1,1},{uv,1,1,1}},2,t,12,2,1,1.f/255,-128);check(t[0]==127&&t[11]==127,"quantization incorrect");});
     test("YOLO raw decoding and class aware NMS",[]{float v[84*3]{};for(int i=0;i<3;++i){v[i]=160;v[3+i]=160;v[6+i]=100;v[9+i]=100;}v[6*3]=.9;v[6*3+1]=.8;v[4*3+2]=.7;auto boxes=decodeYolo(v,252,84,3,true,false,{640,480,320,.5,0,40});check(boxes.size()==2,"NMS incorrect");near(boxes[0].w,.3125);});
+    test("zoomed detector pass maps into full-frame model pixels and drops crop-edge boxes",[]{
+        const auto crop=zoomCrop(640,480,.5f);check(crop.x==160&&crop.y==80&&crop.side==320,"zoom crop geometry");
+        const auto low=zoomCrop(640,480,.95f);check(low.y==160,"zoom crop leaves the frame");
+        std::vector<uint8_t> y(640*480,128),uv(320*240,128);std::vector<float> tensor(3*320*320);
+        auto* e=ld_create();std::vector<float> full(84*2,0),zoom(84*2,0),out(84*4,0);
+        check(!ld_preprocess_zoom(e,y.data(),y.size(),640,1,uv.data(),uv.size(),320,1,uv.data(),uv.size(),320,1,640,480,0,320,tensor.data(),tensor.size()*4,0,1,1,0,0,.5f),
+            "zoom accepted before the full frame was prepared");
+        check(ld_preprocess(e,y.data(),y.size(),640,1,uv.data(),uv.size(),320,1,uv.data(),uv.size(),320,1,640,480,0,320,tensor.data(),tensor.size()*4,0,1,1,0,0,1),"full prepare");
+        check(!ld_zoom_merge(e,full.data(),zoom.data(),2,out.data(),out.size()),"merge without a zoom pass");
+        check(ld_preprocess_zoom(e,y.data(),y.size(),640,1,uv.data(),uv.size(),320,1,uv.data(),uv.size(),320,1,640,480,0,320,tensor.data(),tensor.size()*4,0,1,1,0,0,.5f),"zoom prepare");
+        // Candidate 0: a person in the middle of the crop. Candidate 1: touching the crop edge.
+        zoom[0]=160;zoom[2]=160;zoom[4]=40;zoom[6]=80;zoom[8]=.9f;
+        zoom[1]=5;zoom[3]=160;zoom[5]=20;zoom[7]=20;zoom[9]=.9f;
+        full[8]=.7f;full[0]=100;full[2]=100;full[4]=10;full[6]=10;
+        check(ld_zoom_merge(e,full.data(),zoom.data(),2,out.data(),out.size())==4,"merge failed");
+        // [84,4]: full candidates 0,1 then zoom 2,3. Zoom candidate 0 -> frame centre, half size.
+        near(out[0*4+2],160);near(out[1*4+2],160);near(out[2*4+2],20);near(out[3*4+2],40);near(out[4*4+2],.9f);
+        near(out[4*4+3],0);near(out[4*4+0],.7f);
+        auto boxes=decodeYolo(out.data(),out.size(),84,4,true,false,{640,480,320,.5f,0,40});
+        check(boxes.size()==2,"merged decode lost or kept the edge box");
+        ld_destroy(e);
+    });
     test("unsupported model contracts rejected",[]{float v[10]{};bool threw=false;try{decodeYolo(v,10,10,1,true,false,{320,320,320,1,0,0});}catch(...){threw=true;}check(threw,"wrong model accepted");});
     test("road/lane segmentation softmax",[]{float road[]={-2,-2,-2,-2,2,2,2,2};float lane[]={2,2,2,2,-2,-2,-2,-2};auto m=decodeLanes(road,lane,2,2,{320,320,320,1,0,0});check(m.inRoad(.5,.5)&&m.lane[0]<.1,"segmentation incorrect");});
     test("TTI needs textured expanding evidence",[]{ApproachTracker t;Gray gray;gray.pixels.assign(6400,128);LaneMap lanes;lanes.width=lanes.height=80;lanes.road.assign(6400,1);for(int i=0;i<10;++i){std::vector<Box> b{{.4f,.3f,.2f+i*.002f,.3f+i*.002f,.9f,2}};auto h=t.update(i*.033,b,gray,lanes);check(!h.inPath,"flat texture invented TTI");}});
