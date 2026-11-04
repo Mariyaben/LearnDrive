@@ -140,6 +140,36 @@ int main(int argc,char** argv){try {
         if(!(top.expansion>0&&top.inwardRate>.05))std::cerr<<f.e->risk().json()<<std::endl;
         check(top.expansion>0&&top.inwardRate>.05,"risk coach has no motion history");
         check(top.kind==RiskKind::Crossing,"crossing road user not recognised");});
+    test("one picture of the moment: uphill, oncoming truck and a pedestrian become one instruction",[]{
+        Fixture f(2);std::string spoken;bool composed=false;
+        for(int i=10;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=25;w.telemetry.pitchDegrees=7;w.gradeBand=slopeBand(7);
+            // Truck coming down toward us on the right, growing in the image.
+            ActorObservation k;k.identity={IdentitySpace::Optical,701,0};k.captureTime=t;k.confidence=.9;k.relevant=true;k.category=7;
+            const float s=float(.14*std::exp(.35*(t-1)));k.w=s;k.h=s;k.x=float(.66-s*.5);k.y=float(.74-s);w.actors[w.actorCount++]=k;
+            // Pedestrian standing at the left edge of the road.
+            ActorObservation p;p.identity={IdentitySpace::Optical,702,0};p.captureTime=t;p.confidence=.9;p.relevant=true;p.category=0;
+            p.x=.22f;p.y=.45f;p.w=.06f;p.h=.25f;w.actors[w.actorCount++]=p;
+            auto d=f.decide(w);
+            if(d.eligible){const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,t,false),"accept composed");
+                if(const auto* u=f.e->utterance(c.utterance)){composed=true;spoken.clear();
+                    for(size_t q=0;q<u->count;++q){spoken+=fragmentText(static_cast<Fragment>(u->fragments[q]));spoken+=' ';}
+                    std::cout<<"    t="<<t<<" says: "<<spoken<<std::endl;}}}
+        check(composed,"no composed instruction");
+        check(spoken.find("Uphill.")!=std::string::npos&&spoken.find("Oncoming truck.")!=std::string::npos&&spoken.find("Person on the left.")!=std::string::npos,
+            "the instruction does not name the slope, the truck and the pedestrian together");
+        check(spoken.find("Keep left.")!=std::string::npos,"no keep-left plan for an oncoming truck");});
+    test("downhill adds engine braking to the plan for the same pedestrian",[]{
+        auto run=[](double pitch){Fixture f(2);std::string said;
+            for(int i=10;i<=30;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;w.telemetry.pitchDegrees=pitch;w.gradeBand=slopeBand(pitch);
+                ActorObservation p;p.identity={IdentitySpace::Optical,703,0};p.captureTime=t;p.confidence=.9;p.relevant=true;p.category=0;
+                const float s=float(.10*std::exp(.22*(t-1)));p.w=s*.4f;p.h=s;p.x=float(.5-s*.2);p.y=float(.80-s);w.actors[w.actorCount++]=p;
+                auto d=f.decide(w);if(d.eligible&&said.empty()){const auto& c=d.ticket.candidate;f.e->accept(f.seq,CoachingEngine::spokenId(c),w,t,false);
+                    if(const auto* u=f.e->utterance(c.utterance))for(size_t q=0;q<u->count;++q){said+=fragmentText(static_cast<Fragment>(u->fragments[q]));said+=' ';}
+                    else said=promptText(c.prompt);said+=d.mode==Mode::WARN?"[urgent]":"";}}
+            return said;};
+        const auto flat=run(0),down=run(-6);
+        std::cout<<"    flat: "<<flat<<"\n    downhill: "<<down<<std::endl;
+        check(down.rfind("Downhill.",0)==0&&down.find("Change down")!=std::string::npos,"downhill plan does not set the scene or lacks engine braking");});
     test("route loss does not disable supported camera or hill tasks",[]{Fixture f;auto w=road(1);junction(w);check(f.accept(w)==56,"plan");
         w=road(14);user(w,99);check(f.accept(w)==64,"route loss disabled camera");w=road(27);hill(w);check(f.accept(w)==int(Prompt::gentleUp),"route loss disabled terrain");});
     test("stationary or unknown speed does not trigger power or bend instruction",[]{for(bool unknown:{false,true}){Fixture f;auto w=road(1);hill(w);bend(w);w.telemetry.speedKmh=0;w.telemetry.speedValid=!unknown;

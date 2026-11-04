@@ -1,4 +1,4 @@
-param([int[]]$PromptIds = @())
+param([int[]]$PromptIds = @(), [switch]$Fragments)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $assetDirectory = Join-Path (Split-Path $PSScriptRoot -Parent) 'android/app/src/main/assets/audio'
@@ -69,5 +69,62 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Prompt padding trim failed.' }
         }
         Get-Item -LiteralPath $outputPath | Select-Object Name, Length
+    }
+    # Instructor phrase fragments composed per situation by the native planner
+    # (ids and text must match Fragment/fragmentText in core/include/learndrive/types.hpp).
+    $fragmentTexts = @(
+        'Downhill.',
+        'Steep downhill.',
+        'Uphill.',
+        'Bend ahead.',
+        'Junction ahead.',
+        'Left turn ahead.',
+        'Right turn ahead.',
+        'Oncoming truck.',
+        'Oncoming bus.',
+        'Oncoming vehicle.',
+        'Oncoming two-wheeler.',
+        'Vehicle crossing.',
+        'Person crossing.',
+        'Person on the left.',
+        'Person on the right.',
+        'Person ahead.',
+        'Two-wheeler ahead.',
+        'Vehicle ahead.',
+        'Truck ahead.',
+        'You are drifting left.',
+        'You are drifting right.',
+        'Brake gently.',
+        'Brake now.',
+        'Be ready to stop.',
+        'Stop and wait.',
+        'Ease off the accelerator.',
+        'Cover the brake.',
+        'Keep left.',
+        'Give them space.',
+        'Keep a safe gap.',
+        'Change down to second.',
+        'Change down to third.',
+        'Clutch down.',
+        'Hold the brake.',
+        'Check your mirrors.',
+        'Signal left.',
+        'Signal right.',
+        'Look both ways.',
+        'Steady accelerator.',
+        'Move back to the centre of your lane.',
+        'Let them pass.',
+        'Look again before you move off.')
+    if ($Fragments -or $PromptIds.Count -eq 0) {
+        for ($index = 0; $index -lt $fragmentTexts.Length; $index++) {
+            $outputPath = Join-Path $assetDirectory ('fragment-{0}.wav' -f ($index + 1))
+            $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
+            $speech.SetOutputToWaveFile($outputPath, $format)
+            $speech.Speak($fragmentTexts[$index])
+            $speech.SetOutputToNull()
+            & python (Join-Path $PSScriptRoot 'trim_pcm_padding.py') $outputPath
+            if ($LASTEXITCODE -ne 0) { throw 'Fragment padding trim failed.' }
+            Get-Item -LiteralPath $outputPath | Select-Object Name, Length
+        }
     }
 } finally { $speech.Dispose() }

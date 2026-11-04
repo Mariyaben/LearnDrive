@@ -61,6 +61,21 @@ const RiskCoach::Motion* RiskCoach::associate(uint64_t optical,int category,floa
     }
     return best;
 }
+double RiskCoach::stoppingSeconds(double v,double pitch) noexcept {
+    // Learner reaction (~1.2 s) plus braking at a firm-but-comfortable 3 m/s^2,
+    // reduced downhill / increased uphill by gravity along the slope.
+    const double g=9.81,grade=std::isfinite(pitch)?std::clamp(pitch,-20.,20.)*3.14159265358979/180:0;
+    const double decel=std::max(1.,3.+g*std::sin(grade));
+    return 1.2+std::max(0.,v)/3.6/decel;
+}
+const ActorRisk* RiskCoach::riskForOptical(uint64_t optical) const noexcept {
+    for(const auto& m:motions_)if(m.id&&m.optical==optical)for(size_t i=0;i<count_;++i)if(risks_[i].id==m.id)return &risks_[i];
+    return nullptr;
+}
+uint64_t RiskCoach::opticalFor(uint64_t roadUser) const noexcept {
+    for(const auto& m:motions_)if(m.id==roadUser)return m.optical;
+    return 0;
+}
 double RiskCoach::lastSeen(uint64_t optical) const noexcept {
     double seen=-1;for(const auto& m:motions_)if(m.id&&std::find(m.opticals.begin(),m.opticals.end(),optical)!=m.opticals.end())seen=std::max(seen,m.last);
     return seen;
@@ -97,6 +112,14 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     const double now=w.now;
     const bool speedKnown=cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh);
     const double v=speedKnown?w.telemetry.speedKmh:-1;
+    const bool pitchKnown=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
+    // Physics, not fixed thresholds: can the learner stop in time on THIS slope?
+    const double stopping=speedKnown?stoppingSeconds(v,pitchKnown?w.telemetry.pitchDegrees:0):2.5;
+    // Measured deceleration over the last ~1 s (the learner's response, from speed history).
+    double decel=0;
+    if(speedKnown){const MemorySample* old=nullptr;for(const auto& sm:memory.samples())
+        if(sm.speedValid&&now-sm.time>=.6&&now-sm.time<=1.5&&(!old||std::abs(now-sm.time-1)<std::abs(now-old->time-1)))old=&sm;
+        if(old)decel=(old->speedKmh-v)/3.6/(now-old->time);}
     learnMask(w,v);
     // 1. Assess every fresh optical road user from its own track history.
     for(size_t i=0;i<std::min(w.actorCount,w.actors.size())&&count_<risks_.size();++i) {
@@ -149,8 +172,12 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // must not turn a pedestrian walking along the edge into a "crossing").
         if(near&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=3;}
         else if(oncoming) {r.kind=RiskKind::Oncoming;r.level=2;}
-        else if(r.inPath&&near&&r.ttc<2.5&&v>5) {r.kind=RiskKind::InPath;r.level=3;}
-        else if(r.inPath&&near&&r.ttc<5&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
+        // Heavy vehicles stop and swerve slowly: give them extra margin.
+        // ...unless the learner is already braking hard enough to stop short of it
+        // (needed deceleration for a stationary hazard at this TTC: v / (2*TTC)).
+        else if(r.inPath&&near&&r.ttc<stopping+(r.category==5||r.category==7?.5:0)&&v>5&&!(decel>.5&&decel>=.9*(v/3.6)/(2*r.ttc)))
+            {r.kind=RiskKind::InPath;r.level=3;}
+        else if(r.inPath&&near&&r.ttc<stopping+2.5+(r.category==5||r.category==7?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
         // Crawling up to a vulnerable road user right in front: be ready to stop.
         else if(r.inPath&&r.foot>.62&&vulnerable(r.category)&&v>3&&v<15) {r.kind=RiskKind::InPath;r.level=2;}
         else if(r.category==0&&!r.inPath&&edge<half+.15&&r.foot>.55&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
@@ -189,7 +216,10 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     const bool gapRecent=gapCue&&lastGapCue_>=0&&now-lastGapCue_<15;
     if(!settling&&!gapRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category))) {
         auto* e=episode(top_.id,now);
-        const bool rising=top_.level>e->spokenLevel;
+        // Give the learner time to respond to what was just said about this road
+        // user before escalating, unless contact is truly imminent.
+        const bool reacting=e->spokenAt>=0&&now-e->spokenAt<2&&!(std::isfinite(top_.ttc)&&top_.ttc<1.5);
+        const bool rising=top_.level>e->spokenLevel&&!reacting;
         // Spoken already at this level: escalate once if the learner is not slowing.
         const bool unanswered=e->spokenLevel>=2&&top_.level>=2&&e->spokenAt>=0&&now-e->spokenAt>=2.5&&now-e->spokenAt<=8&&
             speedKnown&&v>5&&memory.speedTrend(now,e->spokenAt)!=SpeedTrend::Decreasing&&e->spokenLevel<3;

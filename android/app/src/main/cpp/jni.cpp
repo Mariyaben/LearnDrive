@@ -152,6 +152,11 @@ JNIEXPORT jint JNICALL JNI(slopeBand)(JNIEnv*,jobject,jdouble degrees) {return l
 JNIEXPORT jboolean JNICALL JNI(promptMayInterrupt)(JNIEnv*,jobject,jint next,jint current) {return ld_prompt_may_interrupt(next,current);}
 JNIEXPORT jdoubleArray JNICALL JNI(roadShape)(JNIEnv* e,jobject,jlong h) {double values[13]{};ld_road_shape(engine(h),values,13);return output(e,values,13);}
 JNIEXPORT jstring JNICALL JNI(promptText)(JNIEnv* e,jobject,jint id) {return e->NewStringUTF(ld_prompt_text(id));}
+JNIEXPORT jintArray JNICALL JNI(promptFragments)(JNIEnv* e,jobject,jint id) {
+    int fragments[8]{};const int n=ld_prompt_fragments(id,fragments,8);jintArray out=e->NewIntArray(n);
+    if(out&&n>0)e->SetIntArrayRegion(out,0,n,fragments);return out;
+}
+JNIEXPORT jint JNICALL JNI(fragmentCount)(JNIEnv*,jobject) {return ld_fragment_count();}
 JNIEXPORT void JNICALL JNI(drivingReset)(JNIEnv*,jobject,jlong h) {ld_driving_reset(engine(h));}
 JNIEXPORT void JNICALL JNI(engineSample)(JNIEnv*,jobject,jlong h,jdouble t,jint gear,jint maxGear,jdouble rpm,jdouble lower,jdouble upper,jboolean load) {ld_engine_sample(engine(h),t,gear,maxGear,rpm,lower,upper,load);}
 JNIEXPORT jint JNICALL JNI(drivingAdvice)(JNIEnv* e,jobject,jlong h,jdoubleArray a,jboolean ready,jboolean manual,jboolean slope) {

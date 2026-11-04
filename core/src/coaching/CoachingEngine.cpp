@@ -13,6 +13,8 @@ bool sameEvent(const Event& e,uint64_t source,const Candidate& c) noexcept {
 }
 int severity(const Candidate& c) noexcept {return c.critical?3:c.urgent?2:1;}
 bool terminal(EventState s) noexcept {return s==EventState::Resolved||s==EventState::Expired;}
+// A ticket is addressed by its own prompt or by its composed utterance id.
+bool samePrompt(const Candidate& c,int prompt) noexcept {return prompt==int(c.prompt)||(c.utterance&&prompt==c.utterance);}
 }
 void ShortMemory::clear() noexcept {samples_={};cursor_=count_=0;last_=-infinity;source_=0;vehicle_.beginSource(0);}
 bool ShortMemory::observe(const WorldState& w) noexcept {
@@ -378,10 +380,24 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         deferred_=ticket;return decision_;
     }
     // A single fresh slot is chosen anew every tick, never a FIFO of old cues.
+    if(scheduled) {
+        // One picture of the moment -> one instruction (see SituationPlanner).
+        Utterance u;
+        if(SituationPlanner::compose(ticket.candidate,safe,risk_,task_,u)) {
+            // The same sentence again within 4 s (e.g. a second similar road user) adds nothing.
+            if(w.now-lastSpokenAt_<4&&u.count==lastSpoken_.count&&u.priority<=lastSpoken_.priority&&
+               std::equal(u.fragments.begin(),u.fragments.begin()+u.count,lastSpoken_.fragments.begin())) {
+                decision_={};decision_.blocked=Block::Duplicate;policyReason_="SAME_INSTRUCTION_JUST_GIVEN";++stats_.duplicates;return decision_;
+            }
+            const size_t slot=utteranceSlot_++%utterances_.size();
+            u.id=compositeBase+u.priority*100+int(slot);utterances_[slot]=u;ticket.candidate.utterance=u.id;
+        } else {ticket.candidate.utterance=0;ticket.candidate.alsoCount=0;}
+        decision_.ticket=ticket;
+    }
     deferred_={};pending_=ticket;decision_.eligible=true;event.state=EventState::Active;drive_.selected(c,w.now);return decision_;
 }
 bool CoachingEngine::ticketValid(const Ticket& t,uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {
-    return t.valid&&sequence==t.sequence&&prompt==int(t.candidate.prompt)&&t.sourceId==source_&&w.sourceId==source_&&
+    return t.valid&&sequence==t.sequence&&samePrompt(t.candidate,prompt)&&t.sourceId==source_&&w.sourceId==source_&&
         t.revision==revision_&&now>=t.decidedAt&&validator_.validate(t.candidate,w,now)==Block::None&&task_.valid(t.candidate,w,now,ledger_)&&drive_.valid(t.candidate,w,now);
 }
 bool CoachingEngine::pending(uint64_t sequence,int prompt,const WorldState& w,double now) const noexcept {return ticketValid(pending_,sequence,prompt,w,now)&&!pending_.accepted;}
@@ -404,6 +420,15 @@ bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,dou
     if(pending_.candidate.urgent)lastWarning_=now;
     else {lastOrdinary_=now;lastOrdinaryLesson_=pending_.candidate.lessonStep?pending_.candidate.identity:Identity{};lastOrdinaryLessonEpoch_=pending_.candidate.lessonEpoch;
         lastOrdinaryOrigin_=pending_.candidate.origin;}
+    if(const auto* u=utterance(pending_.candidate.utterance)){lastSpoken_=*u;lastSpokenAt_=now;}
+    // Instructions absorbed into a composed utterance were delivered too.
+    for(size_t i=0;i<std::min(pending_.candidate.alsoCount,pending_.candidate.also.size());++i) {
+        Candidate also;also.identity=pending_.candidate.also[i];also.prompt=pending_.candidate.alsoPrompt[i];also.kind=pending_.candidate.alsoKind[i];
+        also.captureTime=pending_.candidate.captureTime;also.supported=true;
+        auto& extra=ledger_.observe(source_,also,now);extra.state=EventState::Accepted;extra.acceptedAt=now;extra.acceptedSeverity=1;
+        extra.acceptedPrompt=also.prompt;++extra.acceptances;extra.voiceSubmitted=submitted;extra.visualOnly=!voice_;
+        extra.deliveryStage=submitted?DeliveryStage::Submitted:DeliveryStage::VisualOnly;extra.retryable=false;
+    }
     ++stats_.logical;if(submitted)++stats_.voiceSubmitted;pending_={};return true;
 }
 bool CoachingEngine::playbackValid(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) const noexcept {
@@ -422,7 +447,7 @@ bool CoachingEngine::continuationValid(uint64_t sequence,int prompt,const WorldS
 }
 const char* CoachingEngine::continuationReason(uint64_t sequence,int prompt,const WorldState& w,double now,uint64_t revision) const noexcept {
     const auto& t=accepted_;
-    if(!t.valid||!t.onset||t.stage!=DeliveryStage::Started||t.sequence!=sequence||int(t.candidate.prompt)!=prompt||
+    if(!t.valid||!t.onset||t.stage!=DeliveryStage::Started||t.sequence!=sequence||!samePrompt(t.candidate,prompt)||
         revision!=revision_||t.revision!=revision_||t.sourceId!=source_||w.sourceId!=source_)return "TICKET_OR_SOURCE";
     // Onset still uses the immutable original ticket. Once speaking, require
     // fresh evidence for the SAME event to continue, never a replacement actor.
@@ -483,8 +508,8 @@ const char* CoachingEngine::continuationReason(uint64_t sequence,int prompt,cons
 }
 bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage stage,double now) noexcept {
     Ticket* ticket=nullptr;
-    if(accepted_.valid&&accepted_.sequence==sequence&&int(accepted_.candidate.prompt)==prompt)ticket=&accepted_;
-    else if(pending_.valid&&pending_.sequence==sequence&&int(pending_.candidate.prompt)==prompt)ticket=&pending_;
+    if(accepted_.valid&&accepted_.sequence==sequence&&samePrompt(accepted_.candidate,prompt))ticket=&accepted_;
+    else if(pending_.valid&&pending_.sequence==sequence&&samePrompt(pending_.candidate,prompt))ticket=&pending_;
     if(!ticket||!std::isfinite(now)||now<ticket->decidedAt||
        (stage!=DeliveryStage::Scheduled&&stage!=DeliveryStage::Interrupted&&stage!=DeliveryStage::Expired&&stage!=DeliveryStage::Failed&&stage!=DeliveryStage::Completed))return false;
     if(ticket->stage==DeliveryStage::Completed||ticket->stage==DeliveryStage::VisualOnly)return stage==ticket->stage;

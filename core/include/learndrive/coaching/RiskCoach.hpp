@@ -36,6 +36,13 @@ public:
     // The learner's own bonnet/dashboard detected as a vehicle (bottom-spanning box).
     static bool egoVehicle(float,float y,float w,float h) noexcept {return y+h>.97f&&w>.42f;}
     const ActorRisk& top() const noexcept {return top_;}
+    // Every road user assessed this tick (the planner reasons over all of them).
+    size_t riskCount() const noexcept {return count_;}
+    const ActorRisk& riskAt(size_t i) const noexcept {return risks_[i<count_?i:0];}
+    const ActorRisk* riskForOptical(uint64_t optical) const noexcept;
+    uint64_t opticalFor(uint64_t roadUser) const noexcept;
+    // Physics: time the learner needs to stop from this speed on this slope.
+    static double stoppingSeconds(double speedKmh,double pitchDegrees) noexcept;
     // Last capture time at which the road user once detected as this optical id
     // was seen (any later detector id included); -1 if unknown.
     double lastSeen(uint64_t optical) const noexcept;

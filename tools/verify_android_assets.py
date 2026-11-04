@@ -72,6 +72,24 @@ for path in sorted((assets / "audio").glob("prompt-*.wav")):
         print("Verified voice", path.name, "%.2f seconds" % (clip.getnframes() / clip.getframerate()))
 assert formats == {(1, 22050, 2)}
 assert {path.name for path in (assets / "audio").glob("prompt-*.wav")} == {f"prompt-{i}.wav" for i in range(1, prompt_count + 1)}
+# Composed-utterance fragments: ids/text match the native catalogue, all recorded.
+fragment_count = int(re.search(r"fragmentCount=(\d+)", native_text).group(1))
+fragment_enum = re.search(r"enum class Fragment : int \{(.*?)\};", native_text, re.S).group(1)
+fragment_ids, current = {}, -1
+for part in [p.strip() for p in " ".join(fragment_enum.splitlines()).split(",") if p.strip()]:
+    if "=" in part:
+        name, value = part.split("="); current = int(value); fragment_ids[name.strip()] = current
+    else:
+        current += 1; fragment_ids[part] = current
+native_fragments = {fragment_ids[n]: t for n, t in re.findall(r'case Fragment::(\w+):return "([^"]*)";', native_text)}
+recorded_fragments = re.findall(r"'([^']*)'", re.search(r"\$fragmentTexts = @\((.*?)\)\s*if", render_script, re.S).group(1))
+assert recorded_fragments == [native_fragments[i] for i in range(1, fragment_count + 1)], "Recorded fragment text differs from native fragment IDs"
+for i in range(1, fragment_count + 1):
+    with wave.open(str(assets / "audio" / f"fragment-{i}.wav"), "rb") as clip:
+        assert (clip.getnchannels(), clip.getframerate(), clip.getsampwidth()) == (1, 22050, 2), f"fragment-{i} format"
+        values = np.frombuffer(clip.readframes(clip.getnframes()), dtype="<i2")
+        assert clip.getnframes() > clip.getframerate() // 5 and np.max(np.abs(values.astype(np.int32))) > 1000, f"fragment-{i} silent/short"
+print(f"Verified {fragment_count} instructor fragments")
 if args.image:
     import cv2
     image = cv2.cvtColor(cv2.imread(str(args.image)), cv2.COLOR_BGR2RGB)

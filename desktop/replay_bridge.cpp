@@ -134,6 +134,8 @@ EXPORT void replay_trace(Replay* r,double* out) {
 }
 EXPORT const char* replay_prompt(int id){return ld_prompt_text(id);}
 EXPORT int replay_prompt_count(){return ld_prompt_count();}
+EXPORT int replay_prompt_fragments(int id,int* out,size_t capacity){return ld_prompt_fragments(id,out,capacity);}
+EXPORT int replay_fragment_count(){return ld_fragment_count();}
 EXPORT const char* replay_reason(Replay* r,int which) {
     return which==0?ld_dual_policy_reason(r->engine):which==1?ld_camera_reason(r->engine):ld_driving_reason(r->engine);
 }

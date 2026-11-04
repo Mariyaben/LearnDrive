@@ -502,7 +502,8 @@ class MainActivity : ComponentActivity() {
                 showSetup->{hideKeyboard();showSetup=false;updateSetupUi()}
                 else->finish()}
         }})
-        audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority) {message->main.post {audioStatus=message}}
+        audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority,
+            fragmentCount=core.fragmentCount(),fragments=core::promptFragments) {message->main.post {audioStatus=message}}
         audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
         researchEmergencies=Switch(this).apply {text="Lab only: unvalidated emergency commands";isChecked=false}
