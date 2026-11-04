@@ -6,6 +6,7 @@
 #include "learndrive/coaching/DriveCoach.hpp"
 #include "learndrive/coaching/ControlCoach.hpp"
 #include "learndrive/coaching/RiskCoach.hpp"
+#include "learndrive/coaching/SituationPlanner.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -50,6 +51,13 @@ struct Candidate {
     int actorCategory=-1,evidenceKind{};
     float x{},y{},w{},h{};
     int lessonStep{}; // Native task action, zero for the existing candidate producers.
+    // Composition: the spoken utterance id (0 = this prompt's own recording) and
+    // other instructions it also delivers (recorded in the ledger on acceptance).
+    int utterance{};
+    std::array<Identity,3> also{};
+    std::array<Prompt,3> alsoPrompt{};
+    std::array<EventKind,3> alsoKind{};
+    size_t alsoCount{};
     uint64_t lessonEpoch{};
 };
 struct WorldState {
@@ -207,6 +215,10 @@ public:
     // reproduces the 0.7.1 policy for same-interval comparison.
     void enableTaskScheduling(bool enabled) noexcept {if(scheduling_!=enabled){scheduling_=enabled;task_.enableScheduling(enabled);control_.reset();risk_.reset();}}
     const RiskCoach& risk() const noexcept {return risk_;}
+    // Composed utterance by id (fragments), or nullptr.
+    const Utterance* utterance(int id) const noexcept {for(const auto& u:utterances_)if(u.id&&u.id==id)return &u;return nullptr;}
+    // The delivered id of a ticket's candidate: its utterance when composed.
+    static int spokenId(const Candidate& c) noexcept {return c.utterance?c.utterance:int(c.prompt);}
     // Instructor-style control coaching (part of task scheduling): actions, not announcements.
     const ControlCoach& control() const noexcept {return control_;}
     void setGearBands(const GearBands& bands) noexcept {control_.setBands(bands);}
@@ -226,6 +238,10 @@ private:
     DriveCoach drive_;
     ControlCoach control_;
     RiskCoach risk_;
+    std::array<Utterance,100> utterances_{};
+    size_t utteranceSlot_{};
+    Utterance lastSpoken_{};
+    double lastSpokenAt_=-infinity;
     WorldState lastWorld_{};
     Profile profile_=Profile::Balanced;
     bool configured_{},voice_=true,scheduling_=true;

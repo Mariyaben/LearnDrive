@@ -22,9 +22,27 @@ fun interface AudioPlaybackGate {
 }
 
 class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,
-    private val priority:(Int)->Int={Int.MAX_VALUE},private val status:(String)->Unit): AutoCloseable {
+    private val priority:(Int)->Int={Int.MAX_VALUE},private val fragmentCount:Int=0,
+    private val fragments:(Int)->IntArray={IntArray(0)},private val status:(String)->Unit): AutoCloseable {
     private data class Clip(val bytes:ByteArray,val sampleRate:Int,val channels:Int)
     private val cache=java.util.concurrent.ConcurrentHashMap<Int,Clip>()
+    // Recorded instructor fragments, joined per composed utterance (id >= 1000).
+    private val fragmentClips=java.util.concurrent.ConcurrentHashMap<Int,Clip>()
+    private val composed=java.util.concurrent.ConcurrentHashMap<String,Clip>()
+    private fun clipFor(id:Int):Clip? {
+        cache[id]?.let {return it}
+        if(id<1000||fragmentCount<=0)return null
+        val parts=fragments(id);if(parts.isEmpty())return null
+        return composed.getOrPut(parts.joinToString(",")) {
+            val clips=parts.map {fragmentClips[it]?:return null}
+            val first=clips.first()
+            // ~120 ms between fragments, whole PCM frames: clipped instructor phrasing.
+            val gap=ByteArray(((first.sampleRate*.12).toInt())*first.channels*2)
+            val out=java.io.ByteArrayOutputStream()
+            clips.forEachIndexed {i,c->if(i>0)out.write(gap);out.write(c.bytes)}
+            Clip(out.toByteArray(),first.sampleRate,first.channels)
+        }
+    }
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"pcm-audio") }
     private val generation=AtomicInteger()
     private val audioManager=context.getSystemService(AudioManager::class.java)
@@ -40,14 +58,15 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     @Volatile private var pcmReady=false
     @Volatile private var voiceAllowed=true
     val voiceEnabled get()=voiceAllowed
-    val ready get() = cache.size==clipCount&&pcmReady&&!closed
-    fun durationSeconds(id:Int)=cache[id]?.let {it.bytes.size.toDouble()/(it.sampleRate*it.channels*2)}?:3.0
+    val ready get() = cache.size==clipCount&&fragmentClips.size==fragmentCount&&pcmReady&&!closed
+    fun durationSeconds(id:Int)=clipFor(id)?.let {it.bytes.size.toDouble()/(it.sampleRate*it.channels*2)}?:3.0
     init {
         worker.execute {
             try {
                 for(id in 1..clipCount)cache[id]=readWave(context.assets.open("audio/prompt-$id.wav").use {it.readBytes()})
+                for(id in 1..fragmentCount)fragmentClips[id]=readWave(context.assets.open("audio/fragment-$id.wav").use {it.readBytes()})
                 val clip=cache.getValue(1)
-                check(cache.values.all {it.sampleRate==clip.sampleRate&&it.channels==clip.channels}) {"Voice formats differ between prompts"}
+                check((cache.values+fragmentClips.values).all {it.sampleRate==clip.sampleRate&&it.channels==clip.channels}) {"Voice formats differ between prompts"}
                 val channel=if(clip.channels==1)AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
                 val minimum=AudioTrack.getMinBufferSize(clip.sampleRate,channel,AudioFormat.ENCODING_PCM_16BIT);check(minimum>0)
                 val player=AudioTrack.Builder().setAudioAttributes(attributes).setAudioFormat(AudioFormat.Builder().setSampleRate(clip.sampleRate).setChannelMask(channel).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
@@ -88,7 +107,7 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     internal fun submitCoaching(id:Int,validatedWarning:Boolean,onset:AudioPlaybackGate):Boolean=
         submitClip(id,onset,validatedWarning)
     @Synchronized private fun submitClip(id:Int,onset:AudioPlaybackGate?,validatedWarning:Boolean):Boolean {
-        val clip=cache[id]?:return false
+        val clip=clipFor(id)?:return false
         fun canReplace(current:Int,warning:Boolean)=AudioInterruptionPolicy.mayReplace(validatedWarning,warning,
             priority(current),mayInterrupt(id,current))
         if(!voiceEnabled||!ready||!canReplace(active,activeWarning)||!canReplace(pending,pendingWarning))return false

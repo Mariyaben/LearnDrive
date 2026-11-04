@@ -57,6 +57,7 @@ class Native:
             "emergencies": ([P, C.c_int], None), "trace": ([P, P], None),
             "guidance_reason": ([P], C.c_char_p),
             "prompt": ([C.c_int], C.c_char_p), "prompt_count": ([], C.c_int), "reason": ([P, C.c_int], C.c_char_p),
+            "prompt_fragments": ([C.c_int, P, C.c_size_t], C.c_int), "fragment_count": ([], C.c_int),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.lib, "replay_" + name)
@@ -369,6 +370,18 @@ def main():
     for prompt in range(1, native.prompt_count() + 1):
         with wave.open(str(ASSETS / f"audio/prompt-{prompt}.wav"), "rb") as clip:
             durations[prompt] = clip.getnframes() / clip.getframerate()
+    fragment_durations = {}
+    for fragment in range(1, native.fragment_count() + 1):
+        with wave.open(str(ASSETS / f"audio/fragment-{fragment}.wav"), "rb") as clip:
+            fragment_durations[fragment] = clip.getnframes() / clip.getframerate()
+
+    class Durations(dict):
+        """Composed utterances (id >= 1000): fragment clips joined with 120 ms gaps, as on the phone."""
+        def __missing__(self, key):
+            parts = np.zeros(8, np.int32)
+            n = native.prompt_fragments(int(key), parts.ctypes.data_as(P), 8)
+            return sum(fragment_durations[int(f)] for f in parts[:n]) + .12 * max(0, n - 1) if n > 0 else 3.0
+    durations = Durations(durations)
     events, startup_events, observations, candidate_counts, publications = [], [], [], {}, []
     playing, playing_until, tick = 0, 0, 0
     temporal_contexts=[];temporal_worlds=[]

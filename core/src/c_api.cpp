@@ -8,9 +8,20 @@
 #include "learndrive/perception/supercombo.hpp"
 #include "learndrive/coaching/CoachingEngine.hpp"
 #include <exception>
+#include <mutex>
 #include <sstream>
 #include <iomanip>
 #include "learndrive/dual_brain_c_api.h"
+// Composed utterances are produced by an engine but spoken/captioned through
+// static prompt functions (JNI, audio worker); a small registry bridges them.
+static std::mutex utteranceMutex;
+static std::array<ld::coaching::Utterance,100> utteranceRegistry{};
+static std::array<std::string,100> utteranceText{};
+static void registerUtterance(const ld::coaching::Utterance& u) {
+    std::string text;for(size_t i=0;i<u.count;++i){if(i)text+=' ';text+=ld::fragmentText(static_cast<ld::Fragment>(u.fragments[i]));}
+    std::lock_guard<std::mutex> lock(utteranceMutex);const size_t slot=size_t(u.id)%utteranceRegistry.size();
+    utteranceRegistry[slot]=u;utteranceText[slot]=std::move(text);
+}
 struct ld_engine {
     ld::SensorFusion fusion;ld::DecisionEngine decisions;ld::CameraCoach coach;ld::DrivingCoach driving;
     ld::ApproachTracker tracker;ld::perception::MetricEstimator metric;ld::cognition::EmbeddedDualBrain dualPolicy;
@@ -515,7 +526,8 @@ int ld_guidance_decide(ld_engine* e,const ld_guidance_request* q,ld_guidance_res
         }
         e->coachingWorld=w;
         const auto d=e->coaching.decide(w,r.sequence);const auto& c=d.ticket.candidate;
-        if(d.ticket.valid) {r.prompt=int(c.prompt);r.origin=c.origin;r.capture_time=c.captureTime;r.scene_age=q->now-c.captureTime;
+        if(d.ticket.valid) {r.prompt=CoachingEngine::spokenId(c);r.origin=c.origin;
+            if(c.utterance)if(const auto* u=e->coaching.utterance(c.utterance))registerUtterance(*u);r.capture_time=c.captureTime;r.scene_age=q->now-c.captureTime;
             if(c.identity.space==IdentitySpace::Attention){r.actor_id=c.identity.id;r.actor_category=c.actorCategory;r.evidence_kind=c.evidenceKind;r.actor_x=c.x;r.actor_y=c.y;r.actor_w=c.w;r.actor_h=c.h;}}
         r.eligible=d.eligible;r.semantic_available=ld::cognition::fresh(q->now,e->visionTime);r.spatial_available=ld::cognition::fresh(q->now,e->spatialTime);
         r.blocked=d.blocked==Block::None?LD_GUIDANCE_OK:d.blocked==Block::Inactive?LD_GUIDANCE_INACTIVE:d.blocked==Block::CriticalDisabled?LD_GUIDANCE_RESEARCH_ONLY:
@@ -588,7 +600,7 @@ int ld_guidance_accepted(ld_engine* e,uint64_t sequence,int prompt,double now) {
     if(e&&e->coaching.configured())return ld_coaching_accept(e,sequence,prompt,now,1);
     if(!ld_guidance_pending(e,sequence,prompt,now))return 0;
     ld_audio_accepted(e,prompt,now);
-    if(e->guidance.origin==LD_GUIDANCE_CAMERA&&attentionPrompt(prompt)&&e->guidance.actor_id) {
+    if(e->guidance.origin==LD_GUIDANCE_CAMERA&&prompt>0&&prompt<=ld::promptCount&&attentionPrompt(prompt)&&e->guidance.actor_id) {
         e->attentionActors[prompt]=e->guidance.actor_id;e->attentionSources[prompt]=e->sourceId;
     }
     if(prompt>=2&&prompt<=4)ld_accepted(e,now);
@@ -699,7 +711,7 @@ const char* ld_guidance_reason(ld_engine* e) {
     default:return ld_camera_reason(e);
     }
 }
-int ld_prompt_priority(int prompt) {return ld::priority(static_cast<ld::Prompt>(prompt));}
+int ld_prompt_priority(int prompt) {return ld::isComposite(prompt)?ld::compositePriority(prompt):ld::priority(static_cast<ld::Prompt>(prompt));}
 int ld_navigation_route(ld_engine* e,uint64_t id,const double* coordinates,size_t points,const int* maneuvers,size_t count) {
     if(!e)return 0;
     e->navigation.clear();e->providerNavigation.clear();e->guidance.eligible=0;
@@ -752,8 +764,27 @@ const char* ld_navigation_status(ld_engine* e,double now) {
 }
 int ld_prompt_count(void) {return ld::promptCount;}
 int ld_slope_band(double degrees) {return ld::slopeBand(degrees);}
-int ld_prompt_may_interrupt(int next,int current) {return ld::mayInterrupt(static_cast<ld::Prompt>(next),static_cast<ld::Prompt>(current));}
-const char* ld_prompt_text(int p) {return ld::promptText(static_cast<ld::Prompt>(p));}
+int ld_prompt_may_interrupt(int next,int current) {
+    if(!ld::isComposite(next)&&!ld::isComposite(current))return ld::mayInterrupt(static_cast<ld::Prompt>(next),static_cast<ld::Prompt>(current));
+    // Composed utterances: only urgent content (priority >= 4) interrupts, and only lower-priority speech.
+    const int pn=ld_prompt_priority(next),pc=current?ld_prompt_priority(current):0;
+    if(!current)return 1;
+    return pn>=4&&pn>pc;
+}
+const char* ld_prompt_text(int p) {
+    if(!ld::isComposite(p))return ld::promptText(static_cast<ld::Prompt>(p));
+    thread_local std::string copy;
+    {std::lock_guard<std::mutex> lock(utteranceMutex);const size_t slot=size_t(p)%utteranceRegistry.size();
+        copy=utteranceRegistry[slot].id==p?utteranceText[slot]:std::string();}
+    return copy.c_str();
+}
+int ld_prompt_fragments(int p,int* out,size_t capacity) {
+    if(!out||!ld::isComposite(p))return 0;
+    std::lock_guard<std::mutex> lock(utteranceMutex);const auto& u=utteranceRegistry[size_t(p)%utteranceRegistry.size()];
+    if(u.id!=p)return 0;size_t n=std::min(u.count,capacity);for(size_t i=0;i<n;++i)out[i]=u.fragments[i];return int(n);
+}
+int ld_fragment_count(void) {return ld::fragmentCount;}
+const char* ld_fragment_text(int f) {return ld::fragmentText(static_cast<ld::Fragment>(f));}
 int ld_road_shape(ld_engine* e,double* out,size_t capacity) {
     if(!e||!out||capacity<13)return 0;
     std::fill_n(out,13,0);auto& shape=e->driving.shape();out[0]=e->driving.roadTime();out[1]=shape.valid;out[2]=shape.bend;

@@ -143,6 +143,10 @@ int ld_prompt_count(void);
 int ld_slope_band(double normalized_pitch_degrees);
 int ld_prompt_may_interrupt(int next,int current);
 const char* ld_prompt_text(int prompt);
+// Composed utterances (ids >= 1000): fragment ids in speaking order; returns count.
+int ld_prompt_fragments(int prompt,int* out,size_t capacity);
+int ld_fragment_count(void);
+const char* ld_fragment_text(int fragment);
 // time, valid, bend (-1/0/+1), then five normalized x,y point pairs.
 int ld_road_shape(ld_engine*,double* out,size_t capacity);
 // All C ABI functions catch exceptions. Check error text after a failed operation.

@@ -56,6 +56,48 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     vehicleCrossingWait=81,personCrossingStop=82,oncomingKeepLeft=83,personLeftSpace=84,personRightSpace=85,crossedLookAgain=86 };
 constexpr int promptCount=86;
 inline bool isRiskPrompt(Prompt p){const int i=int(p);return i>=81&&i<=86;}
+// Instructor phrase fragments. The situation planner composes one utterance per
+// moment from these (context clauses, then actions), e.g. "Uphill. Oncoming truck.
+// Person on the left. Keep left. Ease off the accelerator. Give them space."
+enum class Fragment : int { none=0,
+    downhill=1,steepDownhill,uphill,bendAhead,junctionAhead,leftTurnAhead,rightTurnAhead,
+    oncomingTruck,oncomingBus,oncomingVehicle,oncomingTwoWheeler,vehicleCrossing,personCrossing,
+    personLeft,personRight,personAhead,twoWheelerAhead,vehicleAhead,truckAhead,driftingLeft,driftingRight,
+    brakeGently=22,brakeNow,readyToStop,stopAndWait,easeOff,coverBrake,keepLeft,giveSpace,safeGap,
+    downSecond,downThird,clutchDown,holdBrake,checkMirrors,signalLeft,signalRight,lookBothWays,
+    steadyAccelerator,laneCentre,letThemPass,lookAgainMoveOff };
+constexpr int fragmentCount=42;
+inline bool isContextFragment(Fragment f){return int(f)>=1&&int(f)<=21;}
+inline const char* fragmentText(Fragment f) {
+    switch(f) {
+    case Fragment::downhill:return "Downhill.";case Fragment::steepDownhill:return "Steep downhill.";case Fragment::uphill:return "Uphill.";
+    case Fragment::bendAhead:return "Bend ahead.";case Fragment::junctionAhead:return "Junction ahead.";
+    case Fragment::leftTurnAhead:return "Left turn ahead.";case Fragment::rightTurnAhead:return "Right turn ahead.";
+    case Fragment::oncomingTruck:return "Oncoming truck.";case Fragment::oncomingBus:return "Oncoming bus.";
+    case Fragment::oncomingVehicle:return "Oncoming vehicle.";case Fragment::oncomingTwoWheeler:return "Oncoming two-wheeler.";
+    case Fragment::vehicleCrossing:return "Vehicle crossing.";case Fragment::personCrossing:return "Person crossing.";
+    case Fragment::personLeft:return "Person on the left.";case Fragment::personRight:return "Person on the right.";
+    case Fragment::personAhead:return "Person ahead.";case Fragment::twoWheelerAhead:return "Two-wheeler ahead.";
+    case Fragment::vehicleAhead:return "Vehicle ahead.";case Fragment::truckAhead:return "Truck ahead.";
+    case Fragment::driftingLeft:return "You are drifting left.";case Fragment::driftingRight:return "You are drifting right.";
+    case Fragment::brakeGently:return "Brake gently.";case Fragment::brakeNow:return "Brake now.";case Fragment::readyToStop:return "Be ready to stop.";
+    case Fragment::stopAndWait:return "Stop and wait.";case Fragment::easeOff:return "Ease off the accelerator.";
+    case Fragment::coverBrake:return "Cover the brake.";case Fragment::keepLeft:return "Keep left.";case Fragment::giveSpace:return "Give them space.";
+    case Fragment::safeGap:return "Keep a safe gap.";case Fragment::downSecond:return "Change down to second.";
+    case Fragment::downThird:return "Change down to third.";case Fragment::clutchDown:return "Clutch down.";
+    case Fragment::holdBrake:return "Hold the brake.";case Fragment::checkMirrors:return "Check your mirrors.";
+    case Fragment::signalLeft:return "Signal left.";case Fragment::signalRight:return "Signal right.";
+    case Fragment::lookBothWays:return "Look both ways.";case Fragment::steadyAccelerator:return "Steady accelerator.";
+    case Fragment::laneCentre:return "Move back to the centre of your lane.";case Fragment::letThemPass:return "Let them pass.";
+    case Fragment::lookAgainMoveOff:return "Look again before you move off.";
+    default:return "";
+    }
+}
+// Composed utterance ids: 1000 + priority*100 + slot. Priority is recoverable
+// without engine state, so interruption rules stay static and testable.
+constexpr int compositeBase=1000;
+inline bool isComposite(int id){return id>=compositeBase&&id<compositeBase+700;}
+inline int compositePriority(int id){return isComposite(id)?(id-compositeBase)/100:0;}
 // Junction lesson steps (origin 5 task): planning, approach, entry.
 inline bool isLessonPrompt(Prompt p){const int i=int(p);return (i>=56&&i<=62);}
 // Speed-conditioned actions for a camera road user (origin 4).
