@@ -164,6 +164,13 @@ const char* ld_decision_reason(ld_engine*);
 // Packs x,y,width,height,score,COCO category per box. Returns boxes written.
 size_t ld_boxes(ld_engine*,float* out,size_t capacity_floats);
 int ld_preprocess(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,int save_gray);
+// Optional zoomed detector pass (distant road users ahead): letterboxes a square crop
+// of the SAME frame just prepared with ld_preprocess, centred on `horizon` (fraction of
+// the upright height). Keeps the full-frame transform.
+int ld_preprocess_zoom(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,float horizon);
+// Merges YOLO raw output of the full frame and of the zoom (both [84,N] channel-first)
+// into [84,2N] full-frame model pixels for the usual decoding and NMS. Returns 2N or 0.
+int ld_zoom_merge(ld_engine*,const float* full,const float* zoom,int candidates,float* out,size_t out_count);
 int ld_vision(ld_engine*,double time,const float* detections,size_t count,int channels,int candidates,int channel_first,int normalized,const float* road,const float* lane,int mask_width,int mask_height,double hazard_out[3]);
 void ld_camera_intrinsics(ld_engine*,double focal_length_y_pixels);
 int ld_camera_up(ld_engine*,double time,double out[3]);

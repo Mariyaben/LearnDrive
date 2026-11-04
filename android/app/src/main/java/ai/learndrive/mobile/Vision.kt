@@ -13,6 +13,15 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import android.graphics.PointF
 
+/** Zoom crop centre (fraction of the frame height): the road ahead sits a little below the middle. */
+private const val ZOOM_HORIZON=.58f
+/**
+ * The zoomed detector pass stays OFF in coaching. On the 2026-11-04 drive replay it added real
+ * distant riders and vehicles, but also false instructions for people printed on billboards and
+ * "brake now" for road users still far away. It needs elevated-object rejection and
+ * distance-aware urgency for small boxes first. Evaluate with tools/review_video.py --detector-zoom.
+ */
+private const val ZOOM_IN_COACHING=false
 data class Detection(val x:Float,val y:Float,val width:Float,val height:Float,val score:Float,val category:Int)
 data class RoadShape(val valid:Boolean,val bend:Int,val points:List<PointF>) {
     val status get()=if(!valid)"road shape unclear" else when(bend){-1->"left curve";1->"right curve";else->"straight road"}
@@ -128,6 +137,10 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
     // Lane and drivable-area model (TwinLiteNet): optional, for lane keeping on marked roads.
     private val lanes=try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){null}
     private var laneTime=Double.NEGATIVE_INFINITY
+    // Zoomed second detector pass (2x, road ahead): earlier detection of distant riders,
+    // pedestrians and vehicles. Only while the phone is cool and the detector is fast.
+    private var zoomFull:FloatArray?=null
+    private var zoomMerged:FloatArray?=null
     private val capability=VisionCapabilityPolicy()
     private val spatial=try {SpatialVision(context,core)}catch(e:Exception){capability.spatialUnavailable();null}
     val providerStatus get()="${capability.profile()} · ${if(capability.spatialEnabled())"Supercombo ${spatial?.providerStatus}" else capability.reason()} · semantic detector ${detector.provider} · Advanced unavailable"
@@ -260,8 +273,24 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             val duration=(now()-detectorStarted)*1000
             performanceDetectorTotalMs+=duration;performanceLastDetectorMs=duration
         }
+        var found=detector.values[0];var candidates=count
+        if(ZOOM_IN_COACHING&&channelFirst&&CameraVisionHealth.zoomAllowed(thermalStatus,performanceLastDetectorMs)) {
+            val full=zoomFull?:FloatArray(found.size).also {zoomFull=it}
+            val merged=zoomMerged?:FloatArray(found.size*2).also {zoomMerged=it}
+            found.copyInto(full)
+            val zoomed=runCatching {
+                core.prepareZoom(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+                    plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,fullRange,ZOOM_HORIZON)&&
+                    run {detector.run();core.zoomMerge(full,detector.values[0],count,merged)==count*2}
+            }.getOrDefault(false)
+            // The detector's output array now holds the zoom pass: fall back to the saved full-frame copy.
+            if(zoomed){found=merged;candidates=count*2}else found=full
+            // The lane model below reads the prepared input: restore the full frame.
+            if(lanes!=null)core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+                plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,false,1)
+        }
         // ONNX YOLOv8 coordinates are pixels in the 320x320 model image.
-        val hazard=core.spatialLabels(frame.sourceId,time,detector.values[0],count,channelFirst)
+        val hazard=core.spatialLabels(frame.sourceId,time,found,candidates,channelFirst)
         // Same prepared input; at most 4 Hz and only while heat allows optional models.
         val laneModel=lanes
         if(laneModel!=null&&time-laneTime>=.25&&CameraVisionHealth.spatialAllowed(thermalStatus)) {

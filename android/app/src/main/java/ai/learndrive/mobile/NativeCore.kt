@@ -109,6 +109,14 @@ class NativeCore : AutoCloseable {
     @Synchronized fun spatialPublish(id:Long,time:Double,output:ByteBuffer):Boolean {requireSource(id);return spatialPublish(handle,id,time,output)}
     @Synchronized fun spatialUnavailable(id:Long,time:Double) {requireSource(id);check(spatialUnavailable(handle,id,time)){"Spatial invalidation rejected"}}
     @Synchronized fun frameGeometry(id:Long,values:DoubleArray) {requireSource(id);spatialGeometry(handle,values)}
+    /** Zoomed detector pass over the road ahead, for the frame just prepared (Float32 NCHW). */
+    @Synchronized fun prepareZoom(id:Long,y:ByteBuffer,yr:Int,yp:Int,u:ByteBuffer,ur:Int,up:Int,v:ByteBuffer,vr:Int,vp:Int,w:Int,h:Int,rot:Int,size:Int,tensor:ByteBuffer,full:Boolean,horizon:Float):Boolean {
+        requireSource(id);return zoomPrepare(handle,y.slice(),yr,yp,u.slice(),ur,up,v.slice(),vr,vp,w,h,rot,size,tensor,full,horizon)
+    }
+    /** Full + zoom detector outputs ([84,N] each) into [84,2N] full-frame candidates; returns 2N or 0. */
+    @Synchronized fun zoomMerge(full:FloatArray,zoom:FloatArray,candidates:Int,out:FloatArray):Int=zoomMerge(handle,full,zoom,candidates,out)
+    private external fun zoomPrepare(h:Long,y:ByteBuffer,yr:Int,yp:Int,u:ByteBuffer,ur:Int,up:Int,v:ByteBuffer,vr:Int,vp:Int,w:Int,height:Int,rot:Int,size:Int,tensor:ByteBuffer,full:Boolean,horizon:Float):Boolean
+    private external fun zoomMerge(h:Long,full:FloatArray,zoom:FloatArray,candidates:Int,out:FloatArray):Int
     @Synchronized fun spatialLabels(id:Long,time:Double,values:FloatArray,n:Int,cf:Boolean):DoubleArray {requireSource(id);return spatialLabels(handle,id,time,values,n,cf)?:throw IllegalStateException(error(handle))}
     @Synchronized fun audioAllowed(id:Int,time:Double)=audioAllowed(handle,id,time)
     @Synchronized fun audioAccepted(id:Int,time:Double)=audioAccepted(handle,id,time)

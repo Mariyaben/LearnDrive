@@ -22,6 +22,8 @@ public final class CameraVisionHealthTest {
             check(CameraVisionHealth.intervalSeconds(3)+.1<RoadCoachingStatus.MAX_CAPTURE_AGE_SECONDS, "severe heat makes evidence stale");
             check(CameraVisionHealth.spatialAllowed(0)&&CameraVisionHealth.spatialAllowed(1), "cool phone loses spatial inference");
             check(!CameraVisionHealth.spatialAllowed(2)&&!CameraVisionHealth.spatialAllowed(3), "heat keeps the optional spatial model");
+            check(CameraVisionHealth.zoomAllowed(0,null)&&CameraVisionHealth.zoomAllowed(0,30.0), "cool, fast phone loses the zoom pass");
+            check(!CameraVisionHealth.zoomAllowed(1,30.0)&&!CameraVisionHealth.zoomAllowed(0,80.0), "zoom pass runs under heat or on a slow detector");
         });
         test("critical heat pauses and cooling restores analysis", () -> {
             for (int state=4;state<=6;state++) {

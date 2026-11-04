@@ -23,6 +23,11 @@ public final class CameraVisionHealth {
         return thermal < 2;
     }
 
+    /** The zoomed second detector pass doubles detector work: only with no heat and a fast detector. */
+    public static boolean zoomAllowed(int thermal, Double lastDetectorMs) {
+        return thermal <= 0 && (lastDetectorMs == null || lastDetectorMs <= 45.0);
+    }
+
     public static boolean shouldAnalyze(double now, double lastStarted, int thermal) {
         return thermal < 4 && Double.isFinite(now) && Double.isFinite(lastStarted) &&
             now >= lastStarted && now - lastStarted >= intervalSeconds(thermal);

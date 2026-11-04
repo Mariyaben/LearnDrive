@@ -1,6 +1,8 @@
 #include "learndrive/vision.hpp"
 #include <stdexcept>
 #include <array>
+#include <algorithm>
+#include <cmath>
 namespace ld {
 namespace {
 uint8_t read(const Plane& p,int x,int y) {
@@ -20,19 +22,24 @@ float sigmoidDiff(float foreground,float background) {
     return 1/(1+std::exp(std::clamp(background-foreground,-30.f,30.f)));
 }
 }
-Transform preprocess(const YuvFrame& f,int size,void* tensor,size_t capacity,int dtype,int layout,float qs,int zp,Gray* gray) {
+Transform preprocess(const YuvFrame& f,int size,void* tensor,size_t capacity,int dtype,int layout,float qs,int zp,Gray* gray,const Crop* crop) {
     if(f.width<=0||f.height<=0||size<=0||size>1024||!tensor||dtype<0||dtype>2||layout<0||layout>1||
        (f.rotation!=0&&f.rotation!=90&&f.rotation!=180&&f.rotation!=270)||
        (dtype!=0&&(!std::isfinite(qs)||qs<=0))||capacity<size_t(size)*size*3*(dtype==0?4:1)) throw std::invalid_argument("invalid preprocessing arguments");
     bool swap=f.rotation==90||f.rotation==270;
     Transform tr{swap?f.height:f.width,swap?f.width:f.height,size,0,0,0};
+    int offsetX=0,offsetY=0;
+    if(crop) {
+        if(crop->side<8||crop->x<0||crop->y<0||crop->x+crop->side>tr.width||crop->y+crop->side>tr.height)throw std::invalid_argument("invalid zoom crop");
+        offsetX=crop->x;offsetY=crop->y;tr.width=tr.height=crop->side;gray=nullptr;
+    }
     tr.scale=std::min(float(size)/tr.width,float(size)/tr.height);
     tr.padX=(size-tr.width*tr.scale)/2; tr.padY=(size-tr.height*tr.scale)/2;
     for(int y=0;y<size;++y) for(int x=0;x<size;++x) {
         float fx=(x+.5f-tr.padX)/tr.scale,fy=(y+.5f-tr.padY)/tr.scale;
         float rgb[3]={114,114,114};
         if(fx>=0&&fy>=0&&fx<tr.width&&fy<tr.height) {
-            auto xy=source(f,std::min(int(fx),tr.width-1),std::min(int(fy),tr.height-1));
+            auto xy=source(f,offsetX+std::min(int(fx),tr.width-1),offsetY+std::min(int(fy),tr.height-1));
             // BT.601 baseline. Native adapters identify full vs limited range;
             // model/device validation must also verify the color matrix.
             float Y=read(f.y,xy[0],xy[1]),U=read(f.u,xy[0]/2,xy[1]/2)-128.f,V=read(f.v,xy[0]/2,xy[1]/2)-128.f;
@@ -60,6 +67,26 @@ Transform preprocess(const YuvFrame& f,int size,void* tensor,size_t capacity,int
         }
     }
     return tr;
+}
+Crop zoomCrop(int width,int height,float horizon) {
+    if(width<=0||height<=0||!std::isfinite(horizon))throw std::invalid_argument("invalid zoom frame");
+    const int side=std::min(std::max(width,height)/2,std::min(width,height));
+    const int x=(width-side)/2;
+    const int y=std::clamp(int(std::lround(double(horizon)*height-side/2.)),0,height-side);
+    return {x,y,side};
+}
+void zoomToFull(float* v,int n,const Transform& full,const Transform& zoom,const Crop& crop) {
+    if(!v||n<=0||full.scale<=0||zoom.scale<=0)throw std::invalid_argument("invalid zoom merge");
+    const float edge=2.f; // crop pixels
+    for(int i=0;i<n;++i) {
+        float& cx=v[i];float& cy=v[n+i];float& w=v[2*n+i];float& h=v[3*n+i];
+        // Crop model pixels -> crop pixels -> upright frame pixels -> full model pixels.
+        const float x1=(cx-w/2-zoom.padX)/zoom.scale,x2=(cx+w/2-zoom.padX)/zoom.scale;
+        const float y1=(cy-h/2-zoom.padY)/zoom.scale,y2=(cy+h/2-zoom.padY)/zoom.scale;
+        if(!(x1>edge&&y1>edge&&x2<crop.side-edge&&y2<crop.side-edge))for(int c=4;c<84;++c)v[size_t(c)*n+i]=0;
+        cx=((x1+x2)/2+crop.x)*full.scale+full.padX;cy=((y1+y2)/2+crop.y)*full.scale+full.padY;
+        w=(x2-x1)*full.scale;h=(y2-y1)*full.scale;
+    }
 }
 float iou(const Box& a,const Box& b) {
     float w=std::max(0.f,std::min(a.x+a.w,b.x+b.w)-std::max(a.x,b.x));

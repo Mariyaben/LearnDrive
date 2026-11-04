@@ -26,7 +26,9 @@ static void registerUtterance(const ld::coaching::Utterance& u) {
 struct ld_engine {
     ld::SensorFusion fusion;ld::DecisionEngine decisions;ld::CameraCoach coach;ld::DrivingCoach driving;
     ld::ApproachTracker tracker;ld::perception::MetricEstimator metric;ld::cognition::EmbeddedDualBrain dualPolicy;
-    ld::Transform transform;ld::Gray gray;std::vector<ld::Box> boxes;ld_dual_scene scene{},semanticScene{};
+    ld::Transform transform;ld::Gray gray;
+    // Zoomed detector pass of the current frame.
+    ld::Transform zoomTransform;ld::Crop zoomCrop;bool zoomReady{};std::vector<ld::Box> boxes;ld_dual_scene scene{},semanticScene{};
     ld::perception::SpatialOutput spatial{};double spatialTime=-ld::infinity;
     ld::perception::CameraIntrinsics spatialCamera{};
     ld::perception::Matrix3 spatialWarp{1,0,0,0,1,0,0,0,1};
@@ -841,8 +843,36 @@ size_t ld_boxes(ld_engine* e,float* out,size_t capacity) {
 }
 int ld_preprocess(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save) {
     if(!e) return 0;
+    e->zoomReady=false;
     try {e->transform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save?&e->gray:nullptr);e->error.clear();return 1;}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
+}
+int ld_preprocess_zoom(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,float horizon) {
+    if(!e)return 0;
+    e->zoomReady=false;
+    try {
+        const bool swap=rot==90||rot==270;
+        // Same frame as the last full preparation (its transform maps the merge).
+        if(e->transform.size!=size||e->transform.width!=(swap?h:w)||e->transform.height!=(swap?w:h))throw std::invalid_argument("zoom needs the same frame prepared first");
+        e->zoomCrop=ld::zoomCrop(e->transform.width,e->transform.height,horizon);
+        e->zoomTransform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,nullptr,&e->zoomCrop);
+        e->zoomReady=true;e->error.clear();return 1;
+    }catch(const std::exception& ex){e->error=ex.what();return 0;}
+}
+int ld_zoom_merge(ld_engine* e,const float* full,const float* zoom,int candidates,float* out,size_t out_count) {
+    if(!e)return 0;
+    try {
+        if(!e->zoomReady||!full||!zoom||!out||candidates<=0||candidates>15000||out_count!=size_t(84)*candidates*2)throw std::invalid_argument("invalid zoom merge");
+        // [84,N] full + [84,N] zoom -> [84,2N] channel-first.
+        std::vector<float> mapped(zoom,zoom+size_t(84)*candidates);
+        ld::zoomToFull(mapped.data(),candidates,e->transform,e->zoomTransform,e->zoomCrop);
+        const size_t n=size_t(candidates);
+        for(size_t c=0;c<84;++c) {
+            std::copy(full+c*n,full+(c+1)*n,out+c*2*n);
+            std::copy(mapped.data()+c*n,mapped.data()+(c+1)*n,out+c*2*n+n);
+        }
+        e->error.clear();return candidates*2;
+    }catch(const std::exception& ex){e->error=ex.what();return 0;}
 }
 int ld_vision(ld_engine* e,double t,const float* d,size_t n,int c,int candidates,int cf,int normalized,const float* road,const float* lane,int w,int h,double out[3]) {
     if(!e||!out) return 0;

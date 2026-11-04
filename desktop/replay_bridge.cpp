@@ -73,6 +73,14 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
     return ld_preprocess(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
         f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1);
 }
+EXPORT int replay_prepare_zoom(Replay* r,const uint8_t* yuv,float* tensor,float horizon) {
+    const auto f=r->frame(yuv);
+    return ld_preprocess_zoom(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
+        f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,horizon);
+}
+EXPORT int replay_zoom_merge(Replay* r,const float* full,const float* zoom,int candidates,float* out,size_t count) {
+    return ld_zoom_merge(r->engine,full,zoom,candidates,out,count);
+}
 EXPORT int replay_labels(Replay* r,double time,const float* detections,size_t count,int candidates) {
     r->semanticTime=time;
     return ld_spatial_semantics_source(r->engine,r->source,time,detections,count,candidates,1,r->hazard);

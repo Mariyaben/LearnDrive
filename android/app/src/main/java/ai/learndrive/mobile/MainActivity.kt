@@ -133,6 +133,11 @@ class MainActivity : ComponentActivity() {
     private var evidenceSaved=false
     private var evidenceNotice="Preparing local diagnostics"
     private var evidenceFinishedObserved=false
+    // Opt-in instructor voice recording for the instructor benchmark (with diagnostics only).
+    private lateinit var lessonAudio:InstructorRecorder
+    private lateinit var evidenceExportAudio:Button
+    private var lessonAudioSaved=false
+    private var lessonAudioPendingUntil=Double.NEGATIVE_INFINITY
     private var frameJournalId="" // Inference executor only.
     private var frameJournalSource=-1L
     private var frameJournalTime:Double?=null
@@ -221,6 +226,24 @@ class MainActivity : ComponentActivity() {
                 main.post {evidenceBusy=false;evidenceNotice=message}
             }
         }
+    }
+    private val exportLessonAudio=registerForActivityResult(ActivityResultContracts.CreateDocument("audio/mp4")) {uri->
+        if(uri!=null) {
+            evidenceBusy=true
+            evidenceIo.execute {
+                val message=runCatching {
+                    check(journal?.isFinished!=false&&!lessonAudio.active){"Stop capture before export"}
+                    requireNotNull(contentResolver.openOutputStream(uri,"w")).use {out->lessonAudio.file.inputStream().use {it.copyTo(out)}}
+                    "Instructor audio exported. Use it with the diagnostics file in the instructor benchmark."
+                }.getOrElse {"Export failed: ${it.message}"}
+                main.post {evidenceBusy=false;evidenceNotice=message}
+            }
+        }
+    }
+    // The permission dialog pauses the activity; start once resumed, and only shortly after consent.
+    private val micPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()) {granted->
+        if(granted){lessonAudioPendingUntil=now()+30;main.post {startPendingLessonAudio()}}
+        else evidenceNotice="Microphone permission declined; instructor audio not recorded"
     }
     private val pickScript=registerForActivityResult(ActivityResultContracts.OpenDocument()) {uri->
         if(uri!=null)try {
@@ -373,10 +396,12 @@ class MainActivity : ComponentActivity() {
             if(!setup.isMonitoring()&&!knownMoving())importRoutePack.launch(arrayOf("application/zip","application/octet-stream","*/*"))
         })
         evidenceFile=java.io.File(filesDir,"diagnostics/session.jsonl")
+        lessonAudio=InstructorRecorder(this,java.io.File(filesDir,"diagnostics/instructor.m4a"))
         evidenceStatus=text(evidenceNotice,13f);controls.addView(evidenceStatus)
         evidenceStart=button("Start local diagnostics") {startEvidence()};controls.addView(evidenceStart)
-        evidenceStop=button("Stop diagnostics") {journal?.stop("user_stop")};controls.addView(evidenceStop)
+        evidenceStop=button("Stop diagnostics") {stopEvidence("user_stop")};controls.addView(evidenceStop)
         evidenceExport=button("Export diagnostics (JSONL)") {if(!evidenceBusy&&evidenceSaved&&journal?.isFinished!=false)exportEvidence.launch("LearnDrive-session.jsonl")};controls.addView(evidenceExport)
+        evidenceExportAudio=button("Export instructor audio (M4A)") {if(!evidenceBusy&&lessonAudioSaved&&journal?.isFinished!=false&&!lessonAudio.active)exportLessonAudio.launch("LearnDrive-instructor.m4a")};controls.addView(evidenceExportAudio)
         evidenceDelete=button("Delete local diagnostics") {deleteEvidence()};controls.addView(evidenceDelete)
         evidenceIo.execute {
             val metadata=runCatching {
@@ -395,11 +420,12 @@ class MainActivity : ComponentActivity() {
                     put("coaching_policy","balanced_coaching_v1");put("capability_policy","observed_spatial_budget_v1")
                     put("audio_evidence","worker submission acceptance; completion and audible onset not measured")
                     put("contains_video",false);put("contains_microphone_audio",false);put("contains_gps_coordinates",false)
+                    put("instructor_audio","separate opt-in M4A file; instructor_audio_start gives its start on this journal clock")
                     put("recording_sidecar_import_supported",false)
                 }.toString()
             }
-            val exists=evidenceFile.isFile
-            main.post {evidenceMetadata=metadata.getOrNull();evidenceSaved=exists;evidenceBusy=false
+            val exists=evidenceFile.isFile||lessonAudio.file.isFile;val audioExists=lessonAudio.file.isFile
+            main.post {evidenceMetadata=metadata.getOrNull();evidenceSaved=exists;lessonAudioSaved=audioExists;evidenceBusy=false
                 evidenceNotice=if(exists)"Saved diagnostics available; export or delete before a new capture" else
                     if(metadata.isSuccess)"Diagnostics off · one local file, up to 8 MiB · no video/audio/coordinates" else "Diagnostic metadata unavailable"}
         }
@@ -484,6 +510,7 @@ class MainActivity : ComponentActivity() {
         deskControls.addView(button("Normalize phone plane · level ground · hold still 5 s") {normalizePhone();status.text="Rear camera forward; keep mount stationary on level ground"})
         controls.addView(button("Test audio preemption") {audio.cancel();audio.submit(1);main.postDelayed({audio.submit(4)},250)})
         controls.addView(text("Camera speaks when it starts, then gives guidance for visible road users and large obstacles in the path ahead. This guidance works without calibration, GPS or TTI. Motion evidence controls imminent-collision warnings. Use Test voice to check sound.",13f))
+        controls.addView(text("Junction coaching without a destination uses road data © OpenStreetMap contributors (ODbL), fetched online for a coarse area around you from the public Overpass API; your exact position is not sent.",13f))
         deskControls.visibility=View.GONE
         setContentView(outer)
         var previousKeyboard=false
@@ -612,38 +639,67 @@ class MainActivity : ComponentActivity() {
         if(evidenceBusy||evidenceSaved||journal?.isFinished==false||knownMoving()||evidenceMetadata==null)return
         android.app.AlertDialog.Builder(this).setTitle("Record local diagnostic evidence?")
             .setMessage("Stores device/model versions, frame geometry, sampled detections and motion estimates, decisions and accepted audio submissions. No images, video, microphone audio or GPS coordinates. One file up to 8 MiB; stops on backgrounding. Export or delete it before another capture.")
-            .setNegativeButton("Back",null).setPositiveButton("Start diagnostics") {_,_->
-                if(resumed&&!evidenceBusy&&!evidenceSaved&&!knownMoving()&&journal?.isFinished!=false) {
-                    val metadata=org.json.JSONObject(evidenceMetadata!!).apply {put("started_utc",java.time.Instant.now().toString());put("started_monotonic",now())}.toString()
-                    evidenceBusy=true;evidenceStartPending=true;evidenceFinishedObserved=false
-                    val request=evidenceRequest.incrementAndGet()
-                    rules.post {
-                        var startError:String?=null
-                        synchronized(evidenceLock) {
-                            if(resumed&&request==evidenceRequest.get()) {
-                                runCatching {
-                                    journal=SessionJournal(evidenceFile,metadata);traceKey="";traceAt=0.0
-                                    val config=options
-                                    val source=when(config.mode){"Desk"->CaptureSource.SIMULATION;"MP4"->CaptureSource.RECORDING;else->if(config.filmedVideo)CaptureSource.SCREEN else CaptureSource.CAMERA}
-                                    journal?.offer(GuidanceTrace.source(core.sourceId,source,now()))
-                                }.onFailure {startError="Could not start diagnostics: ${it.message}"}
-                            }
-                        }
-                        main.post {if(request==evidenceRequest.get()){evidenceStartPending=false;evidenceBusy=false;evidenceNotice=startError?:"Diagnostics enabled for this foreground interval"}}
-                    }
-                }
+            .setNegativeButton("Back",null)
+            .setNeutralButton("With instructor audio") {_,_->confirmLessonAudio()}
+            .setPositiveButton("Start diagnostics") {_,_->beginEvidence(false)}.show()
+    }
+    private fun confirmLessonAudio() {
+        android.app.AlertDialog.Builder(this).setTitle("Also record your instructor's voice?")
+            .setMessage("For the instructor benchmark: the microphone records what your driving instructor says during this lesson, so the app's instructions can be compared with theirs afterwards. It also records the app's voice and anything else said in the car. Everyone in the car must agree. The audio stays on this phone (up to about 3.5 hours) until you export or delete it with the diagnostics, and recording stops when the app leaves the screen.")
+            .setNegativeButton("Back",null).setPositiveButton("Everyone agrees") {_,_->
+                if(checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)==android.content.pm.PackageManager.PERMISSION_GRANTED)beginEvidence(true)
+                else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
             }.show()
+    }
+    private fun startPendingLessonAudio() {
+        if(resumed&&now()<=lessonAudioPendingUntil){lessonAudioPendingUntil=Double.NEGATIVE_INFINITY;beginEvidence(true)}
+    }
+    private fun beginEvidence(withAudio:Boolean) {
+        if(!resumed||evidenceBusy||evidenceSaved||knownMoving()||journal?.isFinished==false||evidenceMetadata==null)return
+        val metadata=org.json.JSONObject(evidenceMetadata!!).apply {put("started_utc",java.time.Instant.now().toString());put("started_monotonic",now());put("instructor_audio_requested",withAudio)}.toString()
+        evidenceBusy=true;evidenceStartPending=true;evidenceFinishedObserved=false
+        val request=evidenceRequest.incrementAndGet()
+        rules.post {
+            var startError:String?=null;var audioError:String?=null
+            synchronized(evidenceLock) {
+                if(resumed&&request==evidenceRequest.get()) {
+                    runCatching {
+                        journal=SessionJournal(evidenceFile,metadata);traceKey="";traceAt=0.0
+                        val config=options
+                        val source=when(config.mode){"Desk"->CaptureSource.SIMULATION;"MP4"->CaptureSource.RECORDING;else->if(config.filmedVideo)CaptureSource.SCREEN else CaptureSource.CAMERA}
+                        journal?.offer(GuidanceTrace.source(core.sourceId,source,now()))
+                    }.onFailure {startError="Could not start diagnostics: ${it.message}"}
+                    // Same clock as the journal: the benchmark aligns the instructor's words to the app's instructions.
+                    if(withAudio&&startError==null)runCatching {
+                        val start=lessonAudio.start {now()}
+                        journal?.offer(GuidanceTrace.instructorAudioStart(start.time,start.uncertaintySeconds))
+                    }.onFailure {audioError="Instructor audio not recorded: ${it.message}"}
+                }
+            }
+            main.post {if(request==evidenceRequest.get()){evidenceStartPending=false;evidenceBusy=false
+                evidenceNotice=startError?:audioError?:if(withAudio)"Diagnostics and instructor audio recording" else "Diagnostics enabled for this foreground interval"}}
+        }
+    }
+    private fun stopLessonAudio(reason:String) {
+        synchronized(evidenceLock) {
+            if(!::lessonAudio.isInitialized||!lessonAudio.active)return
+            val limit=lessonAudio.sizeLimitReached;val kept=lessonAudio.stop()
+            journal?.offer(GuidanceTrace.instructorAudioStop(now(),if(limit)"size_limit" else reason,kept))
+        }
+    }
+    private fun stopEvidence(reason:String) {
+        synchronized(evidenceLock){stopLessonAudio(reason);journal?.stop(reason)}
     }
     private fun deleteEvidence() {
         if(evidenceBusy||journal?.isFinished==false||knownMoving())return
         android.app.AlertDialog.Builder(this).setTitle("Delete local diagnostics?")
-            .setMessage("Deletes the app's saved diagnostic file. Exported copies remain where you saved them.")
+            .setMessage("Deletes the app's saved diagnostic file and any instructor audio. Exported copies remain where you saved them.")
             .setNegativeButton("Keep",null).setPositiveButton("Delete") {_,_->
                 if(evidenceBusy||journal?.isFinished==false)return@setPositiveButton
                 evidenceBusy=true
                 evidenceIo.execute {
-                    val deleted=!evidenceFile.exists()||evidenceFile.delete()
-                    main.post {evidenceBusy=false;if(deleted){journal=null;evidenceSaved=false;evidenceNotice="Local diagnostics deleted"}else evidenceNotice="Could not delete local diagnostics"}
+                    val deleted=(!evidenceFile.exists()||evidenceFile.delete())&&(!lessonAudio.file.exists()||lessonAudio.file.delete())
+                    main.post {evidenceBusy=false;if(deleted){journal=null;evidenceSaved=false;lessonAudioSaved=false;evidenceNotice="Local diagnostics deleted"}else evidenceNotice="Could not delete local diagnostics"}
                 }
             }.show()
     }
@@ -657,14 +713,20 @@ class MainActivity : ComponentActivity() {
     }
     private fun updateEvidenceUi() {
         val target=journal
+        // Instructor audio never outlives its diagnostics (the alignment lives in the journal).
+        if(lessonAudio.active&&(target?.isAccepting!=true))stopLessonAudio("diagnostics_stopped")
+        else if(lessonAudio.active&&lessonAudio.sizeLimitReached)stopLessonAudio("size_limit")
         if(target?.isFinished==true&&!evidenceFinishedObserved&&!evidenceBusy) {
             evidenceFinishedObserved=true;evidenceBusy=true
-            evidenceIo.execute {val exists=evidenceFile.isFile;main.post {evidenceSaved=exists;evidenceBusy=false;evidenceNotice=if(exists)"Saved locally; export or delete before a new capture" else "No diagnostic file was saved"}}
+            evidenceIo.execute {val exists=evidenceFile.isFile;val audio=lessonAudio.file.isFile
+                main.post {evidenceSaved=exists||audio;lessonAudioSaved=audio;evidenceBusy=false;evidenceNotice=if(exists)"Saved locally; export or delete before a new capture" else "No diagnostic file was saved"}}
         }
         evidenceStatus.text=if(target!=null)"${target.status()}\n$evidenceNotice" else evidenceNotice
         evidenceStart.isEnabled=!evidenceBusy&&!evidenceSaved&&target?.isFinished!=false&&evidenceMetadata!=null&&!knownMoving()
         evidenceStop.isEnabled=target?.isAccepting==true
         evidenceExport.isEnabled=!evidenceBusy&&evidenceSaved&&target?.isFinished!=false
+        evidenceExportAudio.isEnabled=!evidenceBusy&&lessonAudioSaved&&target?.isFinished!=false&&!lessonAudio.active
+        evidenceExportAudio.visibility=if(lessonAudioSaved||lessonAudio.active)View.VISIBLE else View.GONE
         evidenceDelete.isEnabled=!evidenceBusy&&evidenceSaved&&target?.isFinished!=false&&!knownMoving()
     }
     private fun knownMoving():Boolean {
@@ -1191,7 +1253,7 @@ class MainActivity : ComponentActivity() {
             if(!decisionTraced)emitDecision()
             val acceptedAt=delivery.acceptedAt
             if(road&&setup.isMonitoring())practiceReview.accepted(acceptedAt,decision.origin,core.promptText(decision.prompt),delivery.voiceSubmitted)
-            val presented=GuidanceTrace.coachingAccepted(decision,acceptedAt,delivery.voiceSubmitted)
+            val presented=GuidanceTrace.coachingAccepted(decision,acceptedAt,delivery.voiceSubmitted,core.promptText(decision.prompt))
             Log.i("LearnDriveGuidance",presented);journal?.offer(presented)
             if(delivery.voiceSubmitted) {
                 val trace=GuidanceTrace.accepted(decision,acceptedAt);Log.i("LearnDriveGuidance",trace);journal?.offer(trace)
@@ -1376,10 +1438,10 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onStart(){super.onStart();routeMap.onStart();googleNavigation?.onStart()}
-    override fun onResume() {super.onResume();routeMap.onResume();googleNavigation?.onResume();resumed=true;loadOfflineRoute();if(::sensors.isInitialized)sensors.start();if(mode=="Camera"){inference.execute {visionFailure=null};startCamera()};main.post(tick);rules.post(ruleTick)}
-    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();synchronized(evidenceLock){journal?.stop("backgrounded")};if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};finishPractice(true);setup.stop();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
+    override fun onResume() {super.onResume();routeMap.onResume();googleNavigation?.onResume();resumed=true;loadOfflineRoute();if(::sensors.isInitialized)sensors.start();if(mode=="Camera"){inference.execute {visionFailure=null};startCamera()};main.post(tick);rules.post(ruleTick);main.post {startPendingLessonAudio()}}
+    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();stopEvidence("backgrounded");if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};finishPractice(true);setup.stop();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);journal?.stop("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }

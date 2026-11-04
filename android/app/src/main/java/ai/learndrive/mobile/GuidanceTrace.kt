@@ -49,11 +49,21 @@ object GuidanceTrace {
         put("settings_revision",d.settingsRevision);put("voice_submitted",true)
         put("audible_playback_confirmed",false)
     }.toString()
-    fun coachingAccepted(d:GuidanceDecision,time:Double,voiceSubmitted:Boolean):String=JSONObject().apply {
+    fun coachingAccepted(d:GuidanceDecision,time:Double,voiceSubmitted:Boolean,text:String?=null):String=JSONObject().apply {
         put("schema_version",1);put("event","coaching_accepted");put("time",time)
         put("source_id",d.sourceId);put("sequence",d.sequence);put("prompt",d.prompt)
         put("settings_revision",d.settingsRevision);put("voice_submitted",voiceSubmitted)
         put("audible_playback_confirmed",false)
+        // The instruction as composed (composed utterances have no fixed prompt text).
+        if(text!=null)put("text",text)
+    }.toString()
+    fun instructorAudioStart(time:Double,uncertaintySeconds:Double):String=JSONObject().apply {
+        put("schema_version",1);put("event","instructor_audio_start");put("time",time)
+        put("start_uncertainty_seconds",uncertaintySeconds);put("file","instructor.m4a")
+        put("format","AAC mono 16 kHz");put("consent","everyone in the car agreed in the app dialog")
+    }.toString()
+    fun instructorAudioStop(time:Double,reason:String,kept:Boolean):String=JSONObject().apply {
+        put("schema_version",1);put("event","instructor_audio_stop");put("time",time);put("reason",reason);put("file_kept",kept)
     }.toString()
     private fun number(value:Double?)=value?.takeIf {it.isFinite()}?:JSONObject.NULL
     private fun navigationFields(v:DoubleArray)=JSONObject().apply {
