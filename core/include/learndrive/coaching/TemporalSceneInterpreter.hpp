@@ -11,7 +11,7 @@ class EventLedger;
 enum class EncounterPhase : int { Observed, Continuing, PotentiallyRelevant, Changing, TemporarilyLost, Resolved, Expired };
 enum class ResponseEvidence : int { Uncertain, Observed, NotObserved };
 enum class SilenceReason : int { None, AlreadyInformed, ResponseObserved, LowValue, UncertainEvidence, ManeuverWorkload, Resolved, Unchanged };
-enum class InstructionMeaning : int { None, RoadUserSpace, FollowingGap, TurnPreparation, BendPreparation, GradePreparation, VehicleShift, Critical, ApproachPreparation };
+enum class InstructionMeaning : int { None, RoadUserSpace, FollowingGap, TurnPreparation, BendPreparation, GradePreparation, VehicleShift, Critical, ApproachPreparation, RoadUserControl, VehicleControl, JunctionEntry, RoadUserYield };
 struct EncounterEpisode {
     uint64_t id{},scope{};
     int space{},category=-1;

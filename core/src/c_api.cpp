@@ -131,25 +131,36 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     }
     for(const auto& b:e.boxes) {
         if(w.actorCount==w.actors.size())break;
+        // The learner's own bonnet/dashboard, detected as a vehicle, is not a road user.
+        if(RiskCoach::egoVehicle(b.x,b.y,b.w,b.h))continue;
         const double center=b.x+b.w*.5,foot=b.y+b.h;
         const bool relevant=foot>.5&&center>.18&&center<.82;
         auto& a=w.actors[w.actorCount++];a={};a.identity={IdentitySpace::Optical,uint64_t(b.id),0};a.captureTime=e.visionTime;
-        a.confidence=std::isfinite(b.tti)?std::min(b.confidence,double(b.score)):b.score;a.tti=b.tti;a.category=b.category;
+        // Presence confidence is the detector score. The optical-TTI estimate's
+        // own confidence only qualifies a closing claim; a weak TTI estimate
+        // must not erase a confidently detected road user.
+        a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;
+        a.confidence=a.opticalClosing?std::min(b.confidence,double(b.score)):b.score;a.tti=b.tti;a.category=b.category;
         a.relevant=relevant;a.inPath=false;
         if(ld::cognition::fresh(now,e.semanticScene.capture_time))for(size_t i=0;i<std::min(e.semanticScene.count,size_t(64));++i)
             if(e.semanticScene.hazards[i].id==uint64_t(b.id)){a.inPath=e.semanticScene.hazards[i].in_trajectory!=0;break;}
-        a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;a.leadSupported=ld::cognition::fresh(now,b.leadTime);
+        a.leadSupported=ld::cognition::fresh(now,b.leadTime);
         a.x=b.x;a.y=b.y;a.w=b.w;a.h=b.h;
     }
     auto attention=[&](uint64_t id) {
         if(!id||w.actorCount>=w.actors.size()||!e.coach.actorRelevant(int(id),now))return;
         for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==Identity{IdentitySpace::Attention,id,0})return;
-        ld::Box match;if(!e.coach.actorBox(int(id),now,match))return;
-        ActorObservation a;a.identity={IdentitySpace::Attention,id,0};a.captureTime=e.visionTime;a.relevant=true;a.category=match.category;
-        a.x=match.x;a.y=match.y;a.w=match.w;a.h=match.h;
-        for(const auto& b:e.boxes)if(b.category==match.category&&ld::iou(match,b)>.5f) {
-            a.confidence=std::isfinite(b.tti)?std::min(double(b.score),b.confidence):b.score;a.tti=b.tti;
-            a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;a.leadSupported=ld::cognition::fresh(now,b.leadTime);break;
+        ld::Box match;if(!e.coach.actorBox(int(id),now,match)||RiskCoach::egoVehicle(match.x,match.y,match.w,match.h))return;
+        // The attention track describes the coach's last processed capture, which
+        // can precede a newer published frame until the next rule tick. Stamp it
+        // with its own capture and detector score; never pair an old box with
+        // the newer frame's clock or boxes.
+        const double observed=e.coach.lastCapture();
+        ActorObservation a;a.identity={IdentitySpace::Attention,id,0};a.captureTime=observed;a.relevant=true;a.category=match.category;
+        a.x=match.x;a.y=match.y;a.w=match.w;a.h=match.h;a.confidence=match.score;
+        if(observed==e.visionTime)for(const auto& b:e.boxes)if(b.category==match.category&&ld::iou(match,b)>.5f) {
+            a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;
+            a.confidence=a.opticalClosing?std::min(double(b.score),b.confidence):b.score;a.tti=b.tti;a.leadSupported=ld::cognition::fresh(now,b.leadTime);break;
         }
         w.actors[w.actorCount++]=a;
     };
@@ -628,6 +639,7 @@ const char* ld_coaching_context_json(ld_engine* e) {
 }
 void ld_coaching_junction_lesson(ld_engine* e,int enabled){if(e)e->coaching.enableJunctionLesson(enabled!=0);}
 void ld_coaching_automatic(ld_engine* e,int enabled){if(e)e->coaching.enableAutomaticCoaching(enabled!=0);}
+void ld_coaching_task_scheduling(ld_engine* e,int enabled){if(e)e->coaching.enableTaskScheduling(enabled!=0);}
 const char* ld_coaching_drive_json(ld_engine* e){
     if(!e)return "{}";try{e->intelligenceContext=e->coaching.drive().json(e->coaching.task());return e->intelligenceContext.c_str();}catch(...){return "{}";}
 }
@@ -637,9 +649,12 @@ const char* ld_coaching_task_json(ld_engine* e){
 int ld_coaching_continuation_valid(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision){
     return e&&e->coaching.continuationValid(sequence,prompt,coachingCurrent(*e,now),now,revision);
 }
+const char* ld_coaching_continuation_reason(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision){
+    return e?e->coaching.continuationReason(sequence,prompt,coachingCurrent(*e,now),now,revision):"ENGINE_UNAVAILABLE";
+}
 int ld_coaching_task_speech_allowed(ld_engine* e){
     if(!e)return 0;using P=ld::coaching::TaskPhase;const auto phase=e->coaching.task().progress().phase;
-    return phase==P::Preparing||phase==P::AwaitingDelivery||phase==P::ObservingResponse||phase==P::Approach;
+    return phase==P::Preparing||phase==P::AwaitingDelivery||phase==P::ObservingResponse||phase==P::Approach||phase==P::Entry;
 }
 int ld_coaching_task_execution_quiet(ld_engine* e){
     if(!e)return 0;const auto& s=e->coaching.task().progress();

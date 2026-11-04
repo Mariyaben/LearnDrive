@@ -18,6 +18,8 @@ public:
     void selected(const Candidate&,double now) noexcept;
     void delivered(const Candidate&,double now) noexcept;
     std::string json(const TaskCoach&) const;
+    // A measured, developing closing conflict for the candidate's own actor.
+    static bool developingConflict(const Candidate&,const WorldState&) noexcept;
 private:
     bool enabled_{};
     DriveTask task_=DriveTask::Observing;

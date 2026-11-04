@@ -43,8 +43,27 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     pedestrianSpace=44, riderSpace=45, vehicleSpace=46,
     mapLeftBend=47,mapRightBend=48,mapJunction=49,mapLeftTurn=50,mapRightTurn=51,
     mapLeftTurnNear=52,mapRightTurnNear=53,mapLeftTurn50=54,mapRightTurn50=55,
-    junctionPlanLeft=56,junctionPlanRight=57,junctionPlan=58,junctionApproach=59 };
-constexpr int promptCount=59;
+    junctionPlanLeft=56,junctionPlanRight=57,junctionPlan=58,junctionApproach=59,
+    // Instructor-style control instructions. They tell the learner what to do
+    // with the controls for the measured situation; they never claim to know the
+    // current gear/pedal state and never grant permission to proceed.
+    junctionBrakeGearDown=60,junctionGearDown=61,junctionEntry=62,turnExit=63,
+    personEaseCover=64,riderEaseCover=65,vehicleEaseGap=66,brakeReadyStop=67,clutchHoldBrake=68,
+    gearUpSecond=69,gearUpThird=70,gearUpFourth=71,gearUpFifth=72,gearDownSecond=73,gearDownThird=74,
+    stopClutch=75,moveOffPrep=76,downhillThird=77,downhillSecond=78,uphillSecond=79,uphillThird=80,
+    // Risk-reasoned road-user instructions (origin 7): what to do about the most
+    // dangerous road user, from its tracked motion. Never an all-clear or "go".
+    vehicleCrossingWait=81,personCrossingStop=82,oncomingKeepLeft=83,personLeftSpace=84,personRightSpace=85,crossedLookAgain=86 };
+constexpr int promptCount=86;
+inline bool isRiskPrompt(Prompt p){const int i=int(p);return i>=81&&i<=86;}
+// Junction lesson steps (origin 5 task): planning, approach, entry.
+inline bool isLessonPrompt(Prompt p){const int i=int(p);return (i>=56&&i<=62);}
+// Speed-conditioned actions for a camera road user (origin 4).
+inline bool isActorActionPrompt(Prompt p){const int i=int(p);return i>=64&&i<=68;}
+// Prompts the risk coach (origin 7) may use.
+inline bool riskMayUse(Prompt p){return isRiskPrompt(p)||isActorActionPrompt(p)||p==Prompt::pedestrianSpace||p==Prompt::riderSpace||p==Prompt::vehicleSpace;}
+// Vehicle-control coaching from measured speed/slope/route (origin 6).
+inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80);}
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -79,7 +98,16 @@ inline int priority(Prompt p) {
     case Prompt::steepUp:case Prompt::steepDownGear:case Prompt::steepDown:case Prompt::verySteepUp:case Prompt::verySteepDown:
     case Prompt::prepareBend:case Prompt::mapLeftBend:case Prompt::mapRightBend:case Prompt::mapJunction:case Prompt::mapLeftTurn:case Prompt::mapRightTurn:
     case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:
-    case Prompt::junctionPlanLeft:case Prompt::junctionPlanRight:case Prompt::junctionPlan:case Prompt::junctionApproach:return 2;
+    case Prompt::junctionPlanLeft:case Prompt::junctionPlanRight:case Prompt::junctionPlan:case Prompt::junctionApproach:
+    case Prompt::junctionBrakeGearDown:case Prompt::junctionGearDown:case Prompt::junctionEntry:case Prompt::turnExit:
+    case Prompt::personEaseCover:case Prompt::riderEaseCover:case Prompt::vehicleEaseGap:
+    case Prompt::gearUpSecond:case Prompt::gearUpThird:case Prompt::gearUpFourth:case Prompt::gearUpFifth:
+    case Prompt::gearDownSecond:case Prompt::gearDownThird:case Prompt::stopClutch:case Prompt::moveOffPrep:
+    case Prompt::downhillThird:case Prompt::downhillSecond:case Prompt::uphillSecond:case Prompt::uphillThird:return 2;
+    case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::oncomingKeepLeft:return 4;
+    case Prompt::vehicleCrossingWait:case Prompt::personCrossingStop:return 5;
+    case Prompt::personLeftSpace:case Prompt::personRightSpace:return 3;
+    case Prompt::crossedLookAgain:return 2;
     case Prompt::ease:case Prompt::close:case Prompt::closeGear:case Prompt::holdLaneDistance:case Prompt::keepSafeGap:
     case Prompt::slowSmoothly:case Prompt::watchPedestrians:return 3;
     case Prompt::brake:return 4;
@@ -90,9 +118,36 @@ inline int priority(Prompt p) {
 }
 inline const char* promptText(Prompt p) {
     switch(p) {
-    case Prompt::junctionPlanLeft:return "For the left turn: check mirrors, plan your signal, and prepare your road position";
-    case Prompt::junctionPlanRight:return "For the right turn: check mirrors, plan your signal, and prepare your road position";
-    case Prompt::junctionPlan:return "For this junction: check mirrors and prepare your approach";
+    case Prompt::junctionPlanLeft:return "Left turn ahead. Check your mirrors and signal left";
+    case Prompt::junctionPlanRight:return "Right turn ahead. Check your mirrors and signal right";
+    case Prompt::junctionPlan:return "Junction ahead. Check your mirrors and ease off the accelerator";
+    case Prompt::junctionBrakeGearDown:return "Ease off the accelerator and brake gently. Change down to second as you slow";
+    case Prompt::junctionGearDown:return "Change down to second gear and cover the brake";
+    case Prompt::junctionEntry:return "Clutch down if you need to stop. Look both ways before you turn";
+    case Prompt::turnExit:return "Straighten the wheel and add gentle accelerator";
+    case Prompt::personEaseCover:return "Person ahead. Ease off the accelerator and cover the brake";
+    case Prompt::riderEaseCover:return "Two-wheeler ahead. Ease off the accelerator and cover the brake";
+    case Prompt::vehicleEaseGap:return "Vehicle ahead. Ease off and keep a safe gap";
+    case Prompt::brakeReadyStop:return "Brake gently and be ready to stop";
+    case Prompt::clutchHoldBrake:return "Clutch down and hold the brake";
+    case Prompt::gearUpSecond:return "Change up to second gear";
+    case Prompt::gearUpThird:return "Change up to third gear";
+    case Prompt::gearUpFourth:return "Change up to fourth gear";
+    case Prompt::gearUpFifth:return "Change up to fifth gear";
+    case Prompt::gearDownSecond:return "Change down to second gear";
+    case Prompt::gearDownThird:return "Change down to third gear";
+    case Prompt::stopClutch:return "Clutch down as you stop";
+    case Prompt::moveOffPrep:return "When it is clear: first gear, check mirrors and signal, then release the clutch slowly";
+    case Prompt::downhillThird:return "Downhill. Change down to third and control your speed with the brake";
+    case Prompt::downhillSecond:return "Steep downhill. Change down to second and control your speed with the brake";
+    case Prompt::uphillSecond:return "Uphill. Change down to second and keep a steady accelerator";
+    case Prompt::uphillThird:return "Uphill. Change down to third and keep a steady accelerator";
+    case Prompt::vehicleCrossingWait:return "Vehicle crossing ahead. Brake and wait";
+    case Prompt::personCrossingStop:return "Person crossing ahead. Stop and let them cross";
+    case Prompt::oncomingKeepLeft:return "Oncoming vehicle. Keep left and ease off";
+    case Prompt::personLeftSpace:return "Person on the left. Ease off and give them space";
+    case Prompt::personRightSpace:return "Person on the right. Ease off and give them space";
+    case Prompt::crossedLookAgain:return "It has passed. Look both ways again before you move off";
     case Prompt::junctionApproach:return "Set a suitable approach speed. Prepare to give way";
     case Prompt::hill: return "Uphill. Lower gear if needed";
     case Prompt::ease: return "Ease off accelerator";
@@ -153,8 +208,10 @@ inline const char* promptText(Prompt p) {
     }
 }
 inline bool mayInterrupt(Prompt next,Prompt current) {
-    const bool map=int(next)>=int(Prompt::mapLeftBend)&&int(next)<=int(Prompt::junctionApproach);
-    if(map&&current!=Prompt::none)return false; // Routine map cues never interrupt speech.
+    // Routine map, lesson and vehicle-control cues never interrupt speech.
+    const bool map=(int(next)>=int(Prompt::mapLeftBend)&&int(next)<=int(Prompt::turnExit))||(isControlPrompt(next))||
+        next==Prompt::personEaseCover||next==Prompt::riderEaseCover||next==Prompt::vehicleEaseGap||next==Prompt::crossedLookAgain;
+    if(map&&current!=Prompt::none)return false;
     if(priority(next)>priority(current))return true;
     const bool image=current==Prompt::imageClose||current==Prompt::imageCloseGear||current==Prompt::closeQuiet||current==Prompt::closeGearQuiet;
     const bool guidance=slopePromptBand(next)!=0||next==Prompt::shiftUp||next==Prompt::shiftDown||

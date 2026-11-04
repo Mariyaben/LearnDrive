@@ -2,6 +2,7 @@
 // as the mobile apps. Camera calibration and telemetry must be supplied explicitly.
 #include "learndrive/c_api.h"
 #include "learndrive/perception/supercombo.hpp"
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <stdexcept>
@@ -29,6 +30,7 @@ struct Replay {
     bool selectedWarning{},playingWarning{};
     uint64_t playingSequence{};
     bool spatialEnabled=false;
+    uint64_t source=1;
     Replay(const char* model,int w,int h,const double* geometry):width(w),height(h) {
         if(!engine)throw std::runtime_error("cannot allocate replay engine");
         if(!ld_guidance_begin(engine,1,LD_SOURCE_RECORDING,0))throw std::runtime_error("cannot start replay source");
@@ -64,7 +66,7 @@ EXPORT int replay_frame(Replay* r,const uint8_t* yuv,double time,float* out) {
 }
 EXPORT int replay_cached_frame(Replay* r,double time,const float* out) {
     if(!r->spatialEnabled)return 0;
-    std::copy_n(out,6472,r->output.data());return ld_spatial_publish_source(r->engine,1,time,out,6472);
+    std::copy_n(out,6472,r->output.data());return ld_spatial_publish_source(r->engine,r->source,time,out,6472);
 }
 EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
     const auto f=r->frame(yuv);
@@ -73,7 +75,7 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
 }
 EXPORT int replay_labels(Replay* r,double time,const float* detections,size_t count,int candidates) {
     r->semanticTime=time;
-    return ld_spatial_semantics_source(r->engine,1,time,detections,count,candidates,1,r->hazard);
+    return ld_spatial_semantics_source(r->engine,r->source,time,detections,count,candidates,1,r->hazard);
 }
 EXPORT size_t replay_boxes(Replay* r,float* out,size_t n){return ld_boxes(r->engine,out,n);}
 EXPORT int replay_road(Replay* r,double* out){return ld_road_shape(r->engine,out,13);}
@@ -81,7 +83,7 @@ EXPORT int replay_road(Replay* r,double* out){return ld_road_shape(r->engine,out
 // audio-gate permission, interrupt permission. No sensor state is fabricated.
 EXPORT void replay_tick(Replay* r,double time,double speed,int speedValid,int playing,double* out) {
     ld_telemetry t{time,speed,0,std::numeric_limits<double>::quiet_NaN(),0,0,speedValid,0,0,0,0};
-    ld_guidance_request q{};q.source_id=1;q.telemetry=t;q.now=time;q.active=1;q.audio_ready=1;q.manual=1;
+    ld_guidance_request q{};q.source_id=r->source;q.telemetry=t;q.now=time;q.active=1;q.audio_ready=1;q.manual=1;
     q.allow_emergency_commands=r->emergencies;
     ld_guidance_decide(r->engine,&q,&r->guidance);const auto& d=r->guidance;const int selected=d.prompt;
     const bool emergency=d.eligible&&d.origin==LD_GUIDANCE_REFLEX&&(selected==4||selected==42||selected==43);
@@ -135,3 +137,32 @@ EXPORT int replay_prompt_count(){return ld_prompt_count();}
 EXPORT const char* replay_reason(Replay* r,int which) {
     return which==0?ld_dual_policy_reason(r->engine):which==1?ld_camera_reason(r->engine):ld_driving_reason(r->engine);
 }
+
+// Live-navigation replay (contract v2 extension). Restarts the source as a live
+// camera so a navigation feed is admissible. The feed and GPS fixes supplied here
+// are SYNTHETIC overlays on recorded video, never measured route evidence.
+EXPORT int replay_live_navigation(Replay* r) {
+    if(!r||r->source!=1||!ld_guidance_begin(r->engine,2,LD_SOURCE_CAMERA,0))return 0;
+    r->source=2;return 1;
+}
+EXPORT int replay_navigation(Replay* r,double time,uint64_t sequence,int step,int maneuver,double remainingM,double remainingS,double speedKmh) {
+    if(!r||r->source!=2)return 0;
+    ld_navigation_turn turn{1,1,1,sequence,time,LD_TURN_NAVIGATING,step,maneuver,remainingM,remainingS};
+    const int t=ld_navigation_turn_update(r->engine,&turn);
+    const int f=ld_navigation_fix(r->engine,r->source,time,10,76,3,speedKmh,.5,std::isfinite(speedKmh),0,1);
+    return t&&f;
+}
+EXPORT void replay_navigation_unavailable(Replay* r){if(r)ld_navigation_turn_unavailable(r->engine);}
+EXPORT void replay_coaching_automatic(Replay* r,int automatic,int scheduling) {
+    if(!r)return;ld_coaching_automatic(r->engine,automatic);ld_coaching_task_scheduling(r->engine,scheduling);
+}
+// Simulated playback continuation; an invalid context interrupts the clip.
+EXPORT int replay_coaching_continue(Replay* r,int id,double time) {
+    if(!r||!r->coachingRevision||!r->playingSequence)return 0;
+    if(ld_coaching_continuation_valid(r->engine,r->playingSequence,id,time,r->coachingRevision))return 1;
+    ld_coaching_delivery_event(r->engine,r->playingSequence,id,time,4);return 0;
+}
+EXPORT const char* replay_coaching_continue_reason(Replay* r,int id,double time){
+    return r&&r->playingSequence?ld_coaching_continuation_reason(r->engine,r->playingSequence,id,time,r->coachingRevision):"NOT_PLAYING";
+}
+EXPORT const char* replay_coaching_drive(Replay* r){return r?ld_coaching_drive_json(r->engine):"{}";}

@@ -4,6 +4,8 @@
 #include "learndrive/coaching/TemporalSceneInterpreter.hpp"
 #include "learndrive/coaching/TaskCoach.hpp"
 #include "learndrive/coaching/DriveCoach.hpp"
+#include "learndrive/coaching/ControlCoach.hpp"
+#include "learndrive/coaching/RiskCoach.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -11,7 +13,7 @@
 namespace ld::coaching {
 enum class Mode : int { SILENCE=0, COACH=1, WARN=2, DEFER=3 };
 enum class Profile : int { Minimal=0, Balanced=1, Guided=2 };
-enum class IdentitySpace : int { None=0, Attention=1, Optical=2, Spatial=3, Route=4, Slope=5, Bend=6, Engine=7, Tactical=8 };
+enum class IdentitySpace : int { None=0, Attention=1, Optical=2, Spatial=3, Route=4, Slope=5, Bend=6, Engine=7, Tactical=8, Control=9 };
 enum class EventKind : int { None=0, Attention=1, Approach=2, Critical=3, Route=4, Slope=5, Bend=6, Shift=7, Status=8 };
 enum class EventState : int { Candidate=0, Active=1, Deferred=2, Accepted=3, Resolved=4, Expired=5 };
 enum class SpeedTrend : int { Unknown=0, Steady=1, Increasing=2, Decreasing=3 };
@@ -145,7 +147,8 @@ private:
 };
 class SafetyValidator {
 public:
-    Block validate(const Candidate&,const WorldState&,double now) const noexcept;
+    // started: speech already playing; lesson onset windows are not re-applied.
+    Block validate(const Candidate&,const WorldState&,double now,bool started=false) const noexcept;
     static Prompt neutral(Prompt,bool mechanicalMeasured) noexcept;
 };
 struct Ticket {
@@ -162,7 +165,7 @@ struct Decision {
     Ticket ticket{};
     bool eligible{};
 };
-struct DeliveryStats {uint64_t logical{},voiceSubmitted{},playbackOnsets{},onsetRejected{},selectionRejected{},duplicates{},deferred{},expired{},submissionFailed{};};
+struct DeliveryStats {uint64_t logical{},voiceSubmitted{},playbackOnsets{},onsetRejected{},selectionRejected{},duplicates{},deferred{},expired{},submissionFailed{},reservedForTask{};};
 class CoachingEngine {
 public:
     bool configure(int profile,bool voice,uint64_t revision) noexcept;
@@ -178,6 +181,8 @@ public:
     bool playbackValid(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
     bool playbackStarted(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) noexcept;
     bool continuationValid(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
+    // Diagnostic: why started speech may not continue ("OK" when it may).
+    const char* continuationReason(uint64_t sequence,int prompt,const WorldState&,double now,uint64_t revision) const noexcept;
     bool deliveryEvent(uint64_t sequence,int prompt,DeliveryStage,double now) noexcept;
     void setPolicy(const DecisionPolicy* policy) noexcept {policy_=policy?policy:&temporal_;pending_={};accepted_={};}
     const Decision& lastDecision() const noexcept {return decision_;}
@@ -194,8 +199,18 @@ public:
     const char* reasonCode() const noexcept;
     void enableJunctionLesson(bool enabled) noexcept {if(task_.enabled()!=enabled){invalidateEvidence();task_.enable(enabled);}}
     const TaskCoach& task() const noexcept {return task_;}
-    void enableAutomaticCoaching(bool enabled) noexcept {if(drive_.enabled()!=enabled){enableJunctionLesson(enabled);drive_.enable(enabled);}}
+    void enableAutomaticCoaching(bool enabled) noexcept {if(drive_.enabled()!=enabled){enableJunctionLesson(enabled);drive_.enable(enabled);control_.enable(enabled);risk_.enable(enabled);}}
     const DriveCoach& drive() const noexcept {return drive_;}
+    // Task-aware scheduling of the automatic coordinator (default on): routine
+    // cues yield to a known upcoming lesson window, an episode's follow-up step
+    // has its own spacing, and execution quiet survives evidence loss. Off
+    // reproduces the 0.7.1 policy for same-interval comparison.
+    void enableTaskScheduling(bool enabled) noexcept {if(scheduling_!=enabled){scheduling_=enabled;task_.enableScheduling(enabled);control_.reset();risk_.reset();}}
+    const RiskCoach& risk() const noexcept {return risk_;}
+    // Instructor-style control coaching (part of task scheduling): actions, not announcements.
+    const ControlCoach& control() const noexcept {return control_;}
+    void setGearBands(const GearBands& bands) noexcept {control_.setBands(bands);}
+    bool taskScheduling() const noexcept {return scheduling_;}
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;
     BalancedPolicy balanced_;
@@ -209,9 +224,14 @@ private:
     TemporalSceneInterpreter interpreter_;
     TaskCoach task_;
     DriveCoach drive_;
+    ControlCoach control_;
+    RiskCoach risk_;
     WorldState lastWorld_{};
     Profile profile_=Profile::Balanced;
-    bool configured_{},voice_=true;
+    bool configured_{},voice_=true,scheduling_=true;
+    Identity lastOrdinaryLesson_{};
+    uint64_t lastOrdinaryLessonEpoch_{};
+    int lastOrdinaryOrigin_{};
     uint64_t revision_{},source_{};
     double lastNow_=-infinity,lastOrdinary_=-infinity,lastWarning_=-infinity;
     Ticket pending_{},accepted_{},deferred_{};

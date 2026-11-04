@@ -50,6 +50,8 @@ public:
     void accepted(Prompt prompt,double time);
     bool actorRelevant(int actorId,double now) const;
     bool actorBox(int actorId,double now,Box& out) const;
+    // Capture time of the observation the attention tracks currently describe.
+    double lastCapture() const {return lastCapture_;}
     bool newEncounterEligible(int actorId,int referenceId,double now) const;
     // New coordinator commits the actor carried by its validated ticket.
     void acceptedActor(Prompt prompt,double time,int actorId,int evidenceKind);

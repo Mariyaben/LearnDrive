@@ -28,7 +28,7 @@ int main(){
             }
             last=phase;
         }
-        const int expected=scenario==0?2:scenario==2?0:1;
+        const int expected=scenario==0?2:scenario==1?3:scenario==2?0:1; // early_slowing adds the adapted gear cue and junction entry
         if(deliveries!=expected){std::cerr<<names[scenario]<<" expected "<<expected<<" deliveries; got "<<deliveries<<'\n';return 1;}
     }
 }

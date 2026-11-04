@@ -2,7 +2,7 @@
 namespace ld {
 void SensorFusion::reset() {const auto id=calibrationId_;*this=SensorFusion{};calibrationId_=id;}
 void SensorFusion::restartCalibration(const char* reason) {
-    calibrated_=false;start_=-1;count_=linearCount_=0;
+    calibrated_=false;start_=-1;count_=linearCount_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
     sum_=squares_=gyroSum_=linearSum_={};calibrationProgress_=0;
     calibrationReason_=reason;
     poseCursor_=poseCount_=0;
@@ -33,7 +33,7 @@ void SensorFusion::calibrate(const ImuSample& s) {
     referenceUp_=up;up_=up;forward_=forward.unit();right_=forward_.cross(referenceUp_).unit();
     gyroOffset_=gyroSum_*(1.0/count_);
     linearOffset_=linearCount_>0?linearSum_*(1.0/linearCount_):Vec3{};
-    pitch_=0;acceleration_=0;calibrated_=true;calibrationProgress_=1;
+    pitch_=0;filteredPitch_=0;acceleration_=0;calibrated_=true;calibrationProgress_=1;
     ++calibrationId_;
     calibrationReason_="Phone plane normalized";
 }
@@ -47,6 +47,8 @@ void SensorFusion::imu(const ImuSample& s) {
     if(dt<=0||dt>.2) return; // Never integrate a long suspend/resume gap.
     const Vec3 rotation=s.gyro-gyroOffset_;
     const double angle=rotation.norm()*dt;
+    // A hand moving the phone rotates it fast; a car's pitch changes slowly.
+    if(rotation.norm()>30*pi/180)handledUntil_=s.time+1.5;
     if(angle>1e-9) {
         const Vec3 axis=rotation.unit();
         up_=(up_*std::cos(angle)-axis.cross(up_)*std::sin(angle)+axis*(axis.dot(up_)*(1-std::cos(angle)))).unit();
@@ -60,6 +62,18 @@ void SensorFusion::imu(const ImuSample& s) {
         up_=(up_*(1-alpha)+measured.unit()*alpha).unit();
     }
     pitch_=std::asin(std::clamp(up_.dot(forward_),-1.0,1.0))*180/pi;
+    filteredPitch_+=(pitch_-filteredPitch_)*(1-std::exp(-dt/.4));
+    if(pitchTrailTime_<0||s.time-pitchTrailTime_>=.25) {
+        pitchTrail_[pitchCursor_]=filteredPitch_;pitchCursor_=(pitchCursor_+1)%pitchTrail_.size();
+        pitchCount_=std::min(pitchCount_+1,pitchTrail_.size());pitchTrailTime_=s.time;
+        if(pitchCount_>=7) {
+            const auto ago=[&](size_t k){return pitchTrail_[(pitchCursor_+pitchTrail_.size()-1-k)%pitchTrail_.size()];};
+            // >6 degrees within 1.5 s that has settled (not a bump that returns).
+            if(s.time<=handledUntil_+1&&std::abs(ago(0)-ago(6))>6&&std::abs(ago(0)-ago(2))<1.5) {
+                restartCalibration("Phone moved in its mount; stop on level ground to re-level slope coaching");return;
+            }
+        }
+    }
     Vec3 linear=s.hasLinear?s.linear-linearOffset_:s.acceleration-up_*gravity;
     double longitudinal=linear.dot(forward_);
     acceleration_=longitudinal; // Driver-action suppression sees the current 100 Hz sample.

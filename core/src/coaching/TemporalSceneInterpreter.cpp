@@ -19,7 +19,17 @@ bool same(const EncounterEpisode& e,const ActorObservation& a) noexcept {
 InstructionMeaning instructionMeaning(int p) noexcept {
     switch(static_cast<Prompt>(p)) {
     case Prompt::junctionPlanLeft:case Prompt::junctionPlanRight:case Prompt::junctionPlan:return InstructionMeaning::TurnPreparation;
-    case Prompt::junctionApproach:return InstructionMeaning::ApproachPreparation;
+    case Prompt::junctionApproach:case Prompt::junctionBrakeGearDown:case Prompt::junctionGearDown:return InstructionMeaning::ApproachPreparation;
+    case Prompt::junctionEntry:return InstructionMeaning::JunctionEntry;
+    case Prompt::personEaseCover:case Prompt::riderEaseCover:return InstructionMeaning::RoadUserSpace;
+    case Prompt::vehicleEaseGap:return InstructionMeaning::FollowingGap;
+    case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::oncomingKeepLeft:return InstructionMeaning::RoadUserControl;
+    case Prompt::vehicleCrossingWait:case Prompt::personCrossingStop:return InstructionMeaning::RoadUserYield;
+    case Prompt::personLeftSpace:case Prompt::personRightSpace:return InstructionMeaning::RoadUserSpace;
+    case Prompt::crossedLookAgain:return InstructionMeaning::VehicleControl;
+    case Prompt::turnExit:case Prompt::gearUpSecond:case Prompt::gearUpThird:case Prompt::gearUpFourth:case Prompt::gearUpFifth:
+    case Prompt::gearDownSecond:case Prompt::gearDownThird:case Prompt::stopClutch:case Prompt::moveOffPrep:return InstructionMeaning::VehicleControl;
+    case Prompt::downhillThird:case Prompt::downhillSecond:case Prompt::uphillSecond:case Prompt::uphillThird:return InstructionMeaning::GradePreparation;
     case Prompt::pedestrianSpace:case Prompt::riderSpace:case Prompt::roadUserQuiet:case Prompt::roadUser:case Prompt::watchPedestrians:return InstructionMeaning::RoadUserSpace;
     case Prompt::vehicleSpace:case Prompt::keepSafeGap:case Prompt::holdLaneDistance:return InstructionMeaning::FollowingGap;
     case Prompt::mapLeftTurn:case Prompt::mapRightTurn:case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:case Prompt::mapJunction:return InstructionMeaning::TurnPreparation;

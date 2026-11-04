@@ -1,6 +1,7 @@
 # Automatic coaching during a drive
 
-Android 0.7.1, version code 32. This replaces the required junction lesson selector
+Android 0.7.1, version code 32; 0.7.2 (code 33) adds task-aware scheduling, described in
+[../reviews/2026-11-04-task-aware-scheduling.md](../reviews/2026-11-04-task-aware-scheduling.md). 0.7.1 replaced the required junction lesson selector
 with one automatic coordinator for the supported driving situations. It is a
 development candidate. The change does not establish human-instructor equivalence,
 full curriculum coverage or paid-launch readiness.

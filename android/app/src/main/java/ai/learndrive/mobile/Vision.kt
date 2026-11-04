@@ -138,6 +138,8 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         }catch(e:Exception){close();throw e}
     }
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+    /** Latest PowerManager thermal status, set by the camera analyzer before each frame. */
+    @Volatile var thermalStatus=0
     fun frame(image:ImageProxy,id:Long,source:CaptureSource,onSemantic:(VisionResult)->Unit={}):VisionResult {
         val media=image.image?:throw IllegalArgumentException("Camera did not provide YUV image")
         val time=image.imageInfo.timestamp/1e9
@@ -185,7 +187,8 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         val poseReadiness=SpatialReadiness.evaluate(frame.source==CaptureSource.CAMERA,frame.intrinsics!=null,up[0],up[1],up[2])
         var readiness=capability.readiness(poseReadiness)
         performanceReadiness=readiness
-        val metric=readiness==SpatialReadiness.READY
+        // Under heat the optional spatial model is shed first; the detector keeps running.
+        val metric=readiness==SpatialReadiness.READY&&CameraVisionHealth.spatialAllowed(thermalStatus)
         if(!metric) {
             core.spatialUnavailable(frame.sourceId,time)
             if(spatialActive){spatial?.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null}
