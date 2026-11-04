@@ -263,9 +263,10 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         // ONNX YOLOv8 coordinates are pixels in the 320x320 model image.
         val hazard=core.spatialLabels(frame.sourceId,time,detector.values[0],count,channelFirst)
         // Same prepared input; at most 4 Hz and only while heat allows optional models.
-        if(lanes!=null&&time-laneTime>=.25&&CameraVisionHealth.spatialAllowed(thermalStatus)) {
+        val laneModel=lanes
+        if(laneModel!=null&&time-laneTime>=.25&&CameraVisionHealth.spatialAllowed(thermalStatus)) {
             laneTime=time
-            runCatching {lanes.run();core.laneMap(frame.sourceId,time,lanes.values[0],lanes.values[1],320,320)}
+            runCatching {laneModel.run();core.laneMap(frame.sourceId,time,laneModel.values[0],laneModel.values[1],320,320)}
         }
         val detections=core.boxes().toList().chunked(6).map {Detection(it[0],it[1],it[2],it[3],it[4],it[5].toInt())}
         val swapped=rotation==90||rotation==270
