@@ -17,6 +17,8 @@ import androidx.core.content.ContextCompat
 fun now() = SystemClock.elapsedRealtimeNanos() / 1e9
 
 class Sensors(private val context: Context, private val core: NativeCore) : SensorEventListener, LocationListener, AutoCloseable {
+    /** Each qualified GPS position (lat, lon), e.g. for the road-geometry fetcher. */
+    @Volatile var onFix: ((Double, Double) -> Unit)? = null
     private val manager = context.getSystemService(SensorManager::class.java)
     private val locations = context.getSystemService(LocationManager::class.java)
     private var thread: HandlerThread? = null
@@ -71,6 +73,7 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
     override fun onLocationChanged(location: Location) {
         if(location.isFromMockProvider)return // Test positions cannot qualify ordinary road speed or route evidence.
         latestPosition=Location(location)
+        onFix?.invoke(location.latitude,location.longitude)
         core.navigationFix(location.elapsedRealtimeNanos/1e9,location.latitude,location.longitude,
             if(location.hasAccuracy())location.accuracy.toDouble() else Double.POSITIVE_INFINITY,
             location.speed.toDouble()*3.6,if(location.hasSpeedAccuracy())location.speedAccuracyMetersPerSecond.toDouble() else Double.POSITIVE_INFINITY,

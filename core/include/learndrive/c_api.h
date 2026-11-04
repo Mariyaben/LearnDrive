@@ -147,6 +147,15 @@ const char* ld_prompt_text(int prompt);
 int ld_prompt_fragments(int prompt,int* out,size_t capacity);
 int ld_fragment_count(void);
 const char* ld_fragment_text(int fragment);
+// Road geometry (e.g. OpenStreetMap ways) for junction-ahead coaching without a
+// destination. road_class: 0 motorway .. 9 track; lat_lon holds count pairs.
+int ld_road_way(ld_engine*,int64_t way,int road_class,const int64_t* nodes,const double* lat_lon,size_t count);
+void ld_road_clear(ld_engine*);
+// Lane model output (two-channel logits, drivable + lanes, model image size) for
+// the frame most recently prepared; lane keeping on marked roads only.
+int ld_lane_map(ld_engine*,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height);
+// out: valid, distance m, node id, road ends (T-junction). Capacity >= 4.
+int ld_road_junction(ld_engine*,double now,double* out,size_t capacity);
 // time, valid, bend (-1/0/+1), then five normalized x,y point pairs.
 int ld_road_shape(ld_engine*,double* out,size_t capacity);
 // All C ABI functions catch exceptions. Check error text after a failed operation.

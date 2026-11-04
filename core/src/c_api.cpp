@@ -7,6 +7,7 @@
 #include "learndrive/perception/metric_estimator.hpp"
 #include "learndrive/perception/supercombo.hpp"
 #include "learndrive/coaching/CoachingEngine.hpp"
+#include "learndrive/navigation/JunctionScout.hpp"
 #include <exception>
 #include <mutex>
 #include <sstream>
@@ -47,6 +48,8 @@ struct ld_engine {
     ld::coaching::CoachingEngine coaching;
     ld::coaching::WorldState coachingWorld{};
     double coachingRouteReceipt=-ld::infinity;
+    ld::navigation::JunctionScout scout; // Junction ahead without a destination (road geometry + GPS).
+    double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
     std::string coachingDiagnostics;
@@ -190,6 +193,17 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.route.captureTime=provider?e.coachingRouteReceipt:route.fixTime;w.route.gpsTime=route.fixTime;
     w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
     w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
+    w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
+    // No route: the next junction an instructor would prepare for on the current road.
+    // Direction is unknown, so it is a generic junction (feature 3), never a turn.
+    if(!w.route.valid&&e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto j=e.scout.current(now);
+        if(j.valid&&j.nodeId>0&&j.wayId>0) {
+            w.route={};w.route.routeId=uint64_t(j.wayId);w.route.eventId=uint64_t(j.nodeId);w.route.epoch=1;
+            w.route.captureTime=j.fixTime;w.route.gpsTime=j.fixTime;w.route.distanceM=j.distanceM;w.route.feature=3;
+            w.route.valid=true;w.route.provider=false;w.route.etaSeconds=ld::infinity;
+        }
+    }
     return w;
 }
 extern "C" {
@@ -748,6 +762,7 @@ int ld_navigation_fix(ld_engine* e,uint64_t source,double time,double lat,double
     if(e->guidance.origin==LD_GUIDANCE_NAVIGATION)e->guidance.eligible=0;
     const ld::navigation::Fix fix{time,lat,lon,accuracy,speed,bearing,speedAccuracy,bool(speedValid),bool(bearingValid)};
     const auto providerAccepted=e->providerNavigation.fix(fix);
+    if(std::isfinite(lat)&&std::isfinite(lon))e->scout.update(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:ld::infinity,accuracy); // km/h
     return e->providerNavigation.active()?providerAccepted:e->navigation.fix(fix);
 }
 int ld_navigation_context(ld_engine* e,double now,double* out,size_t capacity) {
@@ -784,6 +799,32 @@ int ld_prompt_fragments(int p,int* out,size_t capacity) {
     if(u.id!=p)return 0;size_t n=std::min(u.count,capacity);for(size_t i=0;i<n;++i)out[i]=u.fragments[i];return int(n);
 }
 int ld_fragment_count(void) {return ld::fragmentCount;}
+int ld_road_way(ld_engine* e,int64_t way,int road_class,const int64_t* nodes,const double* lat_lon,size_t count) {
+    try {return e&&e->scout.addWay(way,road_class,nodes,lat_lon,count);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
+}
+void ld_road_clear(ld_engine* e){if(e)e->scout.clear();}
+int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height) {
+    if(!e||!source||source!=e->sourceId||!drivable||!lanes||e->transform.size<=0||!std::isfinite(time))return 0;
+    try {
+        const auto map=ld::decodeLanes(drivable,lanes,width,height,e->transform);
+        // Lane lines just ahead of the bonnet: nearest line left and right of the image centre.
+        double sumLeft=0,sumRight=0;int rows=0;
+        for(int row=int(.68*map.height);row<=int(.86*map.height)&&row<map.height;++row) {
+            double left=-1,right=2;int start=-1;
+            for(int x=0;x<=map.width;++x){const bool on=x<map.width&&map.lane[size_t(row*map.width+x)]>.5f;
+                if(on&&start<0)start=x;
+                if(!on&&start>=0){const double c=(start+x)*.5/map.width;if(c<.5)left=std::max(left,c);else right=std::min(right,c);start=-1;}}
+            if(left>=0&&right<=1){sumLeft+=left;sumRight+=right;++rows;}
+        }
+        e->laneTime=time;e->laneValid=rows>=3;
+        if(rows){e->laneLeft=float(sumLeft/rows);e->laneRight=float(sumRight/rows);}
+        return 1;
+    }catch(const std::exception& ex){e->laneValid=false;e->error=ex.what();return 0;}
+}
+int ld_road_junction(ld_engine* e,double now,double* out,size_t capacity) {
+    if(!e||!out||capacity<4)return 0;const auto j=e->scout.current(now);
+    out[0]=j.valid;out[1]=j.distanceM;out[2]=double(j.nodeId);out[3]=j.roadEnds;return 1;
+}
 const char* ld_fragment_text(int f) {return ld::fragmentText(static_cast<ld::Fragment>(f));}
 int ld_road_shape(ld_engine* e,double* out,size_t capacity) {
     if(!e||!out||capacity<13)return 0;

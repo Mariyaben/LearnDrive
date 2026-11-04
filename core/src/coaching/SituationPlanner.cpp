@@ -55,6 +55,8 @@ bool actions(Prompt p,double v,Plan& plan) noexcept {
     case Prompt::personCrossingStop:plan.act(F::stopAndWait);plan.act(F::letThemPass);return true;
     case Prompt::oncomingKeepLeft:plan.act(F::keepLeft);plan.act(F::easeOff);return true;
     case Prompt::personLeftSpace:case Prompt::personRightSpace:plan.act(F::easeOff);plan.act(F::giveSpace);return true;
+    case Prompt::driftLeftCentre:plan.ctx(F::driftingLeft);plan.act(F::laneCentre);return true;
+    case Prompt::driftRightKeepLeft:plan.ctx(F::driftingRight);plan.act(F::keepLeft);return true;
     default:return false; // Gear-up, stop/move-off, turn exit, awareness: their own recording is clearer.
     }
 }

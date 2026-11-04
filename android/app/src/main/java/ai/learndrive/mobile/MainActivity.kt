@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var sensors:Sensors
     private lateinit var audio:AudioWorker
     private lateinit var pretrained:PretrainedShadow
+    private lateinit var roads:RoadNetwork
     private lateinit var reasoningStatus:TextView
     private var lastReasoningSummary=Double.NEGATIVE_INFINITY
     private lateinit var learningRecords:LearningRecordStore
@@ -248,6 +249,8 @@ class MainActivity : ComponentActivity() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window,false)
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
+        // Junction-ahead coaching without a destination (online OpenStreetMap roads).
+        roads=RoadNetwork(core) {message->android.util.Log.i("LearnDriveRoads",message)};sensors.onFix={lat,lon->roads.onLocation(lat,lon)}
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
@@ -1378,5 +1381,5 @@ class MainActivity : ComponentActivity() {
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);journal?.stop("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);journal?.stop("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }
