@@ -57,6 +57,8 @@ struct Candidate {
     std::array<Identity,3> also{};
     std::array<Prompt,3> alsoPrompt{};
     std::array<EventKind,3> alsoKind{};
+    std::array<int,3> alsoStep{}; // A junction lesson step said in the same sentence.
+    std::array<uint64_t,3> alsoEpoch{};
     size_t alsoCount{};
     uint64_t lessonEpoch{};
 };

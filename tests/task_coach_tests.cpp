@@ -9,7 +9,9 @@ namespace {
 int passed=0;
 void check(bool b,const char* why){if(!b)throw std::runtime_error(why);}
 template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
-WorldState scene(double time,double seconds=30,double speed=30,int feature=4,uint64_t event=9){
+// Act-by schedule at 30 km/h: preparation 6.5-14.5 s before the junction, "brake, change
+// down" 6.5-10.5 s, entry 2-6 s (only at or below 25 km/h); routine cues quiet below 8 s.
+WorldState scene(double time,double seconds=13,double speed=30,int feature=4,uint64_t event=9){
     WorldState w;w.sourceId=1;w.now=w.captureTime=time;w.frameSequence=uint64_t(time*1000)+1;
     w.active=true;w.audioReady=true;w.telemetry={time,speed,0,0,1,true,true,true,false,false,false};
     w.route={17,event,2,time,seconds*speed/3.6,seconds,time,feature,true,true};return w;
@@ -34,7 +36,7 @@ struct Fixture {
 int main(){try {
     test("default off and explicit junction directions",[]{
         CoachingEngine off;check(!off.task().enabled(),"lesson on by default");
-        for(int feature=3;feature<=5;++feature){Fixture f;auto d=f.decide(scene(1,30,30,feature));
+        for(int feature=3;feature<=5;++feature){Fixture f;auto d=f.decide(scene(1,13,30,feature));
             check(d.eligible&&int(d.ticket.candidate.prompt)==(feature==4?56:feature==5?57:58),"wrong planning direction");}
     });
     test("native task creates a lesson without an object or phrase trigger",[]{
@@ -44,7 +46,7 @@ int main(){try {
     });
     test("reapplying the same lesson does not reset delivery or opportunity history",[]{
         Fixture f;f.visual(scene(1));f.decide(scene(2));f.p->enableJunctionLesson(true);
-        auto d=f.decide(scene(14,17));check(d.eligible&&d.ticket.candidate.lessonStep==2,"idempotent setting reset lesson");
+        auto d=f.decide(scene(14,9));check(d.eligible&&d.ticket.candidate.lessonStep==2,"idempotent setting reset lesson");
         check(f.p->task().progress().opportunities==1,"idempotent setting invented opportunity");
     });
     test("voice refusal does not advance preparation",[]{
@@ -56,39 +58,40 @@ int main(){try {
     test("submitted and started audio cannot unlock the next step",[]{
         Fixture f(true);auto w=scene(1);check(f.decide(w).eligible&&f.p->accept(1,56,w,1,true),"submit");
         check(f.p->playbackStarted(1,56,w,1,1),"onset");
-        auto d=f.decide(scene(14,17));check(!d.eligible&&!f.p->task().progress().planningDelivered,"onset became completed teaching");
+        auto d=f.decide(scene(14,9));check(!d.eligible&&!f.p->task().progress().planningDelivered,"onset became completed teaching");
     });
     test("completed voice delivery unlocks one approach reminder",[]{
         Fixture f(true);auto w=scene(1);check(f.decide(w).eligible&&f.p->accept(1,56,w,1,true),"submit");
         check(f.p->playbackStarted(1,56,w,1,1)&&f.p->deliveryEvent(1,56,DeliveryStage::Completed,6.8),"complete");
-        check(!f.decide(scene(7,24)).eligible,"extra planning");
-        w=scene(14,17);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionBrakeGearDown,"approach missing");
+        check(!f.decide(scene(7,12)).eligible,"extra planning");
+        w=scene(14,9);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionBrakeGearDown,"approach missing");
         check(f.p->accept(f.sequence,60,w,14,true)&&f.p->playbackStarted(f.sequence,60,w,14,1),"approach onset");
         check(f.p->deliveryEvent(f.sequence,60,DeliveryStage::Completed,18),"approach completion");
-        check(!f.decide(scene(28,10)).eligible,"repeated approach");
+        check(!f.decide(scene(28,7)).eligible,"repeated approach");
         check(f.p->task().progress().planningCompletions==1&&f.p->task().progress().approachCompletions==1,"step counters");
     });
     test("intentional visual delivery advances but never proves learner action",[]{
-        Fixture f;f.visual(scene(1));auto d=f.decide(scene(14,17));check(d.eligible&&d.ticket.candidate.lessonStep==2,"visual progression");
+        Fixture f;f.visual(scene(1));auto d=f.decide(scene(14,9));check(d.eligible&&d.ticket.candidate.lessonStep==2,"visual progression");
         auto json=f.p->task().json();check(json.find("\"mirror_check\":\"UNOBSERVED\"")!=std::string::npos&&json.find("\"driving_outcome\":\"UNASSESSED\"")!=std::string::npos,"invented skill result");
     });
-    test("routine pacing is retained and missed steps are not crammed",[]{
-        Fixture f;f.visual(scene(1));auto d=f.decide(scene(9,17));check(!d.eligible&&d.mode==Mode::DEFER,"bypassed Balanced pacing");
-        d=f.decide(scene(14,7));check(!d.eligible&&f.p->task().progress().phase==TaskPhase::ExecutionQuiet,"late reminder");
-        Fixture late;check(!late.decide(scene(1,15)).eligible&&!late.decide(scene(14,10)).eligible,"approach taught before planning");
-        Fixture shortAudioWindow;shortAudioWindow.visual(scene(1));check(!shortAudioWindow.decide(scene(14,12)).eligible,"cue cannot finish before quiet boundary");
+    test("steps keep their own spacing, a missed preparation is still given late, never the approach first",[]{
+        Fixture f;f.visual(scene(1));auto d=f.decide(scene(4,9));check(!d.eligible&&d.mode==Mode::DEFER,"approach crammed right after preparation");
+        d=f.decide(scene(14,5));check(!d.eligible&&f.p->task().progress().phase==TaskPhase::ExecutionQuiet,"approach after its window at speed");
+        Fixture late;check(!late.decide(scene(1,15)).eligible,"preparation before its act-by window");
+        d=late.decide(scene(14,10));check(d.eligible&&d.ticket.candidate.lessonStep==1,"late preparation lost or approach taught first");
+        Fixture early;early.visual(scene(1));check(!early.decide(scene(14,12)).eligible,"approach before its act-by window");
     });
     test("slowing after delivery suppresses redundant approach advice",[]{
-        Fixture f;f.visual(scene(1));
-        for(int i=0;i<=130;++i){const double time=1.1+i*.1;f.decide(scene(time,i<120?25:17,30-i*.1));}
+        Fixture f;f.visual(scene(1,14,34));
+        for(int i=0;i<=70;++i){const double time=1.1+i*.1;f.decide(scene(time,13.9-i*.05,34-i*.1));}
         check(f.p->task().progress().speedReductionObserved,"post-delivery slowing not observed");
-        auto d=f.decide(scene(15,16,17));check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionGearDown,"approach not adapted after slowing");
+        auto d=f.decide(scene(8.4,9.9,26.5));check(d.eligible&&d.ticket.candidate.prompt==Prompt::junctionGearDown,"approach not adapted after slowing");
     });
     test("pre-delivery slowing cannot be called a post-delivery response",[]{
-        Fixture f;for(int i=0;i<=20;++i)f.decide(scene(1+i*.1,30,35-i*.15));
-        auto w=scene(3.1,29,32);auto d=f.decide(w);check(d.eligible&&f.p->accept(f.sequence,56,w,3.1,false),"visual fixture");
-        f.decide(scene(3.2,28,32));check(!f.p->task().progress().speedReductionObserved,"historical response fabricated");
-        f.decide(scene(4.2,27,32));check(!f.p->task().progress().speedReductionObserved,"steady response called slowing");
+        Fixture f;for(int i=0;i<=20;++i)f.decide(scene(1+i*.1,20,35-i*.15));
+        auto w=scene(3.1,14,32);auto d=f.decide(w);check(d.eligible&&f.p->accept(f.sequence,56,w,3.1,false),"visual fixture");
+        f.decide(scene(3.2,13.9,32));check(!f.p->task().progress().speedReductionObserved,"historical response fabricated");
+        f.decide(scene(4.2,13,32));check(!f.p->task().progress().speedReductionObserved,"steady response called slowing");
     });
     test("stale and missing inputs suppress the task",[]{
         for(int fault=0;fault<10;++fault){Fixture f;auto w=scene(5);
@@ -101,9 +104,9 @@ int main(){try {
         for(int fault=0;fault<3;++fault){Fixture f;auto w=scene(1);w.telemetry.braking=fault==0;w.telemetry.hardBraking=fault==1;w.telemetry.shock=fault==2;check(!f.decide(w).eligible,"instruction during existing response/workload");}
     });
     test("final approach is quiet for routine coaching while urgent evidence wins",[]{
-        Fixture f;auto w=scene(1,7);actor(w,false);check(!f.decide(w).eligible,"routine cue during final approach");
-        w=scene(1.1,6);actor(w,true);auto d=f.decide(w);check(d.eligible&&d.mode==Mode::WARN&&d.ticket.candidate.lessonStep==0,"task hid urgent event");
-        Fixture queued(true);w=scene(1,10);actor(w,false);d=queued.decide(w);
+        Fixture f;auto w=scene(1,5.5);actor(w,false);check(!f.decide(w).eligible,"routine cue during final approach");
+        w=scene(1.1,5.4);actor(w,true);auto d=f.decide(w);check(d.eligible&&d.mode==Mode::WARN&&d.ticket.candidate.lessonStep==0,"task hid urgent event");
+        Fixture queued(true);w=scene(1,25);actor(w,false);d=queued.decide(w);
         check(d.eligible&&queued.p->accept(1,44,w,1,true),"routine queue");
         w.now=w.captureTime=w.telemetry.time=1.1;w.route.etaSeconds=7;w.route.distanceM=58;
         check(!queued.p->playbackValid(1,44,w,1.1,1),"routine onset crossed final-approach boundary");
@@ -127,8 +130,8 @@ int main(){try {
         Fixture f(true);auto w=scene(1);check(f.decide(w).eligible&&f.p->accept(1,56,w,1,true),"fixture");
         check(f.p->playbackStarted(1,56,w,1,1)&&f.p->deliveryEvent(1,56,DeliveryStage::Interrupted,2),"interrupt");
         check(!f.p->deliveryEvent(1,56,DeliveryStage::Completed,3),"late callback restored completion");
-        check(f.decide(scene(3,28)).eligible,"fresh retry lost");
-        check(!f.decide(scene(4,17)).eligible,"late retry crammed into approach");
+        check(f.decide(scene(3,12)).eligible,"fresh retry lost");
+        auto d=f.decide(scene(4,8));check(!d.eligible||d.ticket.candidate.lessonStep==1,"late retry crammed into approach");
     });
     test("out of order camera is not fresh task evidence",[]{
         Fixture f;f.decide(scene(1));auto w=scene(2);w.frameSequence=1;check(!f.decide(w).eligible,"old frame sequence allowed lesson");

@@ -134,3 +134,45 @@ Replays of `camera.mp4` used the on-screen speed and the guided automatic coach,
 1. Mount the phone lower and tilted down until the status line stops asking. Keep the suction arm out of the camera's view.
 2. Start local diagnostics, with instructor audio, before driving. Export both afterwards.
 3. In the screen recording, check that the "Free practice" card shows the road map loading and a junction, bend or bump ahead.
+
+## 0.7.6: act-by junction timing (first step of the single road-ahead brain)
+
+The junction lesson used fixed windows: "turn ahead, signal" 22–40 s before the junction at any speed, "brake, change down" 13–18 s before. If the first window was missed, the whole lesson went silent. On slow Kerala lanes that put the turn warning 80–150 m early, and a road-user cue that took the turn to speak dropped the junction step for good.
+
+**Act-by timing.** The coach now speaks when the learner has to act at the current speed (`actByPrepareLead` in `TaskCoach.hpp`):
+
+| Step | When |
+|---|---|
+| Prepare ("turn ahead, mirrors, signal") | Time to brake to ~15 km/h at 1.2 m/s² plus ~10 s: about 10 s on a slow lane, 18 s at 50 km/h, at most 25 s. Still said late (down to 6.5 s) if missed. |
+| "Brake gently, change down" | 6.5–10.5 s before, only above 25 km/h. |
+| Entry ("clutch down, look both ways", horn on Indian roads) | 2–6 s before. Given even if the preparation was missed. |
+
+- Steps of one junction may follow each other 4.5 s apart.
+- The fixed windows remain only with task scheduling off (the 0.7.1 comparison mode).
+
+**Nothing dropped.**
+- A junction step that is due when a road user takes the turn to speak is folded into that sentence.
+- Folded instructions now share the delivery outcome of the sentence: finished, or to be said again.
+- The turn is named in other instructions only once its preparation is due.
+
+**Evidence.** Replaying this drive with the seven junction turns measured from the video (an ideal map, since the video has no GPS):
+
+| Turn at | Old "turn ahead" | New "turn ahead" | Instructor's first words |
+|---:|---:|---:|---:|
+| 54.0 s | 23.5 s before | 9.0 s | 6.4 s |
+| 137.5 s | 40.0 s | 11.0 s | 26.3 s |
+| 172.5 s | 34.5 s | 11.0 s | 8.9 s |
+| 243.5 s | 40.0 s | 11.0 s | 5.1 s |
+| 284.5 s | 40.5 s | 11.0 s | 3.7 s |
+| 361.0 s | 40.0 s | 11.0 s | 16.2 s |
+
+- The first turn (21 s) gets nothing: the on-screen speed read 1 km/h while the car was moving, and junction timing needs a measured speed.
+- The entry instruction ("…Sound the horn.") lands 1–3 s from the instructor at four junctions (47.6, 128.8, 238.4 and 280.8 s).
+- On the MetaDrive long drive the right turn gets "turn ahead" 12.9 s, "brake, change down" 8.4 s and entry 3.1 s before, then "straighten" after it.
+
+**Tests.**
+- All 21 native groups, the Python tests and the scenario harness pass.
+- Tests that encoded the old 22–40 s windows were converted to the act-by contract. Three changed meaning on purpose:
+  - a missed preparation is now given late;
+  - entry no longer depends on it;
+  - below 25 km/h there is no separate "brake, change down" step.

@@ -26,12 +26,12 @@ void TaskCoach::enable(bool value) noexcept {if(value==enabled_)return;enabled_=
 bool TaskCoach::reserves(double block) const noexcept {
     if(!scheduling_||!enabled_||!std::isfinite(block)||block<=0||state_.leadSeconds<0||!state_.event)return false;
     const double lead=state_.leadSeconds,after=lead-block;
-    // Planning not yet offered and its window still ahead.
-    if(!state_.planningDelivered&&state_.phase==TaskPhase::WaitingWindow&&lead>planningWindowOpen)
-        return after<planningWindowClose+minimumUsefulWindow;
-    // Optional approach reminder still pending and its window still ahead.
-    if(state_.planningDelivered&&!state_.approachDelivered&&(!state_.speedReductionObserved||scheduling_)&&lead>approachWindowOpen)
-        return after<approachWindowClose+minimumUsefulWindow;
+    // Preparation not yet given and its act-by window still ahead.
+    if(!state_.planningDelivered&&state_.phase==TaskPhase::WaitingWindow)return after<actByLateLimit+minimumUsefulWindow;
+    // "Brake, change down" still to come at speed.
+    if(state_.planningDelivered&&!state_.approachDelivered&&state_.fast&&lead>actByApproachOpen)return after<actByApproachClose+minimumUsefulWindow;
+    // The junction-entry instruction still to come.
+    if(!state_.entryDelivered&&lead>actByEntryOpen)return after<actByEntryClose+minimumUsefulWindow;
     return false;
 }
 void TaskCoach::sourceChanged() noexcept {
@@ -48,16 +48,23 @@ bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool 
        std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>=0&&w.telemetry.speedKmh<=3&&!w.telemetry.shock&&
        c.origin==5&&c.kind==EventKind::Route&&c.lessonEpoch==w.route.epoch&&(c.lessonStep==2||c.lessonStep==3))return true;
     if(seconds<0||w.telemetry.braking||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
+    // Either schedule's window (the fixed 0.7.1 windows or act-by timing) admits a step;
+    // which one proposes it is decided by the scheduling mode in observe().
+    const double v=w.telemetry.speedKmh,prepare=actByPrepareLead(v);
     if(c.lessonStep==1){const Prompt expected=w.route.feature==4?Prompt::junctionPlanLeft:w.route.feature==5?Prompt::junctionPlanRight:Prompt::junctionPlan;
         // Started speech has no upper bound: slowing raises distance/speed lead.
-        return c.prompt==expected&&seconds>=(started?executionQuietLead:planningWindowClose)&&(started||seconds<=planningWindowOpen);}
+        const bool fixed=seconds>=(started?executionQuietLead:planningWindowClose)&&(started||seconds<=planningWindowOpen);
+        const bool actBy=seconds>=(started?actByEntryClose:actByLateLimit)&&(started||seconds<=prepare+1);
+        return c.prompt==expected&&(fixed||actBy);}
     // The 3.8 s recorded approach cue needs room to finish before the 8 s
     // quiet boundary. These are conservative experimental timing windows.
-    if(c.lessonStep==3)return c.prompt==Prompt::junctionEntry&&seconds>=(started?0:1.5)&&seconds<executionQuietLead+(started?2:0)&&
-        (started||w.telemetry.speedKmh<=20);
+    if(c.lessonStep==3)return c.prompt==Prompt::junctionEntry&&seconds>=(started?0:std::min(1.5,actByEntryClose))&&
+        seconds<std::max(executionQuietLead,actByEntryOpen)+(started?2:0)&&(started||v<=actByApproachSpeed);
     const bool approachPrompt=c.prompt==Prompt::junctionApproach||c.prompt==Prompt::junctionGearDown||
-        (c.prompt==Prompt::junctionBrakeGearDown&&(started||w.telemetry.speedKmh>20));
-    return c.lessonStep==2&&approachPrompt&&seconds>=(started?executionQuietLead:approachWindowClose)&&(started||seconds<=approachWindowOpen);
+        (c.prompt==Prompt::junctionBrakeGearDown&&(started||v>20));
+    const bool fixed=seconds>=(started?executionQuietLead:approachWindowClose)&&(started||seconds<=approachWindowOpen);
+    const bool actBy=seconds>=(started?actByEntryClose:actByApproachClose)&&(started||seconds<=actByApproachOpen);
+    return c.lessonStep==2&&approachPrompt&&(fixed||actBy);
 }
 void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const EventLedger& ledger) noexcept {
     if(!enabled_)return;
@@ -90,7 +97,17 @@ void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const Even
         entrySubmitted|=e.lessonStep==3&&(e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started);
     }
     if(state_.planningDelivered&&memory.speedTrend(w.now,state_.responseSince)==SpeedTrend::Decreasing&&!state_.speedReductionObserved){state_.speedReductionObserved=true;++state_.observedReductions;}
-    if(seconds<8&&scheduling_&&entrySubmitted){state_.phase=TaskPhase::AwaitingDelivery;return;} // The entry instruction itself is playing.
+    if(scheduling_) {
+        // Act-by schedule: each step when the learner must act at THIS speed, and
+        // a later step still comes if an earlier one was missed.
+        const double v=w.telemetry.speedKmh;state_.prepareLead=actByPrepareLead(v);state_.fast=v>actByApproachSpeed;
+        if(submitted){state_.phase=TaskPhase::AwaitingDelivery;return;}
+        if(seconds<actByEntryOpen){state_.phase=!state_.entryDelivered&&seconds>=actByEntryClose&&v<=actByApproachSpeed?TaskPhase::Entry:TaskPhase::ExecutionQuiet;return;}
+        if(!state_.planningDelivered){state_.phase=seconds>state_.prepareLead+1?TaskPhase::WaitingWindow:seconds>=actByLateLimit?TaskPhase::Preparing:TaskPhase::ExecutionQuiet;return;}
+        state_.phase=!state_.approachDelivered&&state_.fast&&seconds>=actByApproachClose&&seconds<=actByApproachOpen?TaskPhase::Approach:TaskPhase::ObservingResponse;
+        return;
+    }
+    (void)entrySubmitted;
     if(seconds<8){
         // One short control instruction at the junction itself (instructor-style), then quiet.
         state_.phase=scheduling_&&!submitted&&state_.planningDelivered&&!state_.entryDelivered&&seconds>=1.5&&w.telemetry.speedKmh<=20?
@@ -122,7 +139,7 @@ bool TaskCoach::valid(const Candidate& c,const WorldState& w,double now,const Ev
         return !isLessonPrompt(c.prompt)&&(!enabled_||c.urgent||seconds<0||seconds>=executionQuietLead);}
     if(!enabled_||state_.phase==TaskPhase::Uncertain||state_.source!=w.sourceId||state_.route!=w.route.routeId||state_.event!=w.route.eventId||state_.epoch!=w.route.epoch||!evidence(c,w,now))return false;
     if(c.lessonStep==1)return !state_.planningDelivered;
-    if(c.lessonStep==3)return scheduling_&&state_.planningDelivered&&!state_.entryDelivered;
+    if(c.lessonStep==3)return scheduling_&&!state_.entryDelivered; // Still said if the preparation was missed.
     if(!state_.planningDelivered||state_.approachDelivered)return false;
     if(state_.speedReductionObserved&&!(scheduling_&&c.prompt==Prompt::junctionGearDown))return false;
     for(const auto& e:ledger.entries())if(e.used&&e.sourceId==w.sourceId&&e.identity==c.identity&&e.lessonStep==1&&e.lessonEpoch==state_.epoch&&e.acceptedAt>=state_.startedAt&&delivered(e))return true;
@@ -132,7 +149,7 @@ bool TaskCoach::continuing(const Candidate& c,const WorldState& w,double now,con
     if(!c.lessonStep||!scheduling_)return valid(c,w,now,ledger);
     if(!enabled_||state_.source!=w.sourceId||state_.route!=w.route.routeId||state_.event!=w.route.eventId||state_.epoch!=w.route.epoch||!evidence(c,w,now,true))return false;
     if(c.lessonStep==1)return !state_.planningDelivered;
-    if(c.lessonStep==3)return state_.planningDelivered&&!state_.entryDelivered;
+    if(c.lessonStep==3)return !state_.entryDelivered;
     return state_.planningDelivered&&!state_.approachDelivered;
 }
 std::string TaskCoach::json() const {

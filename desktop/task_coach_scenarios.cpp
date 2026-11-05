@@ -28,7 +28,11 @@ int main(){
             }
             last=phase;
         }
-        const int expected=scenario==0?2:scenario==1?3:scenario==2?0:1; // early_slowing adds the adapted gear cue and junction entry
+        // Act-by: steady 30 km/h gets preparation + "brake, change down"; slowing below 25 km/h
+        // gets preparation + junction entry (no separate approach step). A junction first
+        // known 15 s ahead is still coached in time; location lost before the preparation
+        // moment is never spoken about.
+        const int expected=scenario==0?2:scenario==1?2:scenario==2?2:0;
         if(deliveries!=expected){std::cerr<<names[scenario]<<" expected "<<expected<<" deliveries; got "<<deliveries<<'\n';return 1;}
     }
 }
