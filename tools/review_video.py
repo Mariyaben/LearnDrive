@@ -51,6 +51,7 @@ class Native:
             "cached_frame": ([P, C.c_double, P], C.c_int),
             "prepare": ([P, P, P], C.c_int),
             "prepare_zoom": ([P, P, P, C.c_float], C.c_int),
+            "camera_horizon": ([P, C.c_double], None),
             "zoom_merge": ([P, P, P, C.c_int, P, C.c_size_t], C.c_int),
             "labels": ([P, C.c_double, P, C.c_size_t, C.c_int], C.c_int),
             "boxes": ([P, P, C.c_size_t], C.c_size_t), "road": ([P, P], C.c_int),
@@ -267,6 +268,8 @@ def main():
     parser.add_argument("--detector-zoom", action="store_true",
                         help="Second detector pass on a 2x crop of the road ahead, as Android runs it when the phone is cool")
     parser.add_argument("--zoom-horizon", type=float, default=0.58, help="Zoom crop centre as a fraction of the frame height")
+    parser.add_argument("--camera-horizon", type=float,
+                        help="Horizon row of the filmed camera (fraction of height) for road-user distance; default mid-image")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--speeds-as-live", action="store_true",
                         help="Treat --speeds samples as live measured speed (camera source). Use only for speed recorded by the same drive, e.g. read from the app's own speedometer; labelled in the report")
@@ -385,6 +388,8 @@ def main():
     handle = native.create(b"", width, height, ptr(geometry) if spatial else None)
     if not handle:
         raise RuntimeError("Native policy initialization failed")
+    if args.camera_horizon is not None:
+        native.camera_horizon(handle, args.camera_horizon)
     if overlay is not None or args.speeds_as_live:
         if args.speeds_as_live and not args.speeds:raise ValueError("--speeds-as-live needs --speeds from the same drive")
         native.bind_navigation()
@@ -610,6 +615,7 @@ def main():
         "automatic": args.automatic, "task_scheduling": args.scheduling, "speeds_as_live": args.speeds_as_live,
         "policy_independent_cache": args.policy_independent_cache,
         "detector_zoom": {"horizon": args.zoom_horizon} if args.detector_zoom else None,
+        "camera_horizon": args.camera_horizon,
         "navigation_overlay": {"synthetic": True, "turns": turns, "unavailable": nav_gaps} if overlay else None,
         "final_drive": json.loads(drive_state) if args.coaching_profile != "legacy" else None, "candidate_tick_counts": candidate_counts,
         "limitations": ["No ground-truth depth, collision labels, calibrated optics or recorded IMU",

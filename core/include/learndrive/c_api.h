@@ -151,6 +151,13 @@ const char* ld_fragment_text(int fragment);
 // destination. road_class: 0 motorway .. 9 track; lat_lon holds count pairs.
 int ld_road_way(ld_engine*,int64_t way,int road_class,const int64_t* nodes,const double* lat_lon,size_t count);
 void ld_road_clear(ld_engine*);
+// A mapped speed bump (OSM traffic_calming) on a road node already added with ld_road_way.
+void ld_road_bump(ld_engine*,int64_t node);
+// Indian road practice (default on): horn at blind bends, junction entry and when passing.
+void ld_coaching_horn_rules(ld_engine*,int enabled);
+// Horizon row (fraction of image height) for filmed/replayed video, where the phone's own
+// pitch does not describe the camera; NaN restores the measured camera pitch.
+void ld_camera_horizon(ld_engine*,double fraction);
 // Lane model output (two-channel logits, drivable + lanes, model image size) for
 // the frame most recently prepared; lane keeping on marked roads only.
 int ld_lane_map(ld_engine*,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height);

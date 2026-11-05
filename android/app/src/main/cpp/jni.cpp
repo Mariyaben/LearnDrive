@@ -163,7 +163,9 @@ JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint
     e->GetLongArrayRegion(nodes,0,n,reinterpret_cast<jlong*>(ids.data()));e->GetDoubleArrayRegion(latLon,0,2*n,ll.data());
     return ld_road_way(engine(h),way,roadClass,ids.data(),ll.data(),size_t(n))?JNI_TRUE:JNI_FALSE;
 }
-JNIEXPORT jdoubleArray JNICALL JNI(roadJunction)(JNIEnv* e,jobject,jlong h,jdouble now) {double v[4]{};ld_road_junction(engine(h),now,v,4);return output(e,v,4);}
+JNIEXPORT jdoubleArray JNICALL JNI(roadJunction)(JNIEnv* e,jobject,jlong h,jdouble now) {double v[9]{};ld_road_junction(engine(h),now,v,9);return output(e,v,9);}
+JNIEXPORT void JNICALL JNI(roadBump)(JNIEnv*,jobject,jlong h,jlong node) {ld_road_bump(engine(h),int64_t(node));}
+JNIEXPORT void JNICALL JNI(hornRules)(JNIEnv*,jobject,jlong h,jboolean enabled) {ld_coaching_horn_rules(engine(h),enabled?1:0);}
 JNIEXPORT jboolean JNICALL JNI(laneMap)(JNIEnv* e,jobject,jlong h,jlong source,jdouble time,jfloatArray drivable,jfloatArray lanes,jint width,jint height) {
     const jsize n=jsize(2)*width*height;if(width<=0||height<=0||e->GetArrayLength(drivable)!=n||e->GetArrayLength(lanes)!=n)return JNI_FALSE;
     auto* road=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(drivable,nullptr));

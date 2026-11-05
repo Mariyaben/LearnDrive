@@ -15,6 +15,8 @@ struct ActorRisk {
     RiskKind kind=RiskKind::None;
     double ttc=std::numeric_limits<double>::infinity(),enterSeconds=std::numeric_limits<double>::infinity();
     double expansion{},inwardRate{},rawInward{},foot{},center{},score{};
+    // Ground distance (m) from the contact row relative to the horizon; a coarse estimate.
+    double distanceM=std::numeric_limits<double>::infinity();
     bool inPath{},left{};
 };
 // Real-time risk reasoning over all tracked road users. Each tick it assesses

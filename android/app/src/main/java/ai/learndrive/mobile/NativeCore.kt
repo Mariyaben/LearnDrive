@@ -138,6 +138,12 @@ class NativeCore : AutoCloseable {
     @Synchronized fun roadJunction(now:Double):DoubleArray=roadJunction(handle,now)
     private external fun roadWay(h:Long,id:Long,roadClass:Int,nodes:LongArray,latLon:DoubleArray):Boolean
     private external fun roadJunction(h:Long,now:Double):DoubleArray
+    /** A mapped speed bump on a road node already added with [roadWay]. */
+    @Synchronized fun roadBump(node:Long)=roadBump(handle,node)
+    private external fun roadBump(h:Long,node:Long)
+    /** Indian road practice: horn at blind bends, junction entry and when passing (default on). */
+    @Synchronized fun hornRules(enabled:Boolean)=hornRules(handle,enabled)
+    private external fun hornRules(h:Long,enabled:Boolean)
     /** Lane model logits (drivable, lanes: 2 x height x width) for the frame just prepared. */
     @Synchronized fun laneMap(source:Long,time:Double,drivable:FloatArray,lanes:FloatArray,width:Int,height:Int):Boolean=
         laneMap(handle,source,time,drivable,lanes,width,height)

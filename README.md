@@ -1,6 +1,9 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.4 (experimental, host-tested only).** One situation planner
+**Current Android candidate: 0.7.5 (experimental, host-tested only).** 0.7.5 measures the
+camera horizon so road-user distance and "brake now" urgency hold with a tilted phone, adds
+Indian horn practice and map-based speed bumps and sharp bends, and shows the road-map state
+(see the [instructor-labelled drive review](docs/reviews/2026-11-05-instructor-drive.md)). One situation planner
 composes each instruction from everything relevant at that moment (hill, junction, the most
 dangerous road users) instead of fixed sentences; junctions ahead are coached without a
 destination from OpenStreetMap roads; lane keeping uses lane lines on marked roads; and an

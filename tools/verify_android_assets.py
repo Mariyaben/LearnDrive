@@ -74,7 +74,7 @@ assert formats == {(1, 22050, 2)}
 assert {path.name for path in (assets / "audio").glob("prompt-*.wav")} == {f"prompt-{i}.wav" for i in range(1, prompt_count + 1)}
 # Composed-utterance fragments: ids/text match the native catalogue, all recorded.
 fragment_count = int(re.search(r"fragmentCount=(\d+)", native_text).group(1))
-fragment_enum = re.search(r"enum class Fragment : int \{(.*?)\};", native_text, re.S).group(1)
+fragment_enum = re.sub(r"//[^\n]*", "", re.search(r"enum class Fragment : int \{(.*?)\};", native_text, re.S).group(1))
 fragment_ids, current = {}, -1
 for part in [p.strip() for p in " ".join(fragment_enum.splitlines()).split(",") if p.strip()]:
     if "=" in part:

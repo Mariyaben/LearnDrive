@@ -55,11 +55,11 @@ Both sides are classified by one instruction lexicon. Each sentence can carry se
 |---|---|
 | Speed | brake, slow, stop (`reduce_speed` covers both brake and slow) |
 | Car controls | clutch, gear (with the gear number), accelerate, steer |
-| Signals and checks | signal (with the side), mirror, look |
+| Signals and checks | signal (with the side), mirror, look, horn |
 | Position and timing | keep left, give space, wait |
-| Context | junction, slope, road user |
+| Context | junction, slope, road user, speed bump |
 
-Two intents are not given by the app by design: **proceed** ("go now") and **horn**. The app never grants permission to go. These intents appear in the report but are excluded from the coverage score.
+One intent is not given by the app by design: **proceed** ("go now"). The app never grants permission to go. It appears in the report but is excluded from the coverage score. The horn is advised on Indian roads (blind bends, junction entry, passing someone at the road edge) and is scored.
 
 ### Matching
 

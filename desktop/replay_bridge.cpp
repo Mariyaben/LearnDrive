@@ -73,6 +73,7 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
     return ld_preprocess(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
         f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1);
 }
+EXPORT void replay_camera_horizon(Replay* r,double fraction){ld_camera_horizon(r->engine,fraction);}
 EXPORT int replay_prepare_zoom(Replay* r,const uint8_t* yuv,float* tensor,float horizon) {
     const auto f=r->frame(yuv);
     return ld_preprocess_zoom(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,

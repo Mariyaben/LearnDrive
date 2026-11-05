@@ -58,7 +58,9 @@ try {
         'Person on the right. Ease off and give them space',
         'It has passed. Look both ways again before you move off',
         'You are drifting left. Move back to the centre of your lane',
-        'You are drifting right. Keep left')
+        'You are drifting right. Keep left',
+        'Speed bump ahead. Slow down, clutch down and change down',
+        'Sharp bend ahead. Sound the horn and keep left')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         $outputPath = Join-Path $assetDirectory ('prompt-{0}.wav' -f ($index + 1))
@@ -116,7 +118,9 @@ try {
         'Steady accelerator.',
         'Move back to the centre of your lane.',
         'Let them pass.',
-        'Look again before you move off.')
+        'Look again before you move off.',
+        'Sound the horn.',
+        'Speed bump ahead.')
     if ($Fragments -or $PromptIds.Count -eq 0) {
         for ($index = 0; $index -lt $fragmentTexts.Length; $index++) {
             $outputPath = Join-Path $assetDirectory ('fragment-{0}.wav' -f ($index + 1))
