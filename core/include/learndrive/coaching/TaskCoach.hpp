@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <string>
 namespace ld::coaching {
@@ -15,10 +16,24 @@ struct TaskProgress {
     double quietUntil=-1;
     uint64_t quietEvent{};
     unsigned quietHolds{};
+    // Act-by schedule at the current speed: preparation lead (s) and whether a
+    // separate "brake, change down" step is needed (faster than actByApproachSpeed).
+    double prepareLead=-1;
+    bool fast{};
 };
 // Experimental timing constants of the task schedule (seconds of lead time).
 inline constexpr double planningWindowOpen=40,planningWindowClose=22,approachWindowOpen=18,approachWindowClose=13;
 inline constexpr double executionQuietLead=8,executionQuietHold=10,minimumUsefulWindow=3,episodeStepSpacing=8;
+// Act-by timing (task scheduling on): an instructor speaks when the learner has to
+// start acting, not at a fixed time. Preparing for a junction (look, signal, slow
+// down) needs the time to brake from the current speed to ~15 km/h at a gentle
+// 1.2 m/s^2 plus ~10 s to check, signal and hear the sentence: ~10 s on a slow lane
+// (the instructor-labelled 2026-11-05 drive: 4-16 s), 18 s at 50 km/h, at most 25 s.
+// "Clutch down, look both ways" comes 2-6 s before the junction itself. A separate
+// "brake gently, change down" step is only needed above 25 km/h.
+inline constexpr double actByLateLimit=6.5,actByEntryOpen=6,actByEntryClose=2,actByApproachOpen=10.5,actByApproachClose=6.5,
+    actByApproachSpeed=25,actByStepSpacing=4.5;
+inline double actByPrepareLead(double kmh) noexcept {return std::clamp(10+std::max(0.,(kmh-15)/3.6)/1.2,10.,25.);}
 // A bounded teaching episode. No inference of mirror, indicator, control use or
 // manoeuvre correctness. Evidence and sequence are rechecked at delivery onset.
 class TaskCoach {

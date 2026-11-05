@@ -15,7 +15,9 @@ void check(bool b,const char* reason){if(!b)throw std::runtime_error(reason);}
 template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
 WorldState road(double t){WorldState w;w.sourceId=1;w.frameSequence=uint64_t(t*1000)+1;w.now=w.captureTime=t;
     w.active=w.audioReady=true;w.telemetry={t,30,0,0,1,true,true,true,false,false,false};return w;}
-void junction(WorldState& w,double lead=30){w.route={17,9,2,w.now,lead*30/3.6,lead,w.now,4,true,true};}
+// Act-by schedule at 30 km/h: preparation 6.5-14.5 s, "brake, change down" 6.5-10.5 s,
+// entry 2-6 s at or below 25 km/h; routine cues quiet below 8 s.
+void junction(WorldState& w,double lead=13){w.route={17,9,2,w.now,lead*30/3.6,lead,w.now,4,true,true};}
 void user(WorldState& w,uint64_t id=7,bool urgent=false,double tti=infinity){
     ActorObservation a;a.identity={IdentitySpace::Attention,id,0};a.captureTime=w.now;a.confidence=.9;a.relevant=true;a.category=0;
     a.inPath=a.opticalClosing=urgent||std::isfinite(tti);a.tti=urgent?2:tti;a.x=.4f;a.y=.3f;a.w=.1f;a.h=.4f;
@@ -50,18 +52,18 @@ struct Fixture {
 }
 int main(int argc,char** argv){try {
     test("automatic session activates junction coaching without lesson selection",[]{Fixture f;auto w=road(1);junction(w);check(f.accept(w)==56,"automatic planning missing");
-        w=road(14);junction(w,17);check(f.accept(w)==60,"automatic approach missing");});
+        w=road(14);junction(w,9);check(f.accept(w)==60,"automatic approach missing");});
     test("route-free driving keeps road-user bend and hill support",[]{Fixture f;auto w=road(1);user(w);check(f.accept(w)==64,"route-free road user");
         w=road(14);bend(w);check(f.accept(w)==int(Prompt::bendLeft),"route-free bend");w=road(27);hill(w);check(f.accept(w)==int(Prompt::gentleUp),"route-free hill");
         const auto s=f.e->drive().json(f.e->task());check(s.find("\"road_user_deliveries\":1")!=std::string::npos&&s.find("\"bend_deliveries\":1")!=std::string::npos&&s.find("\"hill_deliveries\":1")!=std::string::npos,"mixed record");});
     test("an urgent pedestrian interrupts preparation and only fresh useful preparation resumes",[]{Fixture f(1,true);auto w=road(1);junction(w);check(f.accept(w,true)==56,"prepare");
         check(f.e->playbackStarted(1,56,w,1,1),"planning onset");
-        {auto p=road(1.1);junction(p,29.1);user(p,8,true);f.e->decide(p,999);} // Seen on the previous frame too (urgent needs 2 detections).
-        w=road(1.2);junction(w,29);user(w,8,true);
+        {auto p=road(1.1);junction(p,12.9);user(p,8,true);f.e->decide(p,999);} // Seen on the previous frame too (urgent needs 2 detections).
+        w=road(1.2);junction(w,12.8);user(w,8,true);
         // The risk coach decides what to do about the urgent pedestrian: brake, be ready to stop.
         check(f.accept(w,true)==int(Prompt::brakeReadyStop),"hazard did not win");check(!f.e->playbackValid(1,56,w,1.2,1),"old task remained playable");
         check(f.e->playbackStarted(2,67,w,1.2,1)&&f.e->deliveryEvent(2,67,DeliveryStage::Completed,3),"warning completion");
-        w=road(3.1);junction(w,27);check(f.accept(w,true)==56,"fresh task did not recover after interrupt");
+        w=road(3.1);junction(w,11.1);check(f.accept(w,true)==56,"fresh task did not recover after interrupt");
         check(!f.e->task().progress().planningDelivered,"interrupted preparation counted as delivered");});
     test("developing measured conflict ranks ahead of a routine lesson without warning authority",[]{Fixture f;auto w=road(1);junction(w);user(w,8,false,9);
         auto d=f.decide(w);check(d.eligible&&d.mode==Mode::COACH&&d.ticket.candidate.prompt==Prompt::personEaseCover,"closing conflict starved by lesson");});
@@ -73,25 +75,25 @@ int main(int argc,char** argv){try {
     test("already-informed high-ranked cue cannot starve another task",[]{Fixture f;auto w=road(1);user(w);check(f.accept(w)==64,"first");
         w=road(14);user(w);w.candidates[0].prompt=Prompt::roadUserQuiet;w.candidates[0].kind=EventKind::Approach;hill(w);
         check(f.accept(w)==int(Prompt::gentleUp),"duplicate starved hill preparation");});
-    test("quiet execution retains urgent evidence and resumes other tasks afterwards",[]{Fixture f;auto w=road(1);junction(w,7);bend(w);hill(w);user(w);check(!f.decide(w).eligible,"routine speech during execution");
-        w=road(1.1);junction(w,6);user(w,8,true);auto d=f.decide(w);check(d.eligible&&d.mode==Mode::WARN,"urgent hidden in execution");
+    test("quiet execution retains urgent evidence and resumes other tasks afterwards",[]{Fixture f;auto w=road(1);junction(w,5.5);bend(w);hill(w);user(w);check(!f.decide(w).eligible,"routine speech during execution");
+        w=road(1.1);junction(w,5.4);user(w,8,true);auto d=f.decide(w);check(d.eligible&&d.mode==Mode::WARN,"urgent hidden in execution");
         // Navigation moved on to a different fresh event: the junction ended and other tasks resume.
         w=road(2);junction(w,60);w.route.eventId=10;w.route.feature=0;hill(w);check(f.accept(w)==int(Prompt::gentleUp),"junction quiet leaked into later road context");
         // Route lost inside execution: routine silence is held (bounded), then released.
-        Fixture g;w=road(1);junction(w,6);g.decide(w);w=road(2);hill(w);check(!g.decide(w).eligible,"route dropout un-quieted execution");
+        Fixture g;w=road(1);junction(w,5.5);g.decide(w);w=road(2);hill(w);check(!g.decide(w).eligible,"route dropout un-quieted execution");
         check(g.e->drive().json(g.e->task()).find("EXECUTION_QUIET")!=std::string::npos,"held quiet not visible");
         w=road(11.2);hill(w);check(g.accept(w)==int(Prompt::gentleUp),"bounded execution hold never released");
         Fixture h;h.e->enableTaskScheduling(false);w=road(1);junction(w,6);h.decide(w);w=road(2);hill(w);check(h.accept(w)==int(Prompt::gentleUp),"0.7.1 comparison mode changed");});
-    test("a routine cue yields to a known upcoming lesson window but a closing conflict does not",[]{Fixture f(0);auto w=road(1);junction(w,41);bend(w);
+    test("a routine cue yields to a known upcoming lesson window but a closing conflict does not",[]{Fixture f(0);auto w=road(1);junction(w,25);bend(w);
         check(!f.decide(w).eligible&&std::string(f.e->reasonCode())=="RESERVED_FOR_UPCOMING_TASK","routine cue consumed the lesson's interval");
-        w=road(1.6);junction(w,40.4);user(w,8,false,9);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::personEaseCover,"closing conflict reserved away");
-        Fixture b(1);w=road(1);junction(w,41);user(w);check(b.decide(w).eligible,"Balanced reserved although the window stays reachable");});
-    test("an episode follow-up step has its own spacing in every profile",[]{for(int profile=0;profile<3;++profile){Fixture f(profile);auto w=road(1);junction(w,30);check(f.accept(w)==56,"plan");
-        w=road(8.5);junction(w,17.5);check(!f.decide(w).eligible,"follow-up crammed after planning");
-        w=road(9);junction(w,17);check(f.accept(w)==60,"profile pacing removed the follow-up step");}});
-    test("lesson speech started late in its window is not truncated by its onset window",[]{Fixture f(1,true);auto w=road(1);junction(w,23);check(f.accept(w,true)==56,"plan");
-        check(f.e->playbackStarted(1,56,w,1,1),"onset");w=road(2.5);junction(w,21.5);check(f.e->continuationValid(1,56,w,2.5,1),"planning truncated below its onset window");
-        w=road(2.6);junction(w,7.9);check(!f.e->continuationValid(1,56,w,2.6,1),"lesson continued into execution quiet");
+        w=road(1.6);junction(w,24.4);user(w,8,false,9);auto d=f.decide(w);check(d.eligible&&d.ticket.candidate.prompt==Prompt::personEaseCover,"closing conflict reserved away");
+        Fixture b(1);w=road(1);junction(w,25);user(w);check(b.decide(w).eligible,"Balanced reserved although the window stays reachable");});
+    test("an episode follow-up step has its own spacing in every profile",[]{for(int profile=0;profile<3;++profile){Fixture f(profile);auto w=road(1);junction(w,13);check(f.accept(w)==56,"plan");
+        w=road(4);junction(w,10);check(!f.decide(w).eligible,"follow-up crammed after planning");
+        w=road(6);junction(w,8);check(f.accept(w)==60,"profile pacing removed the follow-up step");}});
+    test("lesson speech started late in its window is not truncated by its onset window",[]{Fixture f(1,true);auto w=road(1);junction(w,7);check(f.accept(w,true)==56,"plan");
+        check(f.e->playbackStarted(1,56,w,1,1),"onset");w=road(2.5);junction(w,6.2);check(f.e->continuationValid(1,56,w,2.5,1),"planning truncated below its onset window");
+        w=road(2.6);junction(w,1.5);check(!f.e->continuationValid(1,56,w,2.6,1),"lesson continued into the turn itself");
         Fixture old(1,true);old.e->enableTaskScheduling(false);w=road(1);junction(w,23);check(old.accept(w,true)==56&&old.e->playbackStarted(1,56,w,1,1),"old onset");
         w=road(2.5);junction(w,21.5);check(!old.e->continuationValid(1,56,w,2.5,1),"0.7.1 comparison mode changed");});
     test("instructor control: gear changes follow measured acceleration",[]{Fixture f(2);std::vector<int> said;
@@ -125,7 +127,7 @@ int main(int argc,char** argv){try {
         Fixture g(1);w=road(1);w.telemetry.pitchDegrees=-6;w.gradeBand=-2;w.telemetry.calibrated=false;check(!g.decide(w).eligible,"slope instruction without calibration");});
     test("instructor control: junction sequence signals, brakes, changes down, enters and exits",[]{Fixture f(1);std::vector<int> said;
         for(int i=10;i<=500;++i){const double t=i/10.;auto w=road(t);const double lead=40-t;
-            w.telemetry.speedKmh=t<20?30:std::max(8.,30-(t-20)*2);
+            w.telemetry.speedKmh=t<32?30:std::max(8.,30-(t-32)*4); // Steady, then slowing into the turn.
             if(lead>=0){junction(w,lead);w.route.distanceM=lead*w.telemetry.speedKmh/3.6;}else{junction(w,60);w.route.eventId=10;w.route.feature=0;}
             const int p=f.accept(w);if(p)said.push_back(p);}
         auto at=[&](Prompt p){for(size_t i=0;i<said.size();++i)if(said[i]==int(p))return int(i);return -1;};

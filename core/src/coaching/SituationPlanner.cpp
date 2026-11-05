@@ -87,8 +87,9 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     const bool urgent=primary.urgent;
     int priorityMax=priority(primary.prompt);
     primary.alsoCount=0;
-    auto absorb=[&](const Identity& id,Prompt p,EventKind kind){if(primary.alsoCount<primary.also.size()){
-        primary.also[primary.alsoCount]=id;primary.alsoPrompt[primary.alsoCount]=p;primary.alsoKind[primary.alsoCount]=kind;++primary.alsoCount;}
+    auto absorb=[&](const Identity& id,Prompt p,EventKind kind,int step=0,uint64_t epoch=0){if(primary.alsoCount<primary.also.size()){
+        primary.also[primary.alsoCount]=id;primary.alsoPrompt[primary.alsoCount]=p;primary.alsoKind[primary.alsoCount]=kind;
+        primary.alsoStep[primary.alsoCount]=step;primary.alsoEpoch[primary.alsoCount]=epoch;++primary.alsoCount;}
         priorityMax=std::max(priorityMax,priority(p));};
     // 2. The slope changes what stopping needs: engine braking downhill, holding uphill.
     const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
@@ -121,9 +122,24 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
             for(size_t k=0;k<probe.actionCount;++k)plan.act(probe.actions[k]);
             if(const uint64_t optical=risk.opticalFor(second->id))absorb({IdentitySpace::Optical,optical,0},equivalent(*second),EventKind::Attention);
         }
-        // 5. Junction phase: name it when acting near a known junction.
+        // 5. A junction step due now is said in the same breath, never dropped because a
+        // road user took the turn to speak ("Left turn ahead. Person on the left...").
+        if(!primary.lessonStep&&primary.origin!=5) {
+            const Candidate due=task.proposal(w);
+            Plan probe;probe.horn=plan.horn;
+            if(due.lessonStep&&actions(due.prompt,v,probe)) {
+                if(due.prompt==Prompt::junctionEntry)probe.act(F::soundHorn);
+                for(size_t k=0;k<probe.contexts;++k)plan.ctx(probe.context[k]);
+                for(size_t k=0;k<probe.actionCount;++k)plan.act(probe.actions[k]);
+                absorb(due.identity,due.prompt,due.kind,due.lessonStep,due.lessonEpoch);
+            }
+        }
+        // 6. Junction phase: name it when acting near a known junction.
         const auto& j=task.progress();
-        if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=25&&primary.origin!=5)
+        // Only once its preparation is due or given: naming the turn earlier and again at
+        // its own instruction is repetition, not information.
+        const double named=j.prepareLead>0?j.prepareLead+1:25;
+        if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=named&&primary.origin!=5)
             plan.ctx(w.route.feature==4?F::leftTurnAhead:w.route.feature==5?F::rightTurnAhead:F::junctionAhead);
     }
     // An urgent moment sounds different from routine advice: "Brake now", not "Brake gently".

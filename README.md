@@ -1,6 +1,8 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.5 (experimental, host-tested only).** 0.7.5 measures the
+**Current Android candidate: 0.7.6 (experimental, host-tested only).** 0.7.6 times junction
+instructions by when the learner must act (about 10 s before a turn on a slow lane, more at speed)
+and folds a due junction step into a road-user instruction instead of dropping it. 0.7.5 measures the
 camera horizon so road-user distance and "brake now" urgency hold with a tilted phone, adds
 Indian horn practice and map-based speed bumps and sharp bends, and shows the road-map state
 (see the [instructor-labelled drive review](docs/reviews/2026-11-05-instructor-drive.md)). One situation planner

@@ -15,6 +15,11 @@ int severity(const Candidate& c) noexcept {return c.critical?3:c.urgent?2:1;}
 bool terminal(EventState s) noexcept {return s==EventState::Resolved||s==EventState::Expired;}
 // A ticket is addressed by its own prompt or by its composed utterance id.
 bool samePrompt(const Candidate& c,int prompt) noexcept {return prompt==int(c.prompt)||(c.utterance&&prompt==c.utterance);}
+// The i-th instruction a composed utterance also delivered, as its own ledger event.
+Candidate absorbed(const Candidate& p,size_t i) noexcept {
+    Candidate also;also.identity=p.also[i];also.prompt=p.alsoPrompt[i];also.kind=p.alsoKind[i];also.captureTime=p.captureTime;also.supported=true;
+    also.lessonStep=p.alsoStep[i];also.lessonEpoch=p.alsoEpoch[i];if(also.lessonStep)also.origin=5;return also;
+}
 }
 void ShortMemory::clear() noexcept {samples_={};cursor_=count_=0;last_=-infinity;source_=0;vehicle_.beginSource(0);}
 bool ShortMemory::observe(const WorldState& w) noexcept {
@@ -356,8 +361,9 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     }
     // An episode's own follow-up step is spaced from its previous step, not by
     // the unrelated-routine interval, so the profile cannot silently remove it.
-    const bool followUp=scheduled&&c.lessonStep>1&&lastOrdinaryLesson_==c.identity&&lastOrdinaryLessonEpoch_==c.lessonEpoch;
-    double spacing=followUp?std::min(interval(),episodeStepSpacing):interval();
+    // Lesson pacing follows the task schedule (act-by steps are seconds apart).
+    const bool followUp=scheduling_&&c.lessonStep>1&&lastOrdinaryLesson_==c.identity&&lastOrdinaryLessonEpoch_==c.lessonEpoch;
+    double spacing=followUp?std::min(interval(),actByStepSpacing):interval();
     // The post-turn instruction belongs to the junction just taught.
     if(scheduled&&c.prompt==Prompt::turnExit&&lastOrdinaryLesson_.space==IdentitySpace::Route)spacing=std::min(interval(),4.);
     // The same encounter getting worse ("ease off" -> "brake, be ready to stop") is not paced as new chatter.
@@ -367,12 +373,12 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     if(scheduled&&c.origin==7)spacing=std::min(spacing,priority(c.prompt)>=4?3.:priority(c.prompt)>=3?6.:interval());
     // Consecutive vehicle-control instructions (e.g. second then third gear) are one sequence.
     if(scheduled&&c.origin==6&&lastOrdinaryOrigin_==6)spacing=std::min(interval(),4.);
-    if(scheduled&&c.lessonStep&&!followUp) {
+    if(scheduling_&&c.lessonStep&&!followUp) {
         // Deadline-aware pacing: if waiting out the full routine interval would
         // leave this step less than a useful part of its window, the minimum
         // episode spacing applies instead. Unrelated routine cues keep the interval.
-        const double lead=task_.progress().leadSeconds,close=c.lessonStep==1?planningWindowClose:approachWindowClose;
-        if(lead>=0&&lead-std::max(0.,interval()-(w.now-lastOrdinary_))<close+minimumUsefulWindow)spacing=std::min(interval(),episodeStepSpacing);
+        const double lead=task_.progress().leadSeconds,close=c.lessonStep==1?actByLateLimit:c.lessonStep==2?actByApproachClose:actByEntryClose;
+        if(lead>=0&&lead-std::max(0.,interval()-(w.now-lastOrdinary_))<close+minimumUsefulWindow)spacing=std::min(interval(),actByStepSpacing);
     }
     if(choice.mode==Mode::DEFER||(ordinary&&w.now-lastOrdinary_<spacing)||(!ordinary&&w.now-lastWarning_<.25)) {
         decision_.mode=Mode::DEFER;decision_.blocked=Block::Cooldown;event.state=EventState::Deferred;
@@ -423,8 +429,7 @@ bool CoachingEngine::accept(uint64_t sequence,int prompt,const WorldState& w,dou
     if(const auto* u=utterance(pending_.candidate.utterance)){lastSpoken_=*u;lastSpokenAt_=now;}
     // Instructions absorbed into a composed utterance were delivered too.
     for(size_t i=0;i<std::min(pending_.candidate.alsoCount,pending_.candidate.also.size());++i) {
-        Candidate also;also.identity=pending_.candidate.also[i];also.prompt=pending_.candidate.alsoPrompt[i];also.kind=pending_.candidate.alsoKind[i];
-        also.captureTime=pending_.candidate.captureTime;also.supported=true;
+        Candidate also=absorbed(pending_.candidate,i);
         auto& extra=ledger_.observe(source_,also,now);extra.state=EventState::Accepted;extra.acceptedAt=now;extra.acceptedSeverity=1;
         extra.acceptedPrompt=also.prompt;++extra.acceptances;extra.voiceSubmitted=submitted;extra.visualOnly=!voice_;
         extra.deliveryStage=submitted?DeliveryStage::Submitted:DeliveryStage::VisualOnly;extra.retryable=false;
@@ -519,6 +524,9 @@ bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage st
     auto& event=ledger_.observe(source_,ticket->candidate,now);event.deliveryStage=stage;
     if(stage==DeliveryStage::Completed)drive_.delivered(ticket->candidate,now);
     const bool failed=stage==DeliveryStage::Interrupted||stage==DeliveryStage::Expired||stage==DeliveryStage::Failed;
+    // What a composed sentence also said shares its fate: finished, or to be said again.
+    if(ticket->accepted)for(size_t i=0;i<std::min(ticket->candidate.alsoCount,ticket->candidate.also.size());++i){
+        auto& extra=ledger_.observe(source_,absorbed(ticket->candidate,i),now);extra.deliveryStage=stage;if(failed)extra.retryable=true;}
     if(failed) {
         event.retryable=true;
         if(ticket->accepted) {
