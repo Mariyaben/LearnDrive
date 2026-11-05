@@ -107,7 +107,13 @@ int main(int argc,char** argv){try {
         auto has=[&](Prompt p){for(int x:said)if(x==int(p))return true;return false;};
         check(has(Prompt::gearDownSecond),"change-down instruction missing");check(has(Prompt::stopClutch),"clutch instruction missing at stop");
         check(has(Prompt::moveOffPrep),"moving-off preparation missing");
-        for(int x:said)check(x!=int(Prompt::gearUpSecond)&&x!=int(Prompt::gearUpThird),"gear-up instruction while slowing");});
+        for(int x:said)check(x!=int(Prompt::gearUpSecond)&&x!=int(Prompt::gearUpThird),"gear-up instruction while slowing");
+        // The same stop where navigation says the destination is here: no moving-off cue.
+        Fixture end(2);said.clear();
+        for(int i=10;i<=250;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=std::max(0.,40-3*(t-1));w.arriving=t>8;
+            const int p=end.accept(w);if(p)said.push_back(p);}
+        check(has(Prompt::stopClutch),"clutch instruction missing at the destination stop");
+        check(!has(Prompt::moveOffPrep),"moving-off preparation at the destination");});
     test("instructor control: road user escalates from ease-off to brake when closing",[]{Fixture f(1);auto w=road(1);user(w);
         check(f.accept(w)==int(Prompt::personEaseCover),"announcement instead of instruction");
         w=road(4);user(w,7,false,4);check(f.accept(w)==int(Prompt::brakeReadyStop),"closing road user did not escalate to brake");
@@ -191,6 +197,20 @@ int main(int argc,char** argv){try {
         check(bump==1,"speed bump not named exactly once");check(bend==1,"sharp bend not named exactly once");
         check(said.find("horn")!=std::string::npos,"no horn at a sharp bend on Indian roads");
         auto [bump2,bend2,said2]=run(false);check(bump2==1&&bend2==0&&said2.find("horn")==std::string::npos,"horn advice without horn rules");});
+    test("map knowledge: a bend is named about 7 s ahead, once even as its map point moves, never mid-bend, no change-up into it",[&]{
+        Fixture f(2);std::vector<std::pair<double,std::string>> said;
+        for(int i=10;i<=200;++i){const double t=i/10.;auto w=road(t);w.mapTime=t;
+            w.telemetry.speedKmh=std::min(40.,20+4*t); // Accelerating towards the bend: fourth-gear speed.
+            const double ahead=110-(t-1)*10;          // About 10 m/s.
+            if(ahead>-20){w.bendAheadM=std::max(0.,ahead);w.bendId=ahead>20?88:89;w.bendRight=true;} // The bend node shifts at 20 m.
+            const auto text=speak(f,w);if(!text.empty())said.push_back({t,text});}
+        int bends=0;double at=-1;bool upNear=false,upAfter=false;
+        for(auto& [t,s]:said){std::cout<<"    "<<t<<": "<<s<<std::endl;
+            if(s.find("bend")!=std::string::npos){++bends;at=t;}
+            const double ahead=110-(t-1)*10;if(s.find("Change up")!=std::string::npos){if(ahead>0)upNear=true;else upAfter=true;}}
+        check(bends==1,"bend not named exactly once as its map point moved");
+        const double lead=(110-(at-1)*10)/10.;check(lead>=3&&lead<=7.5,"bend named too late or too early");
+        check(!upNear,"change-up advice into a sharp bend");check(upAfter,"held change-up never given after the bend");});
     test("junction entry on Indian roads adds the horn to clutch down and look both ways",[&]{
         auto entry=[&](bool horn){Fixture f(2);std::string text;
             for(int i=10;i<=400;++i){const double t=i/10.;auto w=road(t);const double lead=std::max(.5,40-t);junction(w,lead);w.telemetry.speedKmh=lead<6?8:20;w.hornRules=horn;

@@ -64,6 +64,8 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
     {const auto& A=nodes_.at(ways_[wi].nodes[seg]);const auto& B=nodes_.at(ways_[wi].nodes[seg+1]);
      const double len=std::hypot(l.x(B.lon)-l.x(A.lon),l.y(B.lat)-l.y(A.lat));ahead_.distanceM=0;
      double travelled=(forward?1-bestT:bestT)*len;double prevLat=lat,prevLon=lon;
+     // The map node we came from (for the first node ahead: the other end of the matched segment).
+     int64_t fromId=ways_[wi].nodes[forward?seg:seg+1];
      for(int steps=0;steps<80&&travelled<=lookAheadM;++steps) {
         const int64_t id=ways_[wi].nodes[idx];const auto& node=nodes_.at(id);
         const double inBearing=bearingBetween(l,prevLat,prevLon,node.lat,node.lon);
@@ -76,16 +78,32 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
         }
         lastIn=inBearing;prevDist=travelled;prevId=id;
         if(node.branches>=3) {
-            bool straight=false,important=false;
+            bool straight=false,important=false,straightRoad=false,sideRoad=false;
+            // How sharply our own road leaves this node (it may bend here while another road carries on).
+            const long own=long(idx)+(forward?1:-1);double ownTurn=-1;
+            if(own>=0&&own<long(ways_[wi].nodes.size())){const auto& on=nodes_.at(ways_[wi].nodes[size_t(own)]);
+                ownTurn=angleDiff(inBearing,bearingBetween(l,node.lat,node.lon,on.lat,on.lon));}
             for(const auto& [w,p]:nodeWays_.at(id))for(int side:{-1,1}){const long q=long(p)+side;
                 if(q<0||q>=long(ways_[w].nodes.size()))continue;const auto& nb=nodes_.at(ways_[w].nodes[size_t(q)]);
-                if(std::abs(nb.lat-prevLat)<1e-9&&std::abs(nb.lon-prevLon)<1e-9)continue; // where we came from
+                if(ways_[w].nodes[size_t(q)]==fromId)continue; // where we came from
                 const double turn=angleDiff(inBearing,bearingBetween(l,node.lat,node.lon,nb.lat,nb.lon));
-                const bool continuation=turn<35;straight|=continuation;
+                // A real road (not a driveway or track, unless we are on one) carrying straight on.
+                // A service lane straight ahead does not mean our road continues: a road ending
+                // at a T with a driveway opposite still ends.
+                const bool continuation=turn<35,realRoad=ways_[w].cls<=std::max<int>(Residential,ways_[wi].cls);
+                straight|=continuation&&realRoad;
+                if(continuation&&realRoad&&!(w==wi&&q==own))straightRoad=true;
+                if(!continuation&&realRoad&&!(w==wi&&q==own))sideRoad=true;
                 // More important road, or a true crossroads with an equal road.
                 if(!continuation&&(ways_[w].cls<ways_[wi].cls||(node.branches>=4&&ways_[w].cls<=ways_[wi].cls)))important=true;}
-            if(!straight||important) {
-                ahead_.valid=true;ahead_.roadEnds=!straight;ahead_.nodeId=id;ahead_.wayId=ways_[wi].id;
+            // Our road turns away here while another road goes straight on: the learner has to choose,
+            // steer and give way, which is a junction to prepare for, not just a bend.
+            const bool roadTurnsAway=ownTurn>=35&&straightRoad;
+            // Nothing real carries straight on: if our road stops here it ends (a T); if it bends
+            // here with a real road leaving, the learner must choose; with only a driveway it is a bend.
+            const bool ownContinues=ownTurn>=0,roadEnds=!straight&&!ownContinues,bendAtJunction=!straight&&ownContinues&&sideRoad;
+            if(roadEnds||bendAtJunction||important||roadTurnsAway) {
+                ahead_.valid=true;ahead_.roadEnds=roadEnds;ahead_.nodeId=id;ahead_.wayId=ways_[wi].id;
                 ahead_.distanceM=travelled;ahead_.branches=node.branches;return ahead_;
             }
         }
@@ -94,9 +112,10 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
         if(next>=0&&next<long(ways_[wi].nodes.size())) {
             const auto& nn=nodes_.at(ways_[wi].nodes[size_t(next)]);
             travelled+=std::hypot(l.x(nn.lon)-l.x(node.lon),l.y(nn.lat)-l.y(node.lat));
-            prevLat=node.lat;prevLon=node.lon;idx=size_t(next);continue;
+            prevLat=node.lat;prevLon=node.lon;fromId=id;idx=size_t(next);continue;
         }
-        double bestTurn=45;bool moved=false;size_t nw=0,nidx=0;bool nfwd=true;
+        // At a plain way boundary (no side road) the road carries on however sharply it bends.
+        double bestTurn=node.branches==2?181:45;bool moved=false;size_t nw=0,nidx=0;bool nfwd=true;
         for(const auto& [w,p]:nodeWays_.at(id)){if(w==wi)continue;for(int side:{-1,1}){const long q=long(p)+side;
             if(q<0||q>=long(ways_[w].nodes.size()))continue;const auto& nb=nodes_.at(ways_[w].nodes[size_t(q)]);
             const double turn=angleDiff(inBearing,bearingBetween(l,node.lat,node.lon,nb.lat,nb.lon));
@@ -104,7 +123,7 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
         if(!moved)break; // Dead end: nothing to prepare for.
         const auto& nn=nodes_.at(ways_[nw].nodes[nidx]);
         travelled+=std::hypot(l.x(nn.lon)-l.x(node.lon),l.y(nn.lat)-l.y(node.lat));
-        prevLat=node.lat;prevLon=node.lon;wi=nw;idx=nidx;forward=nfwd;
+        prevLat=node.lat;prevLon=node.lon;fromId=id;wi=nw;idx=nidx;forward=nfwd;
      }}
     return ahead_;
 }

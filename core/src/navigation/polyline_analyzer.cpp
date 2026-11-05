@@ -236,6 +236,10 @@ MacroContext ProviderTurnCoach::context(double now) const noexcept {
     out.match=Match::ready;out.valid=true;
     if(input_.kind==TurnKind::left)out.feature=Feature::leftTurn;
     else if(input_.kind==TurnKind::right)out.feature=Feature::rightTurn;
+    // A fork, roundabout, U-turn, merge or ramp is still a junction to prepare for (look,
+    // ease off, then clutch and look both ways), without a left/right signal instruction.
+    else if(input_.kind==TurnKind::fork||input_.kind==TurnKind::roundabout||input_.kind==TurnKind::uTurn||
+            input_.kind==TurnKind::merge||input_.kind==TurnKind::ramp)out.feature=Feature::junction;
     // Provider estimates may be displayed as estimates. No shape index, bend,
     // exact-distance phrase, posted speed limit or gear can be derived here.
     out.distanceM=out.maneuverDistanceM=input_.remainingM;
@@ -264,6 +268,11 @@ void ProviderTurnCoach::accepted(double now) noexcept {
     if(!pending_||pending_!=eventId_||!std::isfinite(now)||now<lastAccepted_)return;
     acceptedSession_=input_.session;acceptedEpoch_=input_.routeEpoch;
     acceptedStep_=input_.step;acceptedKind_=input_.kind;lastAccepted_=now;pending_=0;
+}
+bool ProviderTurnCoach::arriving(double now) const noexcept {
+    if(!active_||!available_||!std::isfinite(now)||now<input_.receivedAt||now-input_.receivedAt>3)return false;
+    return input_.state==TurnState::arrived||
+        (input_.state==TurnState::navigating&&input_.kind==TurnKind::destination&&input_.remainingM<=80);
 }
 const char* ProviderTurnCoach::status(double now) const noexcept {
     if(!active_)return "No provider route selected";

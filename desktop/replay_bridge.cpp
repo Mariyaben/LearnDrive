@@ -164,6 +164,22 @@ EXPORT int replay_navigation(Replay* r,double time,uint64_t sequence,int step,in
     return t&&f;
 }
 EXPORT void replay_navigation_unavailable(Replay* r){if(r)ld_navigation_turn_unavailable(r->engine);}
+// Route-drive simulation: the navigation feed (step < 0 = no destination) and a GPS
+// fix at a real position, plus road geometry for the junction scout (bends, bumps).
+// The drive is SYNTHETIC: positions come from a routed polyline, not measurement.
+EXPORT int replay_navigation_at(Replay* r,double time,uint64_t sequence,int step,int maneuver,double remainingM,double remainingS,
+    double speedKmh,double lat,double lon,double bearing) {
+    if(!r||r->source!=2)return 0;
+    ld_navigation_turn turn{1,1,1,sequence,time,LD_TURN_NAVIGATING,step,maneuver,remainingM,remainingS};
+    const int t=step>=0?ld_navigation_turn_update(r->engine,&turn):1;
+    const int f=ld_navigation_fix(r->engine,r->source,time,lat,lon,4,speedKmh,.5,std::isfinite(speedKmh),bearing,std::isfinite(bearing));
+    return t&&f;
+}
+EXPORT int replay_road_way(Replay* r,int64_t way,int roadClass,const int64_t* nodes,const double* latLon,size_t count) {
+    return r?ld_road_way(r->engine,way,roadClass,nodes,latLon,count):0;
+}
+EXPORT void replay_road_bump(Replay* r,int64_t node){if(r)ld_road_bump(r->engine,node);}
+EXPORT int replay_road_ahead(Replay* r,double now,double* out){return r?ld_road_junction(r->engine,now,out,9):0;}
 EXPORT void replay_coaching_automatic(Replay* r,int automatic,int scheduling) {
     if(!r)return;ld_coaching_automatic(r->engine,automatic);ld_coaching_task_scheduling(r->engine,scheduling);
 }

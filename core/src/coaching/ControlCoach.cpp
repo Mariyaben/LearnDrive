@@ -19,7 +19,7 @@ Prompt upPrompt(int g) noexcept {
 const GearBands defaultBands{};
 }
 void ControlCoach::reset() noexcept {
-    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=-1;stopCued_=moveOffCued_=false;
+    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=lastBendCue_=-1;stopCued_=moveOffCued_=lastBendRight_=false;
     lastQuietEvent_=lastBump_=lastBend_=0;active_={};
 }
 void ControlCoach::propose(int prompt,double now,double seconds) noexcept {
@@ -54,12 +54,18 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
     else stoppedSince_=-1;
     if(v>20){stopCued_=false;moveOffCued_=false;}
     if(!stopCued_&&v>3&&v<12&&recent==SpeedTrend::Decreasing&&!quiet&&support>=1){stopCued_=true;propose(int(Prompt::stopClutch),now,3);}
-    if(stoppedSince_>=0&&now-stoppedSince_>=4&&!moveOffCued_&&support>=2){moveOffCued_=true;propose(int(Prompt::moveOffPrep),now,6);}
+    // Stopped at the destination: the drive is over, so no moving-off preparation.
+    if(stoppedSince_>=0&&now-stoppedSince_>=4&&!moveOffCued_&&support>=2&&!w.arriving){moveOffCued_=true;propose(int(Prompt::moveOffPrep),now,6);}
     if(v<=3)gear_=1;
+    // A mapped bend or bump within about 10 s: an instructor keeps the learner in gear
+    // (no "change up") until past it, rather than accelerating into it.
+    const double mapMps=std::max(v,5.)/3.6;
+    const bool mapHazardNear=cognition::fresh(now,w.mapTime,2.5)&&
+        ((w.bendId&&w.bendAheadM/mapMps<=10)||(w.bumpId&&w.bumpAheadM/mapMps<=10));
     // Gear changes for the measured speed (hysteresis + 0.6 s persistence).
     if(!gear_)gear_=bandFor(bands_,v);
     int target=gear_;
-    if(gear_<5&&v>bands_.up[size_t(gear_+1)]&&recent!=SpeedTrend::Decreasing)target=gear_+1;
+    if(gear_<5&&v>bands_.up[size_t(gear_+1)]&&recent!=SpeedTrend::Decreasing&&!mapHazardNear)target=gear_+1;
     else if(gear_>2&&v<bands_.down[size_t(gear_)]&&recent==SpeedTrend::Decreasing)target=gear_-1;
     if(target!=gear_) {
         if(candidateGear_!=target){candidateGear_=target;candidateSince_=now;}
@@ -87,13 +93,20 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
         if(due&&driftLeftSince_>=0&&now-driftLeftSince_>=1.5){lastLaneCue_=now;driftLeftSince_=-1;propose(int(Prompt::driftLeftCentre),now,3);}
     } else driftLeftSince_=driftRightSince_=-1;
     // The road ahead from the map: an instructor names a speed bump and a sharp (blind)
-    // bend a few seconds before it, once each. Lead = distance at the measured speed.
+    // bend about 7 s before it (time to slow, change down and sound the horn), once each,
+    // and never once the car is already on it. Lead = distance at the measured speed.
     if(cognition::fresh(now,w.mapTime,2.5)&&!quiet) {
-        const double mps=std::max(v,5.)/3.6;
-        if(w.bumpId&&w.bumpId!=lastBump_&&std::isfinite(w.bumpAheadM)&&v>5&&(w.bumpAheadM/mps<=6||w.bumpAheadM<=25)){
+        const double mps=mapMps;
+        if(w.bumpId&&w.bumpId!=lastBump_&&std::isfinite(w.bumpAheadM)&&v>5&&w.bumpAheadM>=5&&(w.bumpAheadM/mps<=7||w.bumpAheadM<=30)){
             lastBump_=w.bumpId;propose(int(Prompt::bumpAhead),now,4);}
-        if(w.hornRules&&w.bendId&&w.bendId!=lastBend_&&std::isfinite(w.bendAheadM)&&v>8&&!nearJunction&&(w.bendAheadM/mps<=5||w.bendAheadM<=30)){
-            lastBend_=w.bendId;propose(int(Prompt::bendHorn),now,4);}
+        if(w.hornRules&&w.bendId&&w.bendId!=lastBend_&&std::isfinite(w.bendAheadM)&&v>8&&!nearJunction&&
+           w.bendAheadM>=10&&w.bendAheadM/mps>=1.5&&(w.bendAheadM/mps<=7||w.bendAheadM<=30)){
+            lastBend_=w.bendId;
+            // The map's bend point moves as the car nears it; a same-direction bend named
+            // under 8 s ago is the same bend (or one continuous curve), not a new lesson.
+            if(!(lastBendCue_>=0&&now-lastBendCue_<8&&w.bendRight==lastBendRight_)){
+                lastBendCue_=now;lastBendRight_=w.bendRight;propose(int(Prompt::bendHorn),now,4);}
+        }
     }
     // Hills: measured, calibrated phone pitch only.
     const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
@@ -121,11 +134,11 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     if(!speedOk(w,now))return false;
     const double v=w.telemetry.speedKmh;const auto& b=defaultBands;(void)b;
     switch(c.prompt) {
-    case Prompt::moveOffPrep:return v<=3;
+    case Prompt::moveOffPrep:return v<=3&&!w.arriving;
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
     case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
-    case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80;
+    case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80&&w.bendAheadM>=5;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::downhillSecond:case Prompt::downhillThird:case Prompt::uphillSecond:case Prompt::uphillThird: {
         if(!w.telemetry.calibrated||!w.telemetry.pitchValid||!std::isfinite(w.telemetry.pitchDegrees)||v<=3)return false;

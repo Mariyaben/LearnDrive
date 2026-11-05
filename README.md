@@ -1,6 +1,12 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.6 (experimental, host-tested only).** 0.7.6 times junction
+**Current Android candidate: 0.7.7 (experimental, host-tested only).** 0.7.7 was tested by driving
+the brain over real Kerala roads it had never seen, with and without a destination
+([route-drive simulation](docs/coach/ROUTE_SIMULATION.md)). The map scout now follows roads that
+bend where two map segments meet, treats a main road that bends away at a junction as a junction,
+does not mistake a driveway for the road carrying on, and judges a junction the same from far
+and near. Sharp bends are named about 7 s ahead, once, with no "change up" into them, and there
+is no "move off" cue when the learner pulls up at the destination. 0.7.6 times junction
 instructions by when the learner must act (about 10 s before a turn on a slow lane, more at speed)
 and folds a due junction step into a road-user instruction instead of dropping it. 0.7.5 measures the
 camera horizon so road-user distance and "brake now" urgency hold with a tilted phone, adds

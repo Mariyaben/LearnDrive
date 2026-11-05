@@ -85,6 +85,8 @@ public:
     bool fix(const Fix&) noexcept;
     bool active() const noexcept {return active_;}
     MacroContext context(double now) const noexcept;
+    // The provider says the learner is pulling up at the destination (fresh feed only).
+    bool arriving(double now) const noexcept;
     Prompt evaluate(double now,bool braking,bool shock) const noexcept;
     void accepted(double now) noexcept;
     const char* status(double now) const noexcept;
