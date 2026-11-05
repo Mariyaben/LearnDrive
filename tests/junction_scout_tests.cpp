@@ -66,5 +66,34 @@ int main(){try{
         JunctionScout g;way(g,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{8,150}},{4,{26,250}}});
         auto k=at(g,1,10);check(k.matched&&!k.bendNode&&!k.bumpNode,"gentle curve reported as a sharp bend");
         check(g.current(2).matched,"matched road without a junction is not reported");});
+    test("a road that bends where two map segments meet is followed to the junction beyond",[]{JunctionScout s;
+        way(s,1,Residential,{{1,{0,0}},{2,{0,100}}});                 // north, ends at the bend
+        way(s,2,Residential,{{2,{0,100}},{3,{100,100}},{4,{200,100}}}); // carries on east (a 90-degree bend)
+        way(s,3,Primary,{{5,{200,0}},{4,{200,100}},{6,{200,200}}});     // T with a primary road
+        auto j=at(s,1,10);check(j.valid&&j.nodeId==4&&std::abs(j.distanceM-290)<3,"walk stopped at a bend on a way boundary");
+        check(j.bendNode!=0&&j.bendRight,"bend on the way boundary not reported");});
+    test("where our road turns away and another road carries straight on, that is a junction",[]{JunctionScout s;
+        way(s,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{100,100}}});  // bends right at node 2
+        way(s,2,Residential,{{2,{0,100}},{4,{0,200}}});               // another road straight on
+        auto j=at(s,1,10);check(j.valid&&j.nodeId==2&&!j.roadEnds&&std::abs(j.distanceM-90)<2,"junction on a bending road missed");
+        // A driveway straight on is not a junction lesson; the bend is still reported.
+        JunctionScout d;way(d,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{100,100}}});way(d,2,Service,{{2,{0,100}},{4,{0,140}}});
+        auto k=at(d,1,10);check(!k.valid&&k.matched&&k.bendNode!=0,"driveway made a junction or hid the bend");
+        // Our road straight on with a minor road leaving at an angle stays quiet (unchanged).
+        JunctionScout m;way(m,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{0,200}}});way(m,2,Residential,{{2,{0,100}},{4,{100,100}}});
+        check(!at(m,1,10).valid,"minor side road on a straight road became a lesson");});
+    test("a junction is judged the same from far back and from just before it",[]{
+        // A main road crossed by a minor road: not a lesson, whether 90 m or 5 m away (the road
+        // behind the car is not a side road).
+        JunctionScout s;way(s,1,Primary,{{1,{0,0}},{2,{0,100}},{3,{0,200}}});way(s,2,Residential,{{4,{-100,100}},{2,{0,100}},{5,{100,100}}});
+        check(!at(s,1,10).valid&&!at(s,2,95).valid,"minor crossing on a main road became a lesson near it");
+        // Crossing a more important road: a lesson from both places.
+        JunctionScout r;way(r,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{0,200}}});way(r,2,Primary,{{4,{-100,100}},{2,{0,100}},{5,{100,100}}});
+        check(at(r,1,10).valid&&at(r,2,95).valid,"crossing a main road lost near it");});
+    test("a road ending at a T is still a T with a driveway straight ahead",[]{JunctionScout s;
+        way(s,1,Residential,{{1,{0,0}},{2,{0,100}}});
+        way(s,2,Tertiary,{{3,{-100,100}},{2,{0,100}},{4,{100,100}}});
+        way(s,3,Service,{{2,{0,100}},{5,{0,160}}}); // driveway opposite
+        auto j=at(s,1,10);check(j.valid&&j.nodeId==2&&j.roadEnds&&std::abs(j.distanceM-90)<2,"driveway hid the end of the road");});
     std::cout<<passed<<" junction scout groups passed\n";return 0;
 }catch(const std::exception& ex){std::cerr<<"FAIL "<<ex.what()<<'\n';return 1;}}

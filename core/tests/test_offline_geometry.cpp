@@ -137,7 +137,8 @@ int main() {
     check(provider.update(input)&&provider.evaluate(12,false,false)==Prompt::mapRightTurn,"new route epoch safely restarts step numbering");
     old=input;old.routeEpoch=1;++old.sequence;check(!provider.update(old),"older route revision rejected despite newer sequence");
     input.kind=TurnKind::roundabout;++input.sequence;provider.update(input);
-    check(provider.context(12).feature==Feature::none&&provider.evaluate(12,false,false)==Prompt::none,"unsupported roundabout is not converted to an ordinary turn or bend");
+    // A roundabout is a junction to prepare for, never an ordinary left/right turn or bend cue.
+    check(provider.context(12).feature==Feature::junction&&provider.evaluate(12,false,false)==Prompt::none,"roundabout converted to an ordinary turn or bend");
     input.kind=TurnKind::right;input.step=-1;++input.sequence;provider.update(input);
     check(!provider.context(12).valid&&provider.evaluate(12,false,false)==Prompt::none,"nullable step identity abstains");
     input.step=0;++input.sequence;provider.update(input);

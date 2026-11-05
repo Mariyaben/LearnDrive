@@ -78,6 +78,9 @@ struct WorldState {
     bool bendRight{};
     // Indian road practice: horn at blind bends, junction entry and when passing.
     bool hornRules=true;
+    // Navigation says the learner is pulling up at the destination: a stop here is the
+    // end of the drive, not a pause before moving off again.
+    bool arriving{};
     // Horizon row (fraction of image height) from the measured camera pitch. A camera
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;

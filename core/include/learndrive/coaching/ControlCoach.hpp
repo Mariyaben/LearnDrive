@@ -35,8 +35,8 @@ private:
     bool enabled_{};
     GearBands bands_{};
     int gear_{},candidateGear_{},slopeSign_{};
-    double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1;
-    bool stopCued_{},moveOffCued_{};
+    double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1,lastBendCue_=-1;
+    bool stopCued_{},moveOffCued_{},lastBendRight_{};
     uint64_t lastQuietEvent_{},next_{1},lastBump_{},lastBend_{};
     std::array<Active,4> active_{};
     std::array<uint32_t,81> counts_{};

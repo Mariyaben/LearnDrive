@@ -199,6 +199,7 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
     w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
     w.hornRules=e.hornRules;
+    w.arriving=provider&&e.providerNavigation.arriving(now);
     if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
         // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
