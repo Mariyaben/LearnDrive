@@ -9,7 +9,7 @@ struct Candidate;struct WorldState;class ShortMemory;class TaskCoach;
 // above this speed; down[g]: change down from gear g below this speed. These are
 // instructor rules of thumb, configurable per car, not measurements of the gearbox.
 struct GearBands {
-    std::array<double,6> up{0,0,12,22,37,52};
+    std::array<double,6> up{0,0,10,22,37,52};
     std::array<double,6> down{0,0,0,17,30,45};
 };
 // Instructor-style vehicle-control coaching from measured speed, speed trend,
@@ -37,7 +37,7 @@ private:
     int gear_{},candidateGear_{},slopeSign_{};
     double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1;
     bool stopCued_{},moveOffCued_{};
-    uint64_t lastQuietEvent_{},next_{1};
+    uint64_t lastQuietEvent_{},next_{1},lastBump_{},lastBend_{};
     std::array<Active,4> active_{};
     std::array<uint32_t,81> counts_{};
 };

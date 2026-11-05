@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
     private var evidenceSaved=false
     private var evidenceNotice="Preparing local diagnostics"
     private var evidenceFinishedObserved=false
+    @Volatile private var roadMapStatus="Road map: waiting for GPS"
     // Opt-in instructor voice recording for the instructor benchmark (with diagnostics only).
     private lateinit var lessonAudio:InstructorRecorder
     private lateinit var evidenceExportAudio:Button
@@ -273,7 +274,7 @@ class MainActivity : ComponentActivity() {
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
         // Junction-ahead coaching without a destination (online OpenStreetMap roads).
-        roads=RoadNetwork(core) {message->android.util.Log.i("LearnDriveRoads",message)};sensors.onFix={lat,lon->roads.onLocation(lat,lon)}
+        roads=RoadNetwork(core) {message->android.util.Log.i("LearnDriveRoads",message);roadMapStatus=message};sensors.onFix={lat,lon->roads.onLocation(lat,lon)}
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
@@ -1358,9 +1359,12 @@ class MainActivity : ComponentActivity() {
                 metrics.text=if(roadSource()&&setup.isMonitoring())"$speedText\n$slopeText" else "$speedText\n$slopeText\nTTI $approach · Vision $visionText · $audioStatus"
             }
             }
+            // A camera pointing at the sky sees little road: tell the driver (adjust only when parked).
+            val mountAdvice=if(mode=="Camera"&&cameraRunning)core.cameraUp(visionNow).let {SpatialReadiness.mountAdvice(it[0],it[1],it[2])} else null
             status.setUiText(when {
                 mode=="Desk"->"Simulated driving"
                 mode=="MP4"||options.filmedVideo->"Recorded / screen test · basic detection"
+                mountAdvice!=null->mountAdvice
                 else->roadHealth.status
             })
             if(showLab||mode!="Camera")metrics.append("\n$visionStatus\n$warningStatus")
@@ -1380,15 +1384,22 @@ class MainActivity : ComponentActivity() {
                     providerEvidenceAvailable=validEvidence
                 }
                 val update=google?.lastUpdate?.takeIf {visionNow-it.receivedAtSeconds in 0.0..3.0}
-                dashboard.navigationStatus.setUiText(if(!roadSource())"Navigation coaching paused for test input" else google?.state?.status?:"Google navigation unavailable")
+                // Without a destination the map still knows the road ahead: show it, and whether it loaded.
+                val freePractice=roadSource()&&google?.state?.guiding!=true&&google?.state?.routeReady!=true
+                val ahead=if(freePractice)core.roadJunction(visionNow) else null
+                dashboard.navigationStatus.setUiText(if(!roadSource())"Navigation coaching paused for test input" else
+                    if(freePractice)roadMapStatus.substringBefore(" (©") else google?.state?.status?:"Google navigation unavailable")
                 val valid=roadSource()&&fix!=null&&update?.state==GoogleNavigationPhase.ENROUTE
                 dashboard.setManeuver(if(valid)googleManeuverText(requireNotNull(update)) else when {
                     !roadSource()->"Test input"
                     google?.state?.routeReady==true&&!google.state.guiding->"Route ready · start session"
                     update?.state==GoogleNavigationPhase.REROUTING->"Updating route"
                     google?.state?.guiding==true->"Waiting for reliable location"
+                    ahead!=null&&ahead.size>=9&&ahead[5]<=80->"Speed bump ahead"
+                    ahead!=null&&ahead.size>=9&&ahead[6]<=80->if(ahead[7]!=0.0)"Sharp bend right ahead" else "Sharp bend left ahead"
+                    ahead!=null&&ahead[0]!=0.0->"Junction ahead"
                     else->null
-                },if(valid)update?.distanceMeters else null)
+                },if(valid)update?.distanceMeters else ahead?.let {a->when {a.size>=9&&a[5]<=80->a[5];a.size>=9&&a[6]<=80->a[6];a[0]!=0.0->a[1];else->null}})
             } else if(loadedRoute) {
                 val navigation=core.navigationContext(visionNow)
                 dashboard.navigationStatus.setUiText(if(roadSource())core.navigationStatus(visionNow) else "Map coaching paused for test input")

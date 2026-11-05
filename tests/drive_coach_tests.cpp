@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <vector>
 #include <algorithm>
+#include <string>
+#include <tuple>
 using namespace ld;using namespace ld::coaching;
 namespace {
 int passed=0;
@@ -170,6 +172,31 @@ int main(int argc,char** argv){try {
         const auto flat=run(0),down=run(-6);
         std::cout<<"    flat: "<<flat<<"\n    downhill: "<<down<<std::endl;
         check(down.rfind("Downhill.",0)==0&&down.find("Change down")!=std::string::npos,"downhill plan does not set the scene or lacks engine braking");});
+    // What the coach actually says this tick (composed sentence or recorded prompt), accepted.
+    auto speak=[](Fixture& f,const WorldState& w)->std::string{auto d=f.decide(w);if(!d.eligible)return "";
+        const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept spoken");
+        if(const auto* u=f.e->utterance(c.utterance)){std::string s;for(size_t q=0;q<u->count;++q){s+=fragmentText(static_cast<Fragment>(u->fragments[q]));s+=' ';}return s;}
+        return promptText(c.prompt);};
+    test("map knowledge: a speed bump ahead and a sharp bend (horn on Indian roads) are named once, a few seconds before",[&]{
+        auto run=[&](bool horn){Fixture f(1);std::string said;int bump=0,bend=0;
+            for(int i=10;i<=250;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=20;w.hornRules=horn;w.mapTime=t;
+                // A bump 60 m ahead closes at 20 km/h; a sharp bend comes after it.
+                w.bumpId=77;w.bumpAheadM=std::max(0.,60-(t-1)*5.6);w.bendId=88;w.bendAheadM=std::max(0.,110-(t-1)*5.6);w.bendRight=true;
+                const auto text=speak(f,w);if(text.empty())continue;
+                if(text.find("bump")!=std::string::npos)++bump;if(text.find("bend")!=std::string::npos)++bend;said+=text+"|";}
+            return std::make_tuple(bump,bend,said);};
+        auto [bump,bend,said]=run(true);std::cout<<"    "<<said<<std::endl;
+        check(bump==1,"speed bump not named exactly once");check(bend==1,"sharp bend not named exactly once");
+        check(said.find("horn")!=std::string::npos,"no horn at a sharp bend on Indian roads");
+        auto [bump2,bend2,said2]=run(false);check(bump2==1&&bend2==0&&said2.find("horn")==std::string::npos,"horn advice without horn rules");});
+    test("junction entry on Indian roads adds the horn to clutch down and look both ways",[&]{
+        auto entry=[&](bool horn){Fixture f(2);std::string text;
+            for(int i=10;i<=400;++i){const double t=i/10.;auto w=road(t);const double lead=std::max(.5,40-t);junction(w,lead);w.telemetry.speedKmh=lead<6?8:20;w.hornRules=horn;
+                const auto s=speak(f,w);if(s.find("ook both ways")!=std::string::npos)text=s;}
+            return text;};
+        const auto india=entry(true),other=entry(false);std::cout<<"    entry: "<<india<<" / without horn rules: "<<other<<std::endl;
+        check(india.find("Look both ways.")!=std::string::npos&&india.find("Sound the horn.")!=std::string::npos,"junction entry without the horn");
+        check(!other.empty()&&other.find("horn")==std::string::npos,"horn at junction entry without horn rules");});
     test("lane keeping: sustained drift right on a marked lane means keep left; no lane lines, no lane advice",[]{
         Fixture f(1);int said=0;
         for(int i=10;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;

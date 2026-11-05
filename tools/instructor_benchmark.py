@@ -57,19 +57,20 @@ LEXICON: list[tuple[str, list[str]]] = [
                  r"\b(now |you can |ok(ay)? |right,? )?go\b(?!\s\s)(?! (slow|slowly|easy|gently|down|up|left|right|straight))"]),
     ("accelerate", [r"\baccelerate\b", r"\bspeed up\b", r"\bmore (gas|power|throttle)\b", r"\b(add|give|press)( it)?( some| a bit of| a little| gentle)? (gas|throttle|power|accelerator)\b"]),
     ("steer", [r"\bstraighten\b", r"\bsteer(ing)?\b", r"\b(turn|rotate) the (steering )?wheel\b"]),
-    ("horn", [r"\bhorn\b", r"\bhonk\b"]),
+    ("horn", [r"\bhorn\b", r"\bhonk(ing)?\b"]),
     # Context: what the instruction is about, not an action.
     ("junction", [r"\bjunction\b", r"\bintersection\b", r"\bcrossroads?\b", r"\broundabout\b", r"\bturn(ing)? (left|right)\b",
                   r"\b(left|right) turn\b", r"\btake the (left|right|next)\b"]),
     ("slope", [r"\b(up|down)hill\b", r"\bhill\b", r"\bslope\b", r"\bincline\b", r"\bgradient\b"]),
+    ("bump", [r"\bspeed (breaker|bump|hump)s?\b", r"\bbumps?\b", r"\bhumps?\b", r"\bbreakers?\b"]),
     ("road_user", [r"\b(pedestrian|person|people|man|woman|child|children|kid|cyclist|bicycle|bike|motorbike|scooter|rider|truck|lorry|bus|tractor|car|vehicle|auto|rickshaw|cow|dog|animal)s?\b"]),
 ]
-CONTEXT = {"junction", "slope", "road_user"}
+CONTEXT = {"junction", "slope", "road_user", "bump"}
 # "Slow down" and "brake gently" both ask for less speed; agreement is also scored on the family.
 FAMILIES = {"reduce_speed": {"slow", "brake"}}
-# Intents the app does not give by design: it never grants permission to go, and it
-# never tells the learner to use the horn.
-NOT_GIVEN_BY_DESIGN = {"proceed", "horn"}
+# Intents the app does not give by design: it never grants permission to go. (The horn
+# is advised on Indian roads: blind bends, junction entry, passing at the road edge.)
+NOT_GIVEN_BY_DESIGN = {"proceed"}
 ORDINALS = {"first": 1, "1st": 1, "one": 1, "second": 2, "2nd": 2, "two": 2, "third": 3, "3rd": 3, "three": 3,
             "fourth": 4, "4th": 4, "four": 4, "fifth": 5, "5th": 5, "five": 5}
 TOKEN = re.compile(r"[a-z0-9']+")

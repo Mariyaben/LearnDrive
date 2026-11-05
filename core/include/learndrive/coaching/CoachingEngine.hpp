@@ -70,6 +70,16 @@ struct WorldState {
     double laneTime=-infinity;
     float laneLeft=-1,laneRight=-1;
     bool laneValid{};
+    // Road knowledge ahead from the map (no destination needed): bump and sharp bend.
+    double mapTime=-infinity,bumpAheadM=infinity,bendAheadM=infinity;
+    uint64_t bumpId{},bendId{};
+    bool bendRight{};
+    // Indian road practice: horn at blind bends, junction entry and when passing.
+    bool hornRules=true;
+    // Horizon row (fraction of image height) from the measured camera pitch. A camera
+    // pointing up puts the horizon low in the image; image geometry is relative to it.
+    double horizon=.5;
+    bool horizonMeasured{};
     int roadBend{},gradeBand{};
     bool roadValid{},engineValid{};
     // Independent vehicle input. A candidate's mechanicalMeasured flag cannot

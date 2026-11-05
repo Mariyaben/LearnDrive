@@ -27,6 +27,7 @@ class RoadNetwork(private val core:NativeCore,private val status:(String)->Unit=
     private var failures=0
     @Volatile private var retryAt=0L
     @Volatile var roads=0;private set
+    @Volatile var bumps=0;private set
 
     fun onLocation(lat:Double,lon:Double) {
         if(closed||inFlight||!lat.isFinite()||!lon.isFinite()||SystemClock.elapsedRealtime()<retryAt)return
@@ -38,7 +39,7 @@ class RoadNetwork(private val core:NativeCore,private val status:(String)->Unit=
             try {fetch(lat,lon);failures=0}
             catch(e:Exception) {
                 failures++;retryAt=SystemClock.elapsedRealtime()+min(120_000L,5_000L shl min(failures,5))
-                Log.w("LearnDriveRoads","Road map unavailable: ${e.message}");status("Road map unavailable; junction coaching needs a destination")
+                Log.w("LearnDriveRoads","Road map unavailable: ${e.message}");status(if(roads>0)"Road map: $roads roads · update failed, retrying" else "Road map unavailable (${e.message}); retrying")
             }finally {inFlight=false}
         }
     }
@@ -47,8 +48,11 @@ class RoadNetwork(private val core:NativeCore,private val status:(String)->Unit=
         // Snap to a ~0.9 km grid so requests reveal only a coarse area.
         val step=.008;val cLat=Math.round(lat/step)*step;val cLon=Math.round(lon/step)*step
         val box=doubleArrayOf(cLat-step,cLon-step,cLat+step,cLon+step)
-        val query="[out:json][timeout:20];way[\"highway\"~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|track)(_link)?$\"]"+
-            "(${box[0]},${box[1]},${box[2]},${box[3]});out body geom;"
+        // Roads, plus mapped speed bumps (traffic calming) for "Speed bump ahead".
+        val bbox="(${box[0]},${box[1]},${box[2]},${box[3]})"
+        val query="[out:json][timeout:20];(way[\"highway\"~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|track)(_link)?$\"]"+
+            "$bbox;node[\"traffic_calming\"]$bbox;);out body geom;"
+        status("Loading road map")
         val connection=(URL("https://overpass-api.de/api/interpreter").openConnection() as HttpURLConnection).apply {
             requestMethod="POST";doOutput=true;connectTimeout=10_000;readTimeout=25_000
             setRequestProperty("User-Agent","LearnDrive driving coach")
@@ -58,9 +62,11 @@ class RoadNetwork(private val core:NativeCore,private val status:(String)->Unit=
             connection.outputStream.use {it.write(("data="+URLEncoder.encode(query,"UTF-8")).toByteArray())}
             check(connection.responseCode==200) {"HTTP ${connection.responseCode}"}
             val elements=JSONObject(connection.inputStream.bufferedReader().use {it.readText()}).getJSONArray("elements")
-            var added=0
+            var added=0;val bumpNodes=ArrayList<Long>()
             for(i in 0 until elements.length()) {
-                val way=elements.getJSONObject(i);if(way.optString("type")!="way")continue
+                val way=elements.getJSONObject(i)
+                if(way.optString("type")=="node"){if(way.optJSONObject("tags")?.optString("traffic_calming").let {it!=null&&it!="no"&&it.isNotEmpty()})bumpNodes.add(way.getLong("id"));continue}
+                if(way.optString("type")!="way")continue
                 val cls=roadClass(way.optJSONObject("tags")?.optString("highway")?:continue)?:continue
                 val nodes=way.optJSONArray("nodes")?:continue;val geometry=way.optJSONArray("geometry")?:continue
                 if(nodes.length()<2||nodes.length()!=geometry.length())continue
@@ -69,8 +75,9 @@ class RoadNetwork(private val core:NativeCore,private val status:(String)->Unit=
                 for(k in ids.indices){val p=geometry.getJSONObject(k);latLon[2*k]=p.getDouble("lat");latLon[2*k+1]=p.getDouble("lon")}
                 if(!closed&&core.roadWay(way.getLong("id"),cls,ids,latLon))added++
             }
-            covered.add(box);roads+=added
-            status("Road map ready: $roads roads (© OpenStreetMap contributors)")
+            if(!closed)bumpNodes.forEach {core.roadBump(it)}
+            covered.add(box);roads+=added;bumps+=bumpNodes.size
+            status("Road map: $roads roads, $bumps bumps (© OpenStreetMap contributors)")
         }finally {connection.disconnect()}
     }
 

@@ -52,6 +52,8 @@ struct ld_engine {
     double coachingRouteReceipt=-ld::infinity;
     ld::navigation::JunctionScout scout; // Junction ahead without a destination (road geometry + GPS).
     double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
+    bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
+    double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
     std::string coachingDiagnostics;
@@ -196,6 +198,21 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
     w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
     w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
+    w.hornRules=e.hornRules;
+    if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
+    else if(e.sourceKind==LD_SOURCE_CAMERA) {
+        // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
+        const auto up=e.fusion.cameraUp(now);
+        if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));
+            w.horizon=std::clamp(.5+.96*std::tan(pitch),.25,.85);w.horizonMeasured=true;}
+    }
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto ahead=e.scout.current(now);
+        if(ahead.matched) {
+            w.mapTime=ahead.fixTime;w.bumpAheadM=ahead.bumpDistanceM;w.bumpId=uint64_t(std::max<int64_t>(0,ahead.bumpNode));
+            w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;
+        }
+    }
     // No route: the next junction an instructor would prepare for on the current road.
     // Direction is unknown, so it is a generic junction (feature 3), never a turn.
     if(!w.route.valid&&e.sourceKind==LD_SOURCE_CAMERA) {
@@ -805,6 +822,9 @@ int ld_road_way(ld_engine* e,int64_t way,int road_class,const int64_t* nodes,con
     try {return e&&e->scout.addWay(way,road_class,nodes,lat_lon,count);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
 }
 void ld_road_clear(ld_engine* e){if(e)e->scout.clear();}
+void ld_road_bump(ld_engine* e,int64_t node){if(e&&node>0)e->scout.addBump(node);}
+void ld_coaching_horn_rules(ld_engine* e,int enabled){if(e)e->hornRules=enabled!=0;}
+void ld_camera_horizon(ld_engine* e,double fraction){if(e)e->horizonOverride=std::isfinite(fraction)&&fraction>.2&&fraction<.9?fraction:std::numeric_limits<double>::quiet_NaN();}
 int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height) {
     if(!e||!source||source!=e->sourceId||!drivable||!lanes||e->transform.size<=0||!std::isfinite(time))return 0;
     try {
@@ -825,7 +845,10 @@ int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,c
 }
 int ld_road_junction(ld_engine* e,double now,double* out,size_t capacity) {
     if(!e||!out||capacity<4)return 0;const auto j=e->scout.current(now);
-    out[0]=j.valid;out[1]=j.distanceM;out[2]=double(j.nodeId);out[3]=j.roadEnds;return 1;
+    out[0]=j.valid;out[1]=j.distanceM;out[2]=double(j.nodeId);out[3]=j.roadEnds;
+    // Optional: matched road, bump and bend ahead, and how many roads are loaded.
+    if(capacity>=9){out[4]=j.matched;out[5]=j.bumpDistanceM;out[6]=j.bendDistanceM;out[7]=j.bendRight;out[8]=double(e->scout.wayCount());}
+    return 1;
 }
 const char* ld_fragment_text(int f) {return ld::fragmentText(static_cast<ld::Fragment>(f));}
 int ld_road_shape(ld_engine* e,double* out,size_t capacity) {

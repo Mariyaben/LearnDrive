@@ -5,6 +5,14 @@ public final class SpatialReadinessTest {
         if (!condition) throw new AssertionError(message);
     }
     public static void main(String[] args) {
+        double r12=Math.toRadians(12),r25=Math.toRadians(25),r5=Math.toRadians(5),r15=Math.toRadians(15);
+        check(SpatialReadiness.mountAdvice(1,0,0)==null,"level landscape mount flagged");
+        check(SpatialReadiness.mountAdvice(Math.cos(r5),0,Math.sin(r5))==null,"slightly downward camera flagged");
+        check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r12),0,-Math.sin(r12))).contains("too high"),"camera 12 degrees up not flagged");
+        check(String.valueOf(SpatialReadiness.mountAdvice(0,Math.cos(r12),-Math.sin(r12))).contains("too high"),"portrait camera up not flagged");
+        check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r25),0,Math.sin(r25))).contains("too low"),"camera 25 degrees down not flagged");
+        check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r15),Math.sin(r15),0)).contains("sideways"),"rolled mount not flagged");
+        check(SpatialReadiness.mountAdvice(0,0,0)==null,"missing gravity produced advice");
         check(SpatialReadiness.evaluate(false,true,0,1,0)==SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN,"recording inherited phone calibration");
         check(SpatialReadiness.evaluate(true,false,0,1,0)==SpatialReadiness.INTRINSICS_UNAVAILABLE,"missing optics accepted");
         for(double[] up:new double[][]{{0,0,0},{Double.NaN,1,0},{0,Double.POSITIVE_INFINITY,0},{0,10,0}})

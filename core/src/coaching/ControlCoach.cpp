@@ -20,7 +20,7 @@ const GearBands defaultBands{};
 }
 void ControlCoach::reset() noexcept {
     gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=-1;stopCued_=moveOffCued_=false;
-    lastQuietEvent_=0;active_={};
+    lastQuietEvent_=lastBump_=lastBend_=0;active_={};
 }
 void ControlCoach::propose(int prompt,double now,double seconds) noexcept {
     if(prompt<=0||prompt>promptCount)return;
@@ -86,6 +86,15 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
         if(due&&driftRightSince_>=0&&now-driftRightSince_>=1.5){lastLaneCue_=now;driftRightSince_=-1;propose(int(Prompt::driftRightKeepLeft),now,3);}
         if(due&&driftLeftSince_>=0&&now-driftLeftSince_>=1.5){lastLaneCue_=now;driftLeftSince_=-1;propose(int(Prompt::driftLeftCentre),now,3);}
     } else driftLeftSince_=driftRightSince_=-1;
+    // The road ahead from the map: an instructor names a speed bump and a sharp (blind)
+    // bend a few seconds before it, once each. Lead = distance at the measured speed.
+    if(cognition::fresh(now,w.mapTime,2.5)&&!quiet) {
+        const double mps=std::max(v,5.)/3.6;
+        if(w.bumpId&&w.bumpId!=lastBump_&&std::isfinite(w.bumpAheadM)&&v>5&&(w.bumpAheadM/mps<=6||w.bumpAheadM<=25)){
+            lastBump_=w.bumpId;propose(int(Prompt::bumpAhead),now,4);}
+        if(w.hornRules&&w.bendId&&w.bendId!=lastBend_&&std::isfinite(w.bendAheadM)&&v>8&&!nearJunction&&(w.bendAheadM/mps<=5||w.bendAheadM<=30)){
+            lastBend_=w.bendId;propose(int(Prompt::bendHorn),now,4);}
+    }
     // Hills: measured, calibrated phone pitch only.
     const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
     const int band=pitch?w.gradeBand:0;const int sign=band>=2?1:band<=-2?-1:0;
@@ -115,6 +124,8 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::moveOffPrep:return v<=3;
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
+    case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
+    case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::downhillSecond:case Prompt::downhillThird:case Prompt::uphillSecond:case Prompt::uphillThird: {
         if(!w.telemetry.calibrated||!w.telemetry.pitchValid||!std::isfinite(w.telemetry.pitchDegrees)||v<=3)return false;

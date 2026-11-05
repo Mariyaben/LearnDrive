@@ -1,10 +1,14 @@
 #include "learndrive/navigation/JunctionScout.hpp"
 #include <algorithm>
 #include <cmath>
+#include <deque>
 namespace ld::navigation {
 namespace {
 constexpr double pi=3.14159265358979323846,lookAheadM=400;
 double angleDiff(double a,double b) {return std::abs(std::fmod(a-b+540.,360.)-180.);}
+// Signed heading change from a to b, degrees in (-180,180]; positive turns right.
+double signedTurn(double a,double b) {return std::fmod(b-a+540.,360.)-180.;}
+constexpr double bendWindowM=35,bendDegrees=55;
 struct Local {double kx,ky,lat0,lon0;
     double x(double lon) const {return (lon-lon0)*kx;}double y(double lat) const {return (lat-lat0)*ky;}};
 double bearingBetween(const Local& l,double lat1,double lon1,double lat2,double lon2) {
@@ -12,7 +16,7 @@ double bearingBetween(const Local& l,double lat1,double lon1,double lat2,double 
     return std::fmod(std::atan2(dx,dy)*180/pi+360.,360.);
 }
 }
-void JunctionScout::clear() {nodes_.clear();ways_.clear();wayIds_.clear();nodeWays_.clear();ahead_={};bearing_=std::numeric_limits<double>::quiet_NaN();lastTime_=-std::numeric_limits<double>::infinity();}
+void JunctionScout::clear() {nodes_.clear();ways_.clear();wayIds_.clear();nodeWays_.clear();bumps_.clear();ahead_={};bearing_=std::numeric_limits<double>::quiet_NaN();lastTime_=-std::numeric_limits<double>::infinity();}
 bool JunctionScout::addWay(int64_t wayId,int roadClass,const int64_t* ids,const double* latLon,size_t count) {
     if(!ids||!latLon||count<2||count>5000||ways_.size()>=60000||wayIds_.count(wayId))return false;
     for(size_t i=0;i<count;++i)if(!std::isfinite(latLon[2*i])||!std::isfinite(latLon[2*i+1])||std::abs(latLon[2*i])>90||std::abs(latLon[2*i+1])>180)return false;
@@ -26,7 +30,7 @@ bool JunctionScout::addWay(int64_t wayId,int roadClass,const int64_t* ids,const 
     ways_.push_back(std::move(way));wayIds_.insert(wayId);return true;
 }
 JunctionAhead JunctionScout::current(double now) const noexcept {
-    if(!ahead_.valid||!std::isfinite(now)||now<ahead_.fixTime||now-ahead_.fixTime>2.5)return {};
+    if(!(ahead_.valid||ahead_.matched)||!std::isfinite(now)||now<ahead_.fixTime||now-ahead_.fixTime>2.5)return {};
     return ahead_;
 }
 JunctionAhead JunctionScout::update(double time,double lat,double lon,double bearingDeg,bool bearingValid,double speed,double accuracy) {
@@ -51,7 +55,11 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
             const double diff=std::min(df,db);if(diff>40)continue;
             const double score=dist+.3*diff;if(score<bestScore){bestScore=score;wi=w;seg=k;bestT=t;forward=df<=db;found=true;}}}
     if(!found)return ahead_;
-    // 2. Walk ahead along the road to the first junction an instructor would prepare for.
+    ahead_.matched=true;
+    // 2. Walk ahead along the road to the first junction an instructor would prepare for,
+    // noting a mapped speed bump and a sharp bend on the way.
+    std::deque<std::pair<double,double>> turns; // (distance, signed turn) within the bend window
+    double lastIn=std::numeric_limits<double>::quiet_NaN(),prevDist=0;int64_t prevId=0;
     size_t idx=forward?seg+1:seg;
     {const auto& A=nodes_.at(ways_[wi].nodes[seg]);const auto& B=nodes_.at(ways_[wi].nodes[seg+1]);
      const double len=std::hypot(l.x(B.lon)-l.x(A.lon),l.y(B.lat)-l.y(A.lat));ahead_.distanceM=0;
@@ -59,6 +67,14 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
      for(int steps=0;steps<80&&travelled<=lookAheadM;++steps) {
         const int64_t id=ways_[wi].nodes[idx];const auto& node=nodes_.at(id);
         const double inBearing=bearingBetween(l,prevLat,prevLon,node.lat,node.lon);
+        if(!ahead_.bumpNode&&bumps_.count(id)){ahead_.bumpNode=id;ahead_.bumpDistanceM=travelled;}
+        if(std::isfinite(lastIn)&&prevId) {
+            turns.push_back({prevDist,signedTurn(lastIn,inBearing)});
+            while(turns.size()>1&&turns.front().first<prevDist-bendWindowM)turns.pop_front();
+            double sum=0;for(const auto& t:turns)sum+=t.second;
+            if(!ahead_.bendNode&&std::abs(sum)>=bendDegrees){ahead_.bendNode=prevId;ahead_.bendDistanceM=turns.front().first;ahead_.bendRight=sum>0;}
+        }
+        lastIn=inBearing;prevDist=travelled;prevId=id;
         if(node.branches>=3) {
             bool straight=false,important=false;
             for(const auto& [w,p]:nodeWays_.at(id))for(int side:{-1,1}){const long q=long(p)+side;

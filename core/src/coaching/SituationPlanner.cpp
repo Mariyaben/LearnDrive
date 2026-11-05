@@ -9,8 +9,9 @@ using F=Fragment;
 struct Plan {
     std::array<F,6> context{};size_t contexts{};
     std::array<F,8> actions{};size_t actionCount{};
+    bool horn=true; // Indian road practice; off elsewhere.
     void ctx(F f) noexcept {if(f==F::none)return;for(size_t i=0;i<contexts;++i)if(context[i]==f)return;if(contexts<context.size())context[contexts++]=f;}
-    void act(F f) noexcept {if(f==F::none)return;for(size_t i=0;i<actionCount;++i)if(actions[i]==f)return;if(actionCount<actions.size())actions[actionCount++]=f;}
+    void act(F f) noexcept {if(f==F::none||(f==F::soundHorn&&!horn))return;for(size_t i=0;i<actionCount;++i)if(actions[i]==f)return;if(actionCount<actions.size())actions[actionCount++]=f;}
     bool has(F f) const noexcept {for(size_t i=0;i<actionCount;++i)if(actions[i]==f)return true;return false;}
     void drop(F f) noexcept {size_t k=0;for(size_t i=0;i<actionCount;++i)if(actions[i]!=f)actions[k++]=actions[i];actionCount=k;}
 };
@@ -20,7 +21,7 @@ int order(F f) noexcept {
     case F::clutchDown:return 4;case F::holdBrake:return 5;case F::keepLeft:return 6;case F::easeOff:return 7;case F::downSecond:return 8;
     case F::downThird:return 9;case F::coverBrake:return 10;case F::giveSpace:return 11;case F::safeGap:return 12;case F::letThemPass:return 13;
     case F::checkMirrors:return 14;case F::signalLeft:return 15;case F::signalRight:return 16;case F::lookBothWays:return 17;
-    case F::steadyAccelerator:return 18;case F::laneCentre:return 19;default:return 20;}
+    case F::soundHorn:return 18;case F::steadyAccelerator:return 19;case F::laneCentre:return 20;default:return 21;}
 }
 F actorContext(const ActorRisk& r) noexcept {
     const int c=r.category;const bool person=c==0,two=c==1||c==3,truck=c==7,bus=c==5;
@@ -57,6 +58,8 @@ bool actions(Prompt p,double v,Plan& plan) noexcept {
     case Prompt::personLeftSpace:case Prompt::personRightSpace:plan.act(F::easeOff);plan.act(F::giveSpace);return true;
     case Prompt::driftLeftCentre:plan.ctx(F::driftingLeft);plan.act(F::laneCentre);return true;
     case Prompt::driftRightKeepLeft:plan.ctx(F::driftingRight);plan.act(F::keepLeft);return true;
+    case Prompt::bumpAhead:plan.ctx(F::bumpAheadContext);plan.act(F::brakeGently);plan.act(F::clutchDown);plan.act(F::downSecond);return true;
+    case Prompt::bendHorn:plan.ctx(F::bendAhead);plan.act(F::soundHorn);plan.act(F::keepLeft);return true;
     default:return false; // Gear-up, stop/move-off, turn exit, awareness: their own recording is clearer.
     }
 }
@@ -70,12 +73,17 @@ Prompt equivalent(const ActorRisk& r) noexcept {
 bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const RiskCoach& risk,const TaskCoach& task,Utterance& out) noexcept {
     const bool speedKnown=w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&cognition::fresh(w.now,w.telemetry.time,.15);
     const double v=speedKnown?w.telemetry.speedKmh:-1;
-    Plan plan;
+    Plan plan;plan.horn=w.hornRules;
     // 1. The primary road user (if any) names the situation it is about.
     const ActorRisk* primaryActor=primary.identity.space==IdentitySpace::Optical?risk.riskForOptical(primary.identity.id):nullptr;
     if(primaryActor)plan.ctx(actorContext(*primaryActor));
     if(!actions(primary.prompt,v,plan))return false;
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
+    // Indian road practice the recorded sentence does not say: sound the horn when entering
+    // a junction and before passing a person or two-wheeler at the road edge.
+    if(primary.prompt==Prompt::junctionEntry)plan.act(F::soundHorn);
+    if(primaryActor&&primaryActor->kind==RiskKind::Roadside&&(primaryActor->category==0||primaryActor->category==1||primaryActor->category==3)&&v>5)
+        plan.act(F::soundHorn);
     const bool urgent=primary.urgent;
     int priorityMax=priority(primary.prompt);
     primary.alsoCount=0;
@@ -127,7 +135,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     if(plan.has(F::stopAndWait)||plan.has(F::holdBrake))plan.drop(F::coverBrake);
     std::sort(plan.actions.begin(),plan.actions.begin()+plan.actionCount,[](F a,F b){return order(a)<order(b);});
     // Set the scene like an instructor: slope, then junction/bend, then road users (most important first).
-    const auto scene=[](F f){const int i=int(f);return i<=3?0:i<=7?1:2;};
+    const auto scene=[](F f){const int i=int(f);return i<=3?0:(i<=7||f==F::bumpAheadContext)?1:2;};
     std::stable_sort(plan.context.begin(),plan.context.begin()+plan.contexts,[&](F a,F b){return scene(a)<scene(b);});
     // Composition must add something the primary recording does not already say.
     if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor)return false;

@@ -26,6 +26,24 @@ public final class SpatialReadiness {
         return READY;
     }
 
+    /**
+     * Mount advice from the camera's pitch and roll (gravity "up" in phone axes; the rear
+     * camera looks along -z). Pointing up wastes the frame on sky and shrinks distant road
+     * users; on the 2026-11-04/05 drives about 75% of each frame was sky and trees.
+     * Returns null when the mount is fine. Adjust only when parked.
+     */
+    public static String mountAdvice(double x, double y, double z) {
+        double norm = Math.sqrt(x*x + y*y + z*z);
+        if (!Double.isFinite(norm) || norm < .9 || norm > 1.1) return null;
+        double pitchUp = Math.toDegrees(Math.atan2(-z, Math.hypot(x, y)));
+        double roll = Math.toDegrees(Math.atan2(Math.abs(x), Math.abs(y)));
+        double tilt = Math.min(roll, 90 - roll); // landscape or portrait: deviation from level
+        if (pitchUp > 6) return "Camera points too high · tilt it down when parked";
+        if (pitchUp < -20) return "Camera points too low · tilt it up when parked";
+        if (tilt > 8) return "Camera is tilted sideways · level it when parked";
+        return null;
+    }
+
     public static String status(int state) {
         switch (state) {
             case BASIC_SEMANTIC_ONLY: return "Basic capability: semantic detections only; metric road geometry unavailable";

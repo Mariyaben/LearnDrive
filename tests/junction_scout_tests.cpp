@@ -53,5 +53,18 @@ int main(){try{
         const int64_t cross[]={3,2,4};const double cll[]={lat(200),lon(-100),lat(200),lon(0),lat(200),lon(100)};check(ld_road_way(e.get(),2,Primary,cross,cll,3),"cross");
         ld_navigation_fix(e.get(),1,5,lat(20),lon(0),5,20,.5,1,0,1); // Returns route acceptance; the scout updates regardless.
         double out[4]{};check(ld_road_junction(e.get(),5.1,out,4)&&out[0]==1&&std::abs(out[1]-180)<2&&out[2]==2,"junction not exposed");});
+    test("a mapped speed bump and a sharp bend on the road ahead are reported before the junction",[]{JunctionScout s;
+        // North 120 m, then a 90-degree bend right (drawn over ~20 m), east 200 m to a T with a primary road.
+        way(s,1,Residential,{{1,{0,0}},{2,{0,60}},{3,{0,120}},{4,{6,134}},{5,{20,140}},{6,{120,140}},{7,{220,140}}});
+        way(s,2,Primary,{{8,{220,0}},{7,{220,140}},{9,{220,300}}});
+        s.addBump(2);
+        auto j=at(s,1,10);
+        check(j.matched&&j.bumpNode==2&&std::abs(j.bumpDistanceM-50)<2,"speed bump ahead missed");
+        check(j.bendNode!=0&&j.bendRight&&j.bendDistanceM>100&&j.bendDistanceM<125,"sharp bend right missed or misplaced");
+        check(j.valid&&j.nodeId==7,"junction after the bend lost");
+        // A gently curving road (about 15 degrees over 100 m) is not a sharp bend; no bump mapped.
+        JunctionScout g;way(g,1,Residential,{{1,{0,0}},{2,{0,100}},{3,{8,150}},{4,{26,250}}});
+        auto k=at(g,1,10);check(k.matched&&!k.bendNode&&!k.bumpNode,"gentle curve reported as a sharp bend");
+        check(g.current(2).matched,"matched road without a junction is not reported");});
     std::cout<<passed<<" junction scout groups passed\n";return 0;
 }catch(const std::exception& ex){std::cerr<<"FAIL "<<ex.what()<<'\n';return 1;}}
