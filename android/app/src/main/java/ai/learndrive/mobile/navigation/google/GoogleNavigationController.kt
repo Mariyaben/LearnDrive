@@ -38,7 +38,9 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
     private val onState:(GoogleNavigationState)->Unit={},
     private val onUpdate:(GoogleNavigationUpdate?)->Unit={},
     private val journey:GoogleJourneyMemory=GoogleJourneyMemory(),
-    private val onDestinationSelected:()->Unit={}):NavigationMapSurface {
+    private val onDestinationSelected:()->Unit={},
+    /** Google's route line (lat,lon pairs) for bend coaching; null clears. Memory only, never saved. */
+    private val onRouteLine:(DoubleArray?)->Unit={}):NavigationMapSurface {
     private val main=Handler(Looper.getMainLooper())
     override val view=FrameLayout(activity).apply {setBackgroundColor(CoachStyle.ink)}
     private val placeholder=LinearLayout(activity).apply {
@@ -264,8 +266,19 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
         }
     }
 
+    private var routeLineEpoch=-1L
+    private fun currentRouteLine():DoubleArray?=runCatching {
+        val nav=navigator?:return@runCatching null
+        val points=nav.routeSegments.flatMap {it.latLngs}.ifEmpty {nav.currentRouteSegment?.latLngs.orEmpty()}
+        if(points.size<2)null else DoubleArray(points.size*2) {i->if(i%2==0)points[i/2].latitude else points[i/2].longitude}
+    }.getOrNull()
+    private fun publishRouteLine(line:DoubleArray?) {
+        routeLineEpoch=if(line==null)-1L else routeEpoch
+        onRouteLine(line)
+    }
     fun stopGuidance() {
         if(closed)return
+        if(routeLineEpoch>=0)publishRouteLine(null)
         if(state.guiding)updateState(state.copy(status=if(state.routeReady)"Route ready · session paused" else "Navigation stopped",guiding=false))
         GoogleNavigationFeed.detach(sessionId)
         if(feedRegistered)runCatching {navigator?.unregisterServiceForNavUpdates()}
@@ -297,12 +310,24 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
             stopGuidance();updateState(state.copy(status="Google navigation stopped",guiding=false));return
         }
         if(info.routeChanged)++routeEpoch
+        if(phase!=GoogleNavigationPhase.ENROUTE)publishRouteLine(null)
+        else if(info.routeChanged||routeLineEpoch!=routeEpoch)publishRouteLine(currentRouteLine())
         val step=if(phase==GoogleNavigationPhase.ENROUTE)info.currentStep else null
+        // Where every remaining maneuver is, so a turn on the route line is never called a bend.
+        val ahead=if(step!=null)info.distanceToCurrentStepMeters?.takeIf {it>=0}?.let {first->
+            val list=ArrayList<Double>();var total=first.toDouble();list.add(total)
+            for(next in info.remainingSteps.orEmpty()) {
+                if(next.stepNumber!=null&&next.stepNumber==step.stepNumber)continue
+                val gap=next.distanceFromPrevStepMeters?:break
+                total+=gap;list.add(total);if(list.size>=24)break
+            }
+            list.toDoubleArray()
+        } else null
         val update=GoogleNavigationUpdate(sessionId,routeEpoch,++sequence,receivedAt,phase,
             step?.stepNumber?.takeIf {it>=0},step?.let {normalizeGoogleManeuver(it.maneuver)}?:GoogleManeuverKind.UNKNOWN,
             if(step!=null)info.distanceToCurrentStepMeters?.takeIf {it>=0}?.toDouble() else null,
             if(step!=null)info.timeToCurrentStepSeconds?.takeIf {it>=0}?.toDouble() else null,
-            step?.roundaboutTurnNumber?.takeIf {it>0})
+            step?.roundaboutTurnNumber?.takeIf {it>0},ahead)
         lastUpdate=update;onUpdate(update)
         updateState(state.copy(status=when(phase) {
             GoogleNavigationPhase.ENROUTE->if(step==null)"Google navigation active · turn information unavailable" else "Google navigation active"

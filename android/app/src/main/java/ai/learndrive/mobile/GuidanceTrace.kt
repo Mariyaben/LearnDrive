@@ -62,6 +62,14 @@ object GuidanceTrace {
         put("start_uncertainty_seconds",uncertaintySeconds);put("file","instructor.m4a")
         put("format","AAC mono 16 kHz");put("consent","everyone in the car agreed in the app dialog")
     }.toString()
+    /** A jolt the bump detector judged (no position is recorded). */
+    fun bumpEvent(v:DoubleArray,reason:String):String=JSONObject().apply {
+        put("schema_version",1);put("event","bump_detector");put("time",v[0])
+        put("accepted",v[1]!=0.0);put("reason",reason)
+        put("peak_vertical_mps2",number(v[3]));put("rear_vertical_mps2",number(v[4]));put("axle_gap_s",number(v[5]))
+        put("pitch_rate_rps",number(v[6]));put("roll_rate_rps",number(v[7]));put("speed_kmh",number(v[8]))
+        put("road_background_rms",number(v[9]));put("stored_as_learned_bump",v[10]!=0.0);put("located",v[11]!=0.0)
+    }.toString()
     fun instructorAudioStop(time:Double,reason:String,kept:Boolean):String=JSONObject().apply {
         put("schema_version",1);put("event","instructor_audio_stop");put("time",time);put("reason",reason);put("file_kept",kept)
     }.toString()

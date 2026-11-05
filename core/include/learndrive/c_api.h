@@ -153,6 +153,26 @@ int ld_road_way(ld_engine*,int64_t way,int road_class,const int64_t* nodes,const
 void ld_road_clear(ld_engine*);
 // A mapped speed bump (OSM traffic_calming) on a road node already added with ld_road_way.
 void ld_road_bump(ld_engine*,int64_t node);
+// The navigation provider's route line (lat,lon pairs), e.g. the Google route while guiding.
+// Held in memory for this route only; never stored or exported. count 0 clears. Sharp bends
+// on the route itself are coached once the maneuver positions below are known.
+int ld_route_line(ld_engine*,const double* lat_lon,size_t count);
+// Distances (m) from the car to each remaining maneuver on that route, nearest first, at `time`
+// (engine clock). Bends at a maneuver are that turn and are never announced as bends.
+void ld_route_maneuvers(ld_engine*,double time,const double* ahead_m,size_t count);
+// Speed bumps learned on this phone from its motion sensor (felt on two separate passes before
+// they are coached). Restore saved ones at start; read them back (5 values each: lat, lon,
+// heading, times felt, times driven over without a jolt) to save between drives.
+int ld_bump_restore(ld_engine*,double lat,double lon,double heading,int observations,int misses);
+int ld_bumps_learned(ld_engine*,double* out,size_t capacity);
+// Oldest bump-detector event not yet read, for diagnostics (no position). Returns 0 when none.
+// out (capacity >= 12): time, accepted, reason, peak vertical m/s^2, rear-wheel vertical,
+// axle gap s, pitch rate rad/s, roll rate rad/s, speed km/h, road background RMS, stored, located.
+int ld_bump_event(ld_engine*,double* out,size_t capacity);
+const char* ld_bump_reason(int reason);
+// Map knowledge in use (capacity >= 10): route line loaded, matched, bends known, bend m,
+// bend right, bump m, bump learned, learned bumps, learned bumps in use, bends on the route.
+int ld_road_knowledge(ld_engine*,double now,double* out,size_t capacity);
 // Indian road practice (default on): horn at blind bends, junction entry and when passing.
 void ld_coaching_horn_rules(ld_engine*,int enabled);
 // Horizon row (fraction of image height) for filmed/replayed video, where the phone's own

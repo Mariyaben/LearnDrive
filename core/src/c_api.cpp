@@ -8,6 +8,8 @@
 #include "learndrive/perception/supercombo.hpp"
 #include "learndrive/coaching/CoachingEngine.hpp"
 #include "learndrive/navigation/JunctionScout.hpp"
+#include "learndrive/navigation/RoadKnowledge.hpp"
+#include "learndrive/BumpDetector.hpp"
 #include <exception>
 #include <mutex>
 #include <sstream>
@@ -51,6 +53,15 @@ struct ld_engine {
     ld::coaching::WorldState coachingWorld{};
     double coachingRouteReceipt=-ld::infinity;
     ld::navigation::JunctionScout scout; // Junction ahead without a destination (road geometry + GPS).
+    // Provider route line (in memory only), speed bumps (mapped and learned) and the bump detector.
+    ld::navigation::RouteLine routeLine;
+    ld::navigation::BumpMap bumps;
+    ld::BumpDetector bumpDetector;
+    struct FixSample {double time=-ld::infinity,lat{},lon{},bearing{},speedMps{},accuracy=ld::infinity;bool bearingValid{};};
+    std::array<FixSample,8> fixes{};size_t fixCursor{},fixCount{};
+    struct BumpLog {ld::BumpEvent event;uint64_t id{};bool located{};};
+    std::array<BumpLog,32> bumpLog{};size_t bumpLogHead{},bumpLogCount{};
+    double lastMotion=-ld::infinity;
     double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
     bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
     double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
@@ -62,6 +73,47 @@ struct ld_engine {
     ld::EngineSample coachingEngineSample{};
     ld_engine(){promptTimes.fill(-ld::infinity);}
 };
+// Where the car was at `time` (between GPS fixes, or just after the last one), and its heading.
+static bool positionAt(const ld_engine& e,double time,double& lat,double& lon,double& heading) {
+    if(!e.fixCount||!std::isfinite(time))return false;
+    const ld_engine::FixSample* before=nullptr;const ld_engine::FixSample* after=nullptr;
+    for(size_t i=0;i<e.fixCount;++i) {
+        const auto& f=e.fixes[i];
+        if(f.time<=time&&(!before||f.time>before->time))before=&f;
+        if(f.time>=time&&(!after||f.time<after->time))after=&f;
+    }
+    if(!before||before->accuracy>15)return false;
+    const double kx=111320*std::cos(before->lat*ld::pi/180),ky=110540;
+    if(after&&after!=before&&after->time-before->time<=3&&after->accuracy<=15) {
+        const double f=(time-before->time)/(after->time-before->time);
+        lat=before->lat+(after->lat-before->lat)*f;lon=before->lon+(after->lon-before->lon)*f;
+        const double dx=(after->lon-before->lon)*kx,dy=(after->lat-before->lat)*ky;
+        if(after->bearingValid)heading=after->bearing;
+        else if(std::hypot(dx,dy)>=3)heading=std::fmod(std::atan2(dx,dy)*180/ld::pi+360.,360.);
+        else return false;
+        return true;
+    }
+    if(after==before&&time==before->time){lat=before->lat;lon=before->lon;}
+    else {
+        // Just after the last fix: dead-reckon along its bearing (GPS arrives once a second).
+        if(time-before->time>2||!before->bearingValid)return false;
+        const double d=before->speedMps*(time-before->time),b=before->bearing*ld::pi/180;
+        lat=before->lat+d*std::cos(b)/ky;lon=before->lon+d*std::sin(b)/kx;
+    }
+    if(!before->bearingValid)return false;
+    heading=before->bearing;return true;
+}
+// A finished jolt from the motion sensor: learn the bump where the car was, keep it for diagnostics.
+static void handleBump(ld_engine& e,const ld::BumpEvent& event) {
+    ld_engine::BumpLog log{event,0,false};
+    double lat{},lon{},heading{};
+    if(event.accepted()&&e.sourceKind==LD_SOURCE_CAMERA&&positionAt(e,event.time,lat,lon,heading)) {
+        log.located=true;log.id=e.bumps.felt(event.time,lat,lon,heading);
+    }
+    const size_t slot=(e.bumpLogHead+e.bumpLogCount)%e.bumpLog.size();
+    e.bumpLog[slot]=log;
+    if(e.bumpLogCount<e.bumpLog.size())++e.bumpLogCount; else e.bumpLogHead=(e.bumpLogHead+1)%e.bumpLog.size();
+}
 static uint64_t confirmedSpatialLead(const ld_engine& e,double time) noexcept {
     // A model probability is not an independently verified object. In replay,
     // unfamiliar optics/low-resolution imagery produced confident ghost leads.
@@ -209,9 +261,20 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     }
     if(e.sourceKind==LD_SOURCE_CAMERA) {
         const auto ahead=e.scout.current(now);
-        if(ahead.matched) {
+        const auto line=e.routeLine.ahead(now,e.bumps);
+        if(line.matched) {
+            // Navigating: the route the car will actually take. Its bends need the provider's
+            // maneuver positions (a turn is not a bend); without them the road scout's bend stands.
+            w.mapTime=line.fixTime;w.bumpAheadM=line.bumpDistanceM;w.bumpId=line.bumpId;
+            if(line.bendsKnown){w.bendAheadM=line.bendDistanceM;w.bendId=line.bendId;w.bendRight=line.bendRight;}
+            else if(ahead.matched){w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;}
+        } else if(ahead.matched) {
             w.mapTime=ahead.fixTime;w.bumpAheadM=ahead.bumpDistanceM;w.bumpId=uint64_t(std::max<int64_t>(0,ahead.bumpNode));
             w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;
+            // Learned (and mapped) bumps on the road walked ahead.
+            size_t n=0;const auto* path=e.scout.path(n);
+            const auto hit=e.bumps.along(path,n,400);
+            if(hit.distanceM<w.bumpAheadM){w.bumpAheadM=hit.distanceM;w.bumpId=hit.id;}
         }
     }
     // No route: the next junction an instructor would prepare for on the current road.
@@ -231,7 +294,7 @@ void ld_set_reflex_preempt(ld_engine* e,ld_reflex_preempt fn,void* context){if(e
 void* ld_reflex_context(ld_engine* e){return e?e->audioContext:nullptr;}
 ld_engine* ld_create(void) { try {return new ld_engine;} catch(...) {return nullptr;} }
 void ld_destroy(ld_engine* e) {delete e;}
-void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->driving.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->visionTime=-1;e->coaching.invalidateEvidence();e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
+void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->bumpDetector.reset();e->driving.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->visionTime=-1;e->coaching.invalidateEvidence();e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
 void ld_camera_intrinsics(ld_engine* e,double fy) {if(e) {e->focalY=std::isfinite(fy)&&fy>0?fy:ld::infinity;e->metric.reset();}}
 int ld_camera_up(ld_engine* e,double t,double out[3]) {
     if(!e||!out)return 0;const auto up=e->fusion.cameraUp(t);
@@ -341,7 +404,18 @@ int ld_spatial_semantics(ld_engine* e,double time,const float* detections,size_t
         out[0]=hazard.tti;out[1]=hazard.confidence;out[2]=hazard.inPath;return 1;
     }catch(const std::exception& ex){e->error=ex.what();return 0;}
 }
-void ld_imu(ld_engine* e,double t,const double a[3],const double g[3],const double l[3],int has) {if(e&&a&&g&&l) e->fusion.imu({t,{a[0],a[1],a[2]},{g[0],g[1],g[2]},{l[0],l[1],l[2]},has!=0});}
+void ld_imu(ld_engine* e,double t,const double a[3],const double g[3],const double l[3],int has) {
+    if(!e||!a||!g||!l)return;
+    e->fusion.imu({t,{a[0],a[1],a[2]},{g[0],g[1],g[2]},{l[0],l[1],l[2]},has!=0});
+    // Speed bumps felt by the phone (only once the phone plane is normalized).
+    const auto m=e->fusion.motion();
+    if(!m.valid||m.time!=t)return;
+    e->lastMotion=t;
+    const auto s=e->fusion.snapshot(t);
+    e->bumpDetector.sample(t,m.vertical,m.pitchRate,m.rollRate,s.speedValid?s.speedKmh:std::numeric_limits<double>::quiet_NaN(),m.handled);
+    ld::BumpEvent event;
+    while(e->bumpDetector.pop(event))handleBump(*e,event);
+}
 int ld_gps(ld_engine* e,double t,double v,double a) {return e&&e->fusion.gps(t,v,a);}
 ld_telemetry ld_snapshot(ld_engine* e,double time) {
     if(!e) return {};
@@ -721,7 +795,9 @@ const char* ld_coaching_world_snapshot_json(ld_engine* e) {
         for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){if(i)out<<',';const auto& a=w.actors[i];array(int(a.identity.space),a.identity.id,a.identity.scope,a.captureTime,a.confidence,a.tti,a.category,a.relevant,a.inPath,a.opticalClosing,a.leadSupported,a.x,a.y,a.w,a.h);}
         out<<"],\"candidates\":[";
         for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){if(i)out<<',';const auto& c=w.candidates[i];array(int(c.prompt),c.origin,int(c.identity.space),c.identity.id,c.identity.scope,int(c.kind),c.captureTime,c.maxAge,c.expiresAt,c.confidence,c.tti,c.supported,c.urgent,c.critical,c.mechanicalMeasured,c.actorCategory,c.evidenceKind,c.x,c.y,c.w,c.h);}
-        out<<"]}";e->replayWorld=out.str();return e->replayWorld.c_str();
+        // Road knowledge from the map (OpenStreetMap and learned bumps; never provider content).
+        out<<"],\"map\":";array(w.mapTime,w.bumpAheadM,w.bumpId,w.bendAheadM,w.bendId,w.bendRight);
+        out<<"}";e->replayWorld=out.str();return e->replayWorld.c_str();
     }catch(...){return "{}";}
 }
 const char* ld_guidance_reason(ld_engine* e) {
@@ -782,7 +858,17 @@ int ld_navigation_fix(ld_engine* e,uint64_t source,double time,double lat,double
     if(e->guidance.origin==LD_GUIDANCE_NAVIGATION)e->guidance.eligible=0;
     const ld::navigation::Fix fix{time,lat,lon,accuracy,speed,bearing,speedAccuracy,bool(speedValid),bool(bearingValid)};
     const auto providerAccepted=e->providerNavigation.fix(fix);
-    if(std::isfinite(lat)&&std::isfinite(lon))e->scout.update(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:ld::infinity,accuracy); // km/h
+    if(std::isfinite(lat)&&std::isfinite(lon)) {
+        e->scout.update(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:ld::infinity,accuracy); // km/h
+        e->routeLine.fix(time,lat,lon,accuracy,bearing,bearingValid!=0,speedValid?speed:ld::infinity);
+        // Recent fixes place felt bumps; a learned bump driven over without a jolt is a miss.
+        if(std::isfinite(accuracy)&&accuracy>=0) {
+            e->fixes[e->fixCursor]={time,lat,lon,bearing,speedValid&&std::isfinite(speed)?speed/3.6:0,accuracy,bearingValid!=0&&std::isfinite(bearing)};
+            e->fixCursor=(e->fixCursor+1)%e->fixes.size();e->fixCount=std::min(e->fixCount+1,e->fixes.size());
+        }
+        e->bumps.travel(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:std::numeric_limits<double>::quiet_NaN(),accuracy,
+            time-e->lastMotion<.5&&time>=e->lastMotion);
+    }
     return e->providerNavigation.active()?providerAccepted:e->navigation.fix(fix);
 }
 int ld_navigation_context(ld_engine* e,double now,double* out,size_t capacity) {
@@ -823,7 +909,44 @@ int ld_road_way(ld_engine* e,int64_t way,int road_class,const int64_t* nodes,con
     try {return e&&e->scout.addWay(way,road_class,nodes,lat_lon,count);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
 }
 void ld_road_clear(ld_engine* e){if(e)e->scout.clear();}
-void ld_road_bump(ld_engine* e,int64_t node){if(e&&node>0)e->scout.addBump(node);}
+void ld_road_bump(ld_engine* e,int64_t node) {
+    if(!e||node<=0)return;
+    e->scout.addBump(node);
+    double lat{},lon{};if(e->scout.nodePosition(node,lat,lon))e->bumps.addMapped(uint64_t(node),lat,lon);
+}
+int ld_route_line(ld_engine* e,const double* lat_lon,size_t count) {
+    try {return e&&e->routeLine.load(lat_lon,count);}catch(const std::exception& ex){if(e){e->error=ex.what();e->routeLine.clear();}return 0;}
+}
+void ld_route_maneuvers(ld_engine* e,double time,const double* ahead_m,size_t count){if(e)e->routeLine.maneuvers(time,ahead_m,count);}
+int ld_bump_restore(ld_engine* e,double lat,double lon,double heading,int observations,int misses) {
+    try {return e&&e->bumps.restore(lat,lon,heading,observations,misses);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
+}
+int ld_bumps_learned(ld_engine* e,double* out,size_t capacity) {
+    if(!e||(!out&&capacity))return 0;
+    int n=0;
+    for(size_t i=0;i<e->bumps.size()&&size_t(n+1)*5<=capacity;++i) {
+        const auto& b=e->bumps.at(i);if(b.mapped)continue;
+        double* o=out+size_t(n)*5;o[0]=b.lat;o[1]=b.lon;o[2]=b.heading;o[3]=b.observations;o[4]=b.misses;++n;
+    }
+    return n;
+}
+int ld_bump_event(ld_engine* e,double* out,size_t capacity) {
+    if(!e||!out||capacity<12||!e->bumpLogCount)return 0;
+    const auto log=e->bumpLog[e->bumpLogHead];e->bumpLogHead=(e->bumpLogHead+1)%e->bumpLog.size();--e->bumpLogCount;
+    const auto& v=log.event;
+    const double values[]={v.time,double(v.accepted()),double(int(v.reason)),v.peakVertical,v.secondVertical,v.axleGapS,
+        v.peakPitchRate,v.peakRollRate,v.speedKmh,v.backgroundRms,double(log.id!=0),double(log.located)};
+    std::copy_n(values,12,out);return 1;
+}
+const char* ld_bump_reason(int reason){return ld::bumpReasonText(static_cast<ld::BumpReason>(std::clamp(reason,0,6)));}
+int ld_road_knowledge(ld_engine* e,double now,double* out,size_t capacity) {
+    if(!e||!out||capacity<10)return 0;
+    const auto line=e->routeLine.ahead(now,e->bumps);
+    out[0]=e->routeLine.loaded();out[1]=line.matched;out[2]=line.bendsKnown;out[3]=line.bendDistanceM;out[4]=line.bendRight;
+    out[5]=line.bumpDistanceM;out[6]=line.bumpLearned;out[7]=double(e->bumps.learnedCount());out[8]=double(e->bumps.usableLearnedCount());
+    out[9]=double(e->routeLine.bendCount());
+    return 1;
+}
 void ld_coaching_horn_rules(ld_engine* e,int enabled){if(e)e->hornRules=enabled!=0;}
 void ld_camera_horizon(ld_engine* e,double fraction){if(e)e->horizonOverride=std::isfinite(fraction)&&fraction>.2&&fraction<.9?fraction:std::numeric_limits<double>::quiet_NaN();}
 int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height) {
