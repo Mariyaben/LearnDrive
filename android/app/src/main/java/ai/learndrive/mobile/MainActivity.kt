@@ -36,6 +36,8 @@ import ai.learndrive.mobile.ui.CoachStyle
 
 class MainActivity : ComponentActivity() {
     private lateinit var core:NativeCore
+    private lateinit var learnedBumps:LearnedBumps
+    private var lastBumpSave=0.0
     private lateinit var sensors:Sensors
     private lateinit var audio:AudioWorker
     private lateinit var pretrained:PretrainedShadow
@@ -273,6 +275,7 @@ class MainActivity : ComponentActivity() {
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window,false)
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
+        learnedBumps=LearnedBumps(filesDir,core);evidenceIo.execute {runCatching {learnedBumps.load()}}
         // Junction-ahead coaching without a destination (online OpenStreetMap roads).
         roads=RoadNetwork(core) {message->android.util.Log.i("LearnDriveRoads",message);roadMapStatus=message};sensors.onFix={lat,lon->roads.onLocation(lat,lon)}
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
@@ -324,7 +327,8 @@ class MainActivity : ComponentActivity() {
                 }},
                 onUpdate={if(useGoogle&&!isDestroyed)acceptGoogleNavigation(it)},
                 journey=ViewModelProvider(this)[GoogleJourneyMemory::class.java],
-                onDestinationSelected={destinationSelectionPending=true})
+                onDestinationSelected={destinationSelectionPending=true},
+                onRouteLine={line->if(!isDestroyed)synchronized(routeMutationLock){core.routeLine(if(useGoogle)line else null)}})
         }
         useGoogle=getSharedPreferences("navigation_provider",MODE_PRIVATE).getBoolean("google",true)&&googleNavigation!=null
         showNavigationProvider()
@@ -619,6 +623,7 @@ class MainActivity : ComponentActivity() {
             core.navigationTurn(1,update.sessionId,update.routeEpoch,update.sequence,update.receivedAtSeconds,
                 phase,update.stepNumber?:-1,maneuver,update.distanceMeters?:Double.POSITIVE_INFINITY,
                 update.timeSeconds?:Double.POSITIVE_INFINITY)
+            update.maneuversAheadMeters?.let {core.routeManeuvers(update.receivedAtSeconds,it)}
         }
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.
@@ -1270,7 +1275,23 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val ruleTick=object:Runnable {
-        override fun run() {if(resumed){evaluate();rules.postDelayed(this,10)}}
+        override fun run() {if(resumed){evaluate();traceBumps();rules.postDelayed(this,10)}}
+    }
+    /** Bump-detector events to diagnostics (no position); learned bumps saved every two minutes. */
+    private fun traceBumps() {
+        while(true) {
+            val e=core.bumpEvent()?:break
+            if(journal?.isAccepting==true)journal?.offer(GuidanceTrace.bumpEvent(e,core.bumpReason(e[2].toInt())))
+        }
+        if(now()-lastBumpSave>=120){lastBumpSave=now();saveLearnedBumps()}
+    }
+    private fun learnedBumpNote():String {
+        if(!::learnedBumps.isInitialized||learnedBumps.count==0)return ""
+        return " · ${learnedBumps.inUse} learned bumps"+if(learnedBumps.count>learnedBumps.inUse)" (+${learnedBumps.count-learnedBumps.inUse} to confirm)" else ""
+    }
+    private fun saveLearnedBumps() {
+        if(!::learnedBumps.isInitialized)return
+        evidenceIo.execute {runCatching {learnedBumps.save()}}
     }
     private fun slopeLabel(degrees:Double)=when(core.slopeBand(degrees)) {
         1->"Gentle uphill";2->"Uphill";3->"Steep uphill";4->"Very steep uphill"
@@ -1388,7 +1409,7 @@ class MainActivity : ComponentActivity() {
                 val freePractice=roadSource()&&google?.state?.guiding!=true&&google?.state?.routeReady!=true
                 val ahead=if(freePractice)core.roadJunction(visionNow) else null
                 dashboard.navigationStatus.setUiText(if(!roadSource())"Navigation coaching paused for test input" else
-                    if(freePractice)roadMapStatus.substringBefore(" (©") else google?.state?.status?:"Google navigation unavailable")
+                    if(freePractice)roadMapStatus.substringBefore(" (©")+learnedBumpNote() else google?.state?.status?:"Google navigation unavailable")
                 val valid=roadSource()&&fix!=null&&update?.state==GoogleNavigationPhase.ENROUTE
                 dashboard.setManeuver(if(valid)googleManeuverText(requireNotNull(update)) else when {
                     !roadSource()->"Test input"
@@ -1450,7 +1471,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart(){super.onStart();routeMap.onStart();googleNavigation?.onStart()}
     override fun onResume() {super.onResume();routeMap.onResume();googleNavigation?.onResume();resumed=true;loadOfflineRoute();if(::sensors.isInitialized)sensors.start();if(mode=="Camera"){inference.execute {visionFailure=null};startCamera()};main.post(tick);rules.post(ruleTick);main.post {startPendingLessonAudio()}}
-    override fun onPause() {resumed=false;if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();stopEvidence("backgrounded");if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};finishPractice(true);setup.stop();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
+    override fun onPause() {resumed=false;saveLearnedBumps();if(::pretrained.isInitialized)pretrained.pause();levelStart.cancel();sessionStartDialog?.dismiss();cameraAwaitingLayout=false;++cameraPreviewWaitGeneration;destinationPanel.setEditable(false);destinationPanel.setRunning(false);googleNavigation?.setEditable(false);googleNavigation?.stopGuidance();stopEvidence("backgrounded");if(evidenceStartPending){evidenceRequest.incrementAndGet();evidenceStartPending=false;evidenceBusy=false};finishPractice(true);setup.stop();cameraRunning=false;videoRunning=false;beginSource(captureSource());player?.close();camera?.unbindAll();sensors.close();audio.cancel();main.removeCallbacks(tick);rules.removeCallbacksAndMessages(null);routeMap.onPause();googleNavigation?.onPause();super.onPause()}
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}

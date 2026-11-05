@@ -24,7 +24,9 @@ data class GoogleNavigationUpdate(
     val maneuver:GoogleManeuverKind=GoogleManeuverKind.UNKNOWN,
     val distanceMeters:Double?=null,
     val timeSeconds:Double?=null,
-    val roundaboutExit:Int?=null
+    val roundaboutExit:Int?=null,
+    /** Metres from the car to each remaining maneuver, nearest first (memory only). */
+    val maneuversAheadMeters:DoubleArray?=null
 )
 
 data class GoogleNavigationState(

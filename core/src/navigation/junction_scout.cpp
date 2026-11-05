@@ -16,7 +16,7 @@ double bearingBetween(const Local& l,double lat1,double lon1,double lat2,double 
     return std::fmod(std::atan2(dx,dy)*180/pi+360.,360.);
 }
 }
-void JunctionScout::clear() {nodes_.clear();ways_.clear();wayIds_.clear();nodeWays_.clear();bumps_.clear();ahead_={};bearing_=std::numeric_limits<double>::quiet_NaN();lastTime_=-std::numeric_limits<double>::infinity();}
+void JunctionScout::clear() {nodes_.clear();ways_.clear();wayIds_.clear();nodeWays_.clear();bumps_.clear();ahead_={};pathCount_=0;bearing_=std::numeric_limits<double>::quiet_NaN();lastTime_=-std::numeric_limits<double>::infinity();}
 bool JunctionScout::addWay(int64_t wayId,int roadClass,const int64_t* ids,const double* latLon,size_t count) {
     if(!ids||!latLon||count<2||count>5000||ways_.size()>=60000||wayIds_.count(wayId))return false;
     for(size_t i=0;i<count;++i)if(!std::isfinite(latLon[2*i])||!std::isfinite(latLon[2*i+1])||std::abs(latLon[2*i])>90||std::abs(latLon[2*i+1])>180)return false;
@@ -29,12 +29,16 @@ bool JunctionScout::addWay(int64_t wayId,int roadClass,const int64_t* ids,const 
     }
     ways_.push_back(std::move(way));wayIds_.insert(wayId);return true;
 }
+bool JunctionScout::nodePosition(int64_t id,double& lat,double& lon) const noexcept {
+    const auto it=nodes_.find(id);if(it==nodes_.end())return false;
+    lat=it->second.lat;lon=it->second.lon;return true;
+}
 JunctionAhead JunctionScout::current(double now) const noexcept {
     if(!(ahead_.valid||ahead_.matched)||!std::isfinite(now)||now<ahead_.fixTime||now-ahead_.fixTime>2.5)return {};
     return ahead_;
 }
 JunctionAhead JunctionScout::update(double time,double lat,double lon,double bearingDeg,bool bearingValid,double speed,double accuracy) {
-    if(!std::isfinite(time)||!std::isfinite(lat)||!std::isfinite(lon)||ways_.empty()){ahead_={};return ahead_;}
+    if(!std::isfinite(time)||!std::isfinite(lat)||!std::isfinite(lon)||ways_.empty()){ahead_={};pathCount_=0;return ahead_;}
     const double kx=111320*std::cos(lat*pi/180),ky=110540;const Local l{kx,ky,lat,lon};
     // Travel direction: GPS bearing when moving, else displacement, else the last one.
     double b=std::numeric_limits<double>::quiet_NaN();
@@ -42,7 +46,7 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
     else if(time-lastTime_<3&&std::hypot(l.x(lastLon_),l.y(lastLat_))>3)b=bearingBetween(l,lastLat_,lastLon_,lat,lon);
     if(!std::isfinite(b))b=bearing_;
     bearing_=b;lastLat_=lat;lastLon_=lon;lastTime_=time;
-    ahead_={};ahead_.fixTime=time;
+    ahead_={};ahead_.fixTime=time;pathCount_=0;
     if(!std::isfinite(b))return ahead_;
     // 1. Match to the nearest road segment aligned with the travel direction.
     size_t wi=0,seg=0;double bestScore=1e18,bestT=0;bool forward=true,found=false;
@@ -55,7 +59,7 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
             const double diff=std::min(df,db);if(diff>40)continue;
             const double score=dist+.3*diff;if(score<bestScore){bestScore=score;wi=w;seg=k;bestT=t;forward=df<=db;found=true;}}}
     if(!found)return ahead_;
-    ahead_.matched=true;
+    ahead_.matched=true;path_[pathCount_++]={lat,lon,0};
     // 2. Walk ahead along the road to the first junction an instructor would prepare for,
     // noting a mapped speed bump and a sharp bend on the way.
     std::deque<std::pair<double,double>> turns; // (distance, signed turn) within the bend window
@@ -68,6 +72,7 @@ JunctionAhead JunctionScout::update(double time,double lat,double lon,double bea
      int64_t fromId=ways_[wi].nodes[forward?seg:seg+1];
      for(int steps=0;steps<80&&travelled<=lookAheadM;++steps) {
         const int64_t id=ways_[wi].nodes[idx];const auto& node=nodes_.at(id);
+        if(pathCount_<path_.size())path_[pathCount_++]={node.lat,node.lon,travelled};
         const double inBearing=bearingBetween(l,prevLat,prevLon,node.lat,node.lon);
         if(!ahead_.bumpNode&&bumps_.count(id)){ahead_.bumpNode=id;ahead_.bumpDistanceM=travelled;}
         if(std::isfinite(lastIn)&&prevId) {

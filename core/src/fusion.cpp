@@ -43,7 +43,7 @@ void SensorFusion::imu(const ImuSample& s) {
     double dt=lastImu_<0?0:s.time-lastImu_;
     if(dt>.2)restartCalibration("Motion data paused; normalize the phone plane again");
     lastImu_=s.time;
-    if(!calibrated_) { calibrate(s);rememberCameraPose(s.time);return; }
+    if(!calibrated_) { motion_={};calibrate(s);rememberCameraPose(s.time);return; }
     if(dt<=0||dt>.2) return; // Never integrate a long suspend/resume gap.
     const Vec3 rotation=s.gyro-gyroOffset_;
     const double angle=rotation.norm()*dt;
@@ -76,6 +76,8 @@ void SensorFusion::imu(const ImuSample& s) {
     }
     Vec3 linear=s.hasLinear?s.linear-linearOffset_:s.acceleration-up_*gravity;
     double longitudinal=linear.dot(forward_);
+    // Vertical jolt along the current "up", pitch about the car's right axis, roll about its forward axis.
+    motion_={s.time,linear.dot(up_),rotation.dot(right_),rotation.dot(forward_),s.time<=handledUntil_,true};
     acceleration_=longitudinal; // Driver-action suppression sees the current 100 Hz sample.
     if(longitudinal<-.8) brakeUntil_=s.time+.45;
     if(longitudinal<=-3.5) hardUntil_=s.time+.6;

@@ -141,6 +141,25 @@ class NativeCore : AutoCloseable {
     /** A mapped speed bump on a road node already added with [roadWay]. */
     @Synchronized fun roadBump(node:Long)=roadBump(handle,node)
     private external fun roadBump(h:Long,node:Long)
+    /** Provider route line (lat,lon pairs) while guiding; memory only, never saved. null clears. */
+    @Synchronized fun routeLine(latLon:DoubleArray?):Boolean=routeLine(handle,latLon)
+    /** Metres from the car to each remaining maneuver, nearest first, at [time] (elapsedRealtime s). */
+    @Synchronized fun routeManeuvers(time:Double,ahead:DoubleArray)=routeManeuvers(handle,time,ahead)
+    /** A speed bump learned on this phone in an earlier drive. */
+    @Synchronized fun bumpRestore(lat:Double,lon:Double,heading:Double,observations:Int,misses:Int):Boolean=bumpRestore(handle,lat,lon,heading,observations,misses)
+    /** Learned bumps, 5 values each: lat, lon, heading, times felt, times missed. */
+    @Synchronized fun bumpsLearned():DoubleArray=bumpsLearned(handle)?:DoubleArray(0)
+    /** Next bump-detector event for diagnostics (no position), or null. */
+    @Synchronized fun bumpEvent():DoubleArray?=bumpEvent(handle)
+    external fun bumpReason(reason:Int):String
+    /** Route line loaded/matched/bends known, bend m, bend right, bump m, bump learned, learned, learned in use, route bends. */
+    @Synchronized fun roadKnowledge(now:Double):DoubleArray=roadKnowledge(handle,now)
+    private external fun routeLine(h:Long,latLon:DoubleArray?):Boolean
+    private external fun routeManeuvers(h:Long,time:Double,ahead:DoubleArray)
+    private external fun bumpRestore(h:Long,lat:Double,lon:Double,heading:Double,observations:Int,misses:Int):Boolean
+    private external fun bumpsLearned(h:Long):DoubleArray?
+    private external fun bumpEvent(h:Long):DoubleArray?
+    private external fun roadKnowledge(h:Long,now:Double):DoubleArray
     /** Indian road practice: horn at blind bends, junction entry and when passing (default on). */
     @Synchronized fun hornRules(enabled:Boolean)=hornRules(handle,enabled)
     private external fun hornRules(h:Long,enabled:Boolean)

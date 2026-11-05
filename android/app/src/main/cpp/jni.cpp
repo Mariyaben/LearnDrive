@@ -166,6 +166,29 @@ JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint
 JNIEXPORT jdoubleArray JNICALL JNI(roadJunction)(JNIEnv* e,jobject,jlong h,jdouble now) {double v[9]{};ld_road_junction(engine(h),now,v,9);return output(e,v,9);}
 JNIEXPORT void JNICALL JNI(roadBump)(JNIEnv*,jobject,jlong h,jlong node) {ld_road_bump(engine(h),int64_t(node));}
 JNIEXPORT void JNICALL JNI(hornRules)(JNIEnv*,jobject,jlong h,jboolean enabled) {ld_coaching_horn_rules(engine(h),enabled?1:0);}
+JNIEXPORT jboolean JNICALL JNI(routeLine)(JNIEnv* e,jobject,jlong h,jdoubleArray latLon) {
+    if(!latLon)return ld_route_line(engine(h),nullptr,0)!=0;
+    const jsize n=e->GetArrayLength(latLon);if(n%2)return JNI_FALSE;
+    std::vector<double> v(static_cast<size_t>(n));e->GetDoubleArrayRegion(latLon,0,n,v.data());
+    return ld_route_line(engine(h),v.data(),v.size()/2)!=0;
+}
+JNIEXPORT void JNICALL JNI(routeManeuvers)(JNIEnv* e,jobject,jlong h,jdouble time,jdoubleArray ahead) {
+    const jsize n=ahead?e->GetArrayLength(ahead):0;
+    std::vector<double> v(static_cast<size_t>(n));if(n)e->GetDoubleArrayRegion(ahead,0,n,v.data());
+    ld_route_maneuvers(engine(h),time,v.data(),v.size());
+}
+JNIEXPORT jboolean JNICALL JNI(bumpRestore)(JNIEnv*,jobject,jlong h,jdouble lat,jdouble lon,jdouble heading,jint observations,jint misses) {
+    return ld_bump_restore(engine(h),lat,lon,heading,observations,misses)!=0;
+}
+JNIEXPORT jdoubleArray JNICALL JNI(bumpsLearned)(JNIEnv* e,jobject,jlong h) {
+    std::vector<double> v(static_cast<size_t>(4000*5));const int n=ld_bumps_learned(engine(h),v.data(),v.size());
+    return output(e,v.data(),size_t(std::max(0,n))*5);
+}
+JNIEXPORT jdoubleArray JNICALL JNI(bumpEvent)(JNIEnv* e,jobject,jlong h) {
+    double v[12]{};if(!ld_bump_event(engine(h),v,12))return nullptr;return output(e,v,12);
+}
+JNIEXPORT jstring JNICALL JNI(bumpReason)(JNIEnv* e,jobject,jint reason) {return e->NewStringUTF(ld_bump_reason(reason));}
+JNIEXPORT jdoubleArray JNICALL JNI(roadKnowledge)(JNIEnv* e,jobject,jlong h,jdouble now) {double v[10]{};ld_road_knowledge(engine(h),now,v,10);return output(e,v,10);}
 JNIEXPORT jboolean JNICALL JNI(laneMap)(JNIEnv* e,jobject,jlong h,jlong source,jdouble time,jfloatArray drivable,jfloatArray lanes,jint width,jint height) {
     const jsize n=jsize(2)*width*height;if(width<=0||height<=0||e->GetArrayLength(drivable)!=n||e->GetArrayLength(lanes)!=n)return JNI_FALSE;
     auto* road=static_cast<jfloat*>(e->GetPrimitiveArrayCritical(drivable,nullptr));

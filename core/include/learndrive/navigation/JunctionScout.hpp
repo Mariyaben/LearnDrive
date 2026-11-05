@@ -1,4 +1,6 @@
 #pragma once
+#include "learndrive/navigation/RoadKnowledge.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -36,6 +38,10 @@ public:
     JunctionAhead update(double time,double lat,double lon,double bearingDeg,bool bearingValid,double speedKmh,double accuracyM);
     // The last result while its fix is fresh (2.5 s), else invalid.
     JunctionAhead current(double now) const noexcept;
+    // The road walked ahead by the last update (from the car, up to the junction or 400 m).
+    const GeoPoint* path(size_t& count) const noexcept {count=pathCount_;return path_.data();}
+    // Position of a loaded road node.
+    bool nodePosition(int64_t nodeId,double& lat,double& lon) const noexcept;
 private:
     struct Node {double lat{},lon{};int branches{};};
     struct Way {int64_t id{};int cls{};std::vector<int64_t> nodes;};
@@ -45,6 +51,7 @@ private:
     std::unordered_map<int64_t,std::vector<std::pair<size_t,size_t>>> nodeWays_;
     std::unordered_set<int64_t> bumps_;
     JunctionAhead ahead_{};
+    std::array<GeoPoint,96> path_{};size_t pathCount_{};
     double lastLat_{},lastLon_{},lastTime_=-std::numeric_limits<double>::infinity(),bearing_=std::numeric_limits<double>::quiet_NaN();
 };
 }
