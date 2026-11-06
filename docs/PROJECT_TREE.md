@@ -77,3 +77,33 @@ LearnDrive_mobile/
 ```
 
 XcodeGen generates `ios/LearnDrive/Info.plist` and `ios/LearnDrive.xcodeproj`. Android Studio generates `android/local.properties`. Android model weights and warning audio are included in `android/app/src/main/assets/`; Core ML compiled resources require separate exports. See BUILD.md for details.
+
+The dual-brain subsystem adds these sources; see [DUAL_BRAIN.md](DUAL_BRAIN.md) for runtime contracts and optional model integration:
+
+```text
+core/include/learndrive/
+  SceneState.hpp                    Bounded scene and serializer
+  ReflexEngine.hpp                  Emergency evaluator
+  ContextualPolicyEngine.hpp        Deterministic 10 Hz tactical evaluator
+  ContextualCognitionEngine.hpp     Worker, cancellation and diagnostics
+  PriorityArbiter.hpp               Validated speech, cooldown and dedup
+  DualBrainEngine.hpp               Latest scene and 100 Hz tick
+  OnnxLanguageModel.hpp             Decoder, tokenizer and provider options
+  dual_brain_c_api.h                Mobile integration ABI
+core/src/
+  SceneState.cpp
+  ReflexEngine.cpp
+  ContextualPolicyEngine.cpp
+  ContextualCognitionEngine.cpp
+  PriorityArbiter.cpp
+  DualBrainEngine.cpp
+  OnnxLanguageModel.cpp             Optional ORT C++ prefill and KV decode
+  HuggingFaceTokenizer.cpp          Optional tokenizers-cpp adapter
+  dual_brain_c_api.cpp
+desktop/dual_brain_harness.cpp      Multi-hazard fixture or supplied live SLM
+tests/dual_brain_tests.cpp          Concurrency, reflex, speech and C ABI tests
+tests/onnx_decoder_tests.cpp        Real ORT tensor/cache/decoder tests
+tests/create_decoder_fixture.py    Synthetic FP32/FP16 causal graphs
+tools/run_onnx_decoder_tests.ps1    Portable Windows ORT test runner
+docs/DUAL_BRAIN.md                  Architecture, build and mobile integration
+```

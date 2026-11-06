@@ -1,0 +1,5 @@
+clip,event_id,start,end,expected_attention,accepted_prompt_ids,review_basis,status
+jodhpur-clear,clear-motorcycle,0,3,road_user,7|18|16|17|25|26|6|24|39,Motorcyclist moves from left to ahead during urban junction approach; inspect before inference,provisional_engineer_review
+jodhpur-clear,clear-crossing-car,3.5,6.5,crossing_vehicle,6|16|17|24|25|26|37|38,White car crosses ahead at the junction; no ground-truth collision time,provisional_engineer_review
+jodhpur-rain,rain-motorcycles,0,3,road_user,7|18|16|17|25|26|6|24|39,Multiple motorcycles ahead under rain and wiper occlusion; unsupported-condition stress test,provisional_engineer_review
+udacity-curves,curve-presence,0,47.96,bend,11|12|20|21|22|23|40,Repeated visible bends; broad capability check only and does not score per-bend timing or direction,provisional_engineer_review

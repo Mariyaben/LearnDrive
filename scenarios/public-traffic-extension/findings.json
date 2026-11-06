@@ -1,0 +1,55 @@
+{
+  "review_type": "Exploratory engineer review of cue capture frames and context stills; no independent instructor labels",
+  "findings": [
+    {
+      "id": "E01",
+      "clip": "udacity-curves",
+      "configuration": "semantic, assumed manual 30 km/h, 224 ms simulated delay",
+      "cue_times": [29.91, 47.55],
+      "classification": "false_obstacle_regression_reproduced",
+      "observation": "At capture 29.68 s, a genuine oncoming car and a second large car-labelled road region coexist. At capture 47.32 s, the large car-labelled road/guardrail region has no visible car. Both produce an obstacle instruction. This reproduces prior F01/F02 without a guidance-quality fix.",
+      "evidence": "build/public-traffic-extension/regression-cue-contact.jpg",
+      "limitation": "The trace does not identify the responsible actor/track; attribution remains incomplete."
+    },
+    {
+      "id": "E02",
+      "clip": "udacity-challenge",
+      "configuration": "semantic, assumed manual 30 km/h, 224 ms simulated delay",
+      "cue_times": [2.1],
+      "classification": "opposing_traffic_relevance_regression_reproduced",
+      "observation": "At capture 1.8667 s, the retained car detection is across the concrete divider at the far left, while the app says Traffic ahead. Keep a safe gap. Same-direction relevance is not established. Reproduces prior F03.",
+      "evidence": "build/public-traffic-extension/regression-cue-contact.jpg"
+    },
+    {
+      "id": "E03",
+      "clip": "bangalore-cv-raman",
+      "configuration": "semantic, unknown speed and assumed manual 30 km/h, 224 ms simulated delay",
+      "cue_times": [0.23, 5.3, 20.23, 33.3],
+      "classification": "actor_relevance_requires_review",
+      "observation": "Traffic, a motorcycle and overtaking cars are visible in capture/context frames. At 5.3 s a large car to the left and multiple cars ahead coexist. At 33.3 s a car overtakes on the right and moves ahead. Obstacle cues occur at both times, but actor-linked risk and useful timing are not demonstrated; do not count these as either proven hazard detections or proven false obstacles.",
+      "evidence": "build/public-traffic-extension/bangalore-cue-context.jpg",
+      "limitation": "Sparse context stills do not establish relative speed, collision risk or instructor-approved wording."
+    },
+    {
+      "id": "E04",
+      "clip": "bangalore-cv-raman",
+      "classification": "phrase_length_increases_speech_occupancy",
+      "observation": "The same four cue times occupy 33.48% of the clip with unknown speed and 45.27% with assumed manual 30 km/h. Longer slowdown/conditional engine-struggle wording explains the difference. No real gear or RPM measurement is supplied.",
+      "limitation": "Computed scheduled clip occupancy, not physical audio or a measured driver-distraction effect."
+    },
+    {
+      "id": "E05",
+      "clip": "jodhpur-clear",
+      "classification": "dense_speech_regression_reproduced",
+      "observation": "At assumed manual 30 km/h and 224 ms delay, two ordinary cues occupy 97.7% of the ten-second clip. The second interrupts the first. This reproduces the high-occupancy concern from prior F06.",
+      "limitation": "Startup speech is completed before the video. Occupancy clips interrupted speech and speech past the video end."
+    },
+    {
+      "id": "E06",
+      "clip": "bangalore-cv-raman",
+      "classification": "semantic_freshness_availability_gap",
+      "observation": "At 224 ms fixed result delay, semantic evidence is available in 46.72% of decision ticks after the first 350 ms of video. Freshness-limited silence must be reported separately from no relevant road user. This is consistent with the limited freshness margin exposed by the first phone capture.",
+      "limitation": "A fixed-delay replay is not a measured Android active-session trace. Preserve the freshness gate; investigate cadence and capture-to-result age."
+    }
+  ]
+}

@@ -7,9 +7,13 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
 
-class DetectionOverlay(context:Context):View(context) {
+open class DetectionOverlay(context:Context):View(context) {
     var result:VisionResult?=null
-        set(value){field=value;invalidate()}
+        set(value){
+            // Results are immutable snapshots; repeated UI ticks reuse them.
+            if(field===value)return
+            field=value;invalidate()
+        }
     private val boxes=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.rgb(64,240,184);style=Paint.Style.STROKE;strokeWidth=2*resources.displayMetrics.density}
     private val labels=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;textSize=13*resources.displayMetrics.scaledDensity;setShadowLayer(3f,1f,1f,Color.BLACK)}
     private val names=mapOf(0 to "Person",1 to "Bicycle",2 to "Car",3 to "Motorcycle",5 to "Bus",7 to "Truck")

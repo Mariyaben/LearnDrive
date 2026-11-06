@@ -8,10 +8,20 @@ import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
+import ai.onnxruntime.OrtProvider
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import android.graphics.PointF
 
+/** Zoom crop centre (fraction of the frame height): the road ahead sits a little below the middle. */
+private const val ZOOM_HORIZON=.58f
+/**
+ * The zoomed detector pass stays OFF in coaching. On the 2026-11-04 drive replay it added real
+ * distant riders and vehicles, but also false instructions for people printed on billboards and
+ * "brake now" for road users still far away. It needs elevated-object rejection and
+ * distance-aware urgency for small boxes first. Evaluate with tools/review_video.py --detector-zoom.
+ */
+private const val ZOOM_IN_COACHING=false
 data class Detection(val x:Float,val y:Float,val width:Float,val height:Float,val score:Float,val category:Int)
 data class RoadShape(val valid:Boolean,val bend:Int,val points:List<PointF>) {
     val status get()=if(!valid)"road shape unclear" else when(bend){-1->"left curve";1->"right curve";else->"straight road"}
@@ -22,20 +32,85 @@ data class RoadShape(val valid:Boolean,val bend:Int,val points:List<PointF>) {
 }
 data class VisionResult(val time:Double,val tti:Double,val confidence:Double,val inPath:Boolean,
     val processingMs:Double,val detections:List<Detection>,val width:Int,val height:Int,val road:RoadShape?=null,
-    val completedAt:Double=time+processingMs/1000)
+    val completedAt:Double=time+processingMs/1000,val frame:FrameContext?=null,
+    val spatialReadiness:Int=SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN,val semanticCaptureTime:Double?=null,
+    val semanticCompletedAt:Double?=null,val semanticProcessingMs:Double?=null)
+
+/** Cumulative steady-state diagnostics for one Vision instance, across source
+ * changes. Construction, model hashing and startup benchmarks are excluded.
+ * Frames count completed process calls; frameTotalMs also includes failed
+ * attempts. Calls count attempted model-stage invocations; failures are separate. Detector
+ * time wraps run/output-copy only. Spatial time wraps process (geometry, packing,
+ * JNI and inference), excluding publication. spatialNativeCompletions counts
+ * successful native processing returns, which require a completed model run.
+ * A failed stage may fail before or after model work; its internal ORT attempt
+ * count is unknown. Null last-stage time means that stage was skipped on the
+ * latest attempted frame, not a zero-duration run. */
+data class VisionPerformanceSnapshot(val instanceId:Long,val sourceId:Long=0,
+    val lastCaptureTime:Double=Double.NEGATIVE_INFINITY,val publishedAt:Double=0.0,
+    val frames:Long=0,val frameFailures:Long=0,val frameTotalMs:Double=0.0,
+    val detectorCalls:Long=0,val detectorFailures:Long=0,val detectorTotalMs:Double=0.0,
+    val spatialCalls:Long=0,val spatialFailures:Long=0,val spatialTotalMs:Double=0.0,
+    val lastReadiness:Int=SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN,
+    val lastFrameMs:Double=0.0,val lastDetectorMs:Double?=null,val lastSpatialMs:Double?=null,
+    val spatialNativeCompletions:Long=0,val capabilityProfile:String="STANDARD",
+    val capabilityReason:String="",val capabilitySamples:Long=0,val capabilitySlowSamples:Long=0,
+    val capabilityFailures:Long=0,val advancedAvailable:Boolean=false)
 
 class Vision(private val context:Context,private val core:NativeCore) : AutoCloseable {
+    private val performanceInstanceId=android.os.SystemClock.elapsedRealtimeNanos()
+    @Volatile var performanceSnapshot=VisionPerformanceSnapshot(performanceInstanceId)
+        private set
+    // Written only by the existing single inference executor. Readers consume
+    // the immutable volatile snapshot rather than these in-progress counters.
+    private var performanceFrames=0L
+    private var performanceFrameFailures=0L
+    private var performanceFrameTotalMs=0.0
+    private var performanceDetectorCalls=0L
+    private var performanceDetectorFailures=0L
+    private var performanceDetectorTotalMs=0.0
+    private var performanceSpatialCalls=0L
+    private var performanceSpatialNativeCompletions=0L
+    private var performanceSpatialFailures=0L
+    private var performanceSpatialTotalMs=0.0
+    private var performanceReadiness=SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN
+    private var performanceLastDetectorMs:Double?=null
+    private var performanceLastSpatialMs:Double?=null
+    private var sourceId=0L
+    private var semanticTime=Double.NEGATIVE_INFINITY
+    private var semanticResult:VisionResult?=null
+    private var windowStarted=0.0
+    private var windowFrames=0
+    private var spatialActive=false
+    private var frameSequence=0L
     private val environment=OrtEnvironment.getEnvironment()
     private val input=ByteBuffer.allocateDirect(3*320*320*4).order(ByteOrder.nativeOrder())
     private val tensor=OnnxTensor.createTensor(environment,input.asFloatBuffer(),longArrayOf(1,3,320,320))
     private inner class Model(name:String,private val outputs:List<String>) : AutoCloseable {
-        private val session=OrtSession.SessionOptions().use { options ->
-            options.setIntraOpNumThreads(2);options.setInterOpNumThreads(1)
-            environment.createSession(context.assets.open(name).use {it.readBytes()},options)
-        }
+        val provider:String
+        private val session:OrtSession
         val shapes:List<LongArray>
         val values:Array<FloatArray>
         init {
+            val bytes=context.assets.open(name).use {it.readBytes()}
+            var selected="CPU"
+            session=runCatching {
+                require(OrtEnvironment.getAvailableProviders().contains(OrtProvider.XNNPACK))
+                OrtSession.SessionOptions().use { options ->
+                    options.setIntraOpNumThreads(2);options.setInterOpNumThreads(1)
+                    options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    options.addXnnpack(emptyMap())
+                    environment.createSession(bytes,options)
+                }.also {selected="XNNPACK"}
+            }.getOrElse {
+                OrtSession.SessionOptions().use {options ->
+                    options.setIntraOpNumThreads(2);options.setInterOpNumThreads(1)
+                    options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    options.addCPU(true)
+                    environment.createSession(bytes,options)
+                }
+            }
+            provider=selected
             try {
                 val info=session.inputInfo["images"]?.info as? TensorInfo
                 require(session.inputNames==setOf("images")&&info?.type==OnnxJavaType.FLOAT&&
@@ -59,45 +134,175 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
         override fun close()=session.close()
     }
     private val detector=try {Model("detector.onnx",listOf("output0"))}catch(e:Exception){tensor.close();throw e}
-    private val road=try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){detector.close();tensor.close();throw e}
+    // Lane and drivable-area model (TwinLiteNet): optional, for lane keeping on marked roads.
+    private val lanes=try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){null}
+    private var laneTime=Double.NEGATIVE_INFINITY
+    // Zoomed second detector pass (2x, road ahead): earlier detection of distant riders,
+    // pedestrians and vehicles. Only while the phone is cool and the detector is fast.
+    private var zoomFull:FloatArray?=null
+    private var zoomMerged:FloatArray?=null
+    private val capability=VisionCapabilityPolicy()
+    private val spatial=try {SpatialVision(context,core)}catch(e:Exception){capability.spatialUnavailable();null}
+    val providerStatus get()="${capability.profile()} · ${if(capability.spatialEnabled())"Supercombo ${spatial?.providerStatus}" else capability.reason()} · semantic detector ${detector.provider} · Advanced unavailable"
     private val detectionShape=detector.shapes[0]
     private val channelFirst=detectionShape.size==3&&detectionShape[1]==84L
     private val count:Int
-    private val maskWidth:Int
-    private val maskHeight:Int
     init {
         try {
             require(detectionShape.size==3&&detectionShape[0]==1L&&(channelFirst||detectionShape[2]==84L)) {"Detector must output raw YOLOv8 COCO [1,84,N] or [1,N,84]"}
             count=(if(channelFirst)detectionShape[2] else detectionShape[1]).toInt()
-            val shape=road.shapes[0]
-            require(shape.size==4&&shape[0]==1L&&shape[1]==2L&&shape.contentEquals(road.shapes[1])) {"Road outputs must be NCHW [1,2,H,W] logits"}
-            maskHeight=shape[2].toInt();maskWidth=shape[3].toInt()
         }catch(e:Exception){close();throw e}
     }
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-    fun frame(image:ImageProxy):VisionResult {
+    /** Latest PowerManager thermal status, set by the camera analyzer before each frame. */
+    @Volatile var thermalStatus=0
+    fun frame(image:ImageProxy,id:Long,source:CaptureSource,onSemantic:(VisionResult)->Unit={}):VisionResult {
         val media=image.image?:throw IllegalArgumentException("Camera did not provide YUV image")
         val time=image.imageInfo.timestamp/1e9
         require(kotlin.math.abs(now()-time)<5) {"Camera timestamp is not on the elapsed-realtime clock"}
-        return process(media,image.imageInfo.rotationDegrees,time)
+        return process(media,image.imageInfo.rotationDegrees,FrameContext(id,source,time,
+            intrinsics=if(source==CaptureSource.CAMERA)SpatialVision.sensorIntrinsics?.takeIf {
+                it.size==6&&it.all {v->v.isFinite()}&&it[0]>0&&it[1]>0&&it[4]>0&&it[5]>0
+            }?.copyOf() else null,
+            calibrationOrigin=if(source==CaptureSource.CAMERA)SpatialVision.calibrationOrigin else "unknown"),onSemantic=onSemantic)
     }
-    // Both pretrained networks use the same letterboxed RGB 0..1 tensor.
-    fun process(image:Image,rotation:Int,time:Double,fullRange:Boolean=false):VisionResult {
+    fun process(image:Image,rotation:Int,originalFrame:FrameContext,fullRange:Boolean=false,onSemantic:(VisionResult)->Unit={}):VisionResult {
+        val started=now()
+        performanceReadiness=SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN
+        performanceLastDetectorMs=null;performanceLastSpatialMs=null
+        try {
+            return processFrame(image,rotation,originalFrame,fullRange,onSemantic).also {performanceFrames++}
+        }catch(error:Throwable) {
+            performanceFrameFailures++;throw error
+        }finally {
+            val publishedAt=now();val duration=(publishedAt-started)*1000
+            performanceFrameTotalMs+=duration
+            performanceSnapshot=VisionPerformanceSnapshot(performanceInstanceId,originalFrame.sourceId,
+                originalFrame.captureTime,publishedAt,performanceFrames,performanceFrameFailures,performanceFrameTotalMs,
+                performanceDetectorCalls,performanceDetectorFailures,performanceDetectorTotalMs,
+                performanceSpatialCalls,performanceSpatialFailures,performanceSpatialTotalMs,
+                performanceReadiness,duration,performanceLastDetectorMs,performanceLastSpatialMs,
+                spatialNativeCompletions=performanceSpatialNativeCompletions,
+                capabilityProfile=capability.profile(),capabilityReason=capability.reason(),
+                capabilitySamples=capability.samples(),capabilitySlowSamples=capability.slowSamples(),
+                capabilityFailures=capability.failures(),advancedAvailable=capability.advancedAvailable())
+        }
+    }
+    private fun processFrame(image:Image,rotation:Int,originalFrame:FrameContext,fullRange:Boolean,onSemantic:(VisionResult)->Unit):VisionResult {
+        val time=originalFrame.captureTime
+        core.requireSource(originalFrame.sourceId)
+        if(sourceId!=originalFrame.sourceId) {
+            spatial?.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null;sourceId=originalFrame.sourceId;frameSequence=0
+        }
+        val rect=image.cropRect
+        val frame=originalFrame.copy(imageWidth=image.width,imageHeight=image.height,rotationDegrees=rotation,
+            cropLeft=rect.left,cropTop=rect.top,cropWidth=rect.width(),cropHeight=rect.height(),pixelRange=if(fullRange)"full" else "video",
+            pixelFormat=image.format,frameSequence=++frameSequence)
+        val started=now()
+        val up=core.cameraUp(time)
+        val poseReadiness=SpatialReadiness.evaluate(frame.source==CaptureSource.CAMERA,frame.intrinsics!=null,up[0],up[1],up[2])
+        var readiness=capability.readiness(poseReadiness)
+        performanceReadiness=readiness
+        // Under heat the optional spatial model is shed first; the detector keeps running.
+        val metric=readiness==SpatialReadiness.READY&&CameraVisionHealth.spatialAllowed(thermalStatus)
+        if(!metric) {
+            core.spatialUnavailable(frame.sourceId,time)
+            if(spatialActive){spatial?.reset();spatialActive=false;semanticTime=Double.NEGATIVE_INFINITY;semanticResult=null}
+        }
+        // Publish classification before the expensive spatial model. Native rules
+        // can consume the original capture timestamp while spatial inference runs.
+        // Up to 8 Hz reduces the freshness gaps of the former 4 Hz schedule.
+        if(time-semanticTime>=.125) {
+            val semantic=semanticProcess(image,rotation,frame,fullRange).copy(spatialReadiness=readiness,semanticCaptureTime=time)
+            semanticResult=semantic;semanticTime=time;onSemantic(semantic)
+        }
+        if(metric) {
+            val model=requireNotNull(spatial)
+            if(!spatialActive)model.reset()
+            val spatialStarted=now();performanceSpatialCalls++
+            var completedSpatial=false
+            try {
+                model.process(image,rotation,frame,fullRange,up)
+                performanceSpatialNativeCompletions++
+                completedSpatial=true
+            }catch(error:StaleSourceException) {throw error
+            }catch(error:Exception) {
+                performanceSpatialFailures++;capability.spatialUnavailable()
+            }finally {
+                val duration=(now()-spatialStarted)*1000
+                performanceSpatialTotalMs+=duration;performanceLastSpatialMs=duration
+                if(completedSpatial)capability.completedSpatial(duration)
+            }
+            if(capability.spatialEnabled()) {model.publish(frame);spatialActive=true}
+            else {
+                core.spatialUnavailable(frame.sourceId,time);model.reset();model.close();spatialActive=false
+                semanticTime=Double.NEGATIVE_INFINITY
+                readiness=capability.readiness(poseReadiness);performanceReadiness=readiness
+            }
+        }
+        core.requireSource(frame.sourceId)
+        val last=semanticResult
+        val completed=now();windowFrames++
+        if(windowStarted==0.0)windowStarted=completed
+        if(completed-windowStarted>=1) {
+            val thermal=if(android.os.Build.VERSION.SDK_INT>=29)context.getSystemService(android.os.PowerManager::class.java).currentThermalStatus else 0
+            android.util.Log.i("LearnDrivePerf","frames time=$completed fps=${windowFrames/(completed-windowStarted)} inference_ms=${(completed-started)*1000} thermal=$thermal")
+            windowStarted=completed;windowFrames=0
+        }
+        val crop=image.cropRect;val swapped=rotation==90||rotation==270
+        return VisionResult(time,last?.tti?:Double.POSITIVE_INFINITY,last?.confidence?:0.0,last?.inPath?:false,
+            (now()-started)*1000,last?.detections?:emptyList(),if(swapped)crop.height() else crop.width(),
+            if(swapped)crop.width() else crop.height(),RoadShape.from(core.roadShape()),now(),frame,readiness,last?.time,
+            last?.completedAt,last?.processingMs)
+    }
+    private fun semanticProcess(image:Image,rotation:Int,frame:FrameContext,fullRange:Boolean=false):VisionResult {
+        val time=frame.captureTime
         val started=now();val crop=image.cropRect;val planes=image.planes
         fun plane(i:Int):ByteBuffer {
             val p=planes[i];val x=if(i==0)crop.left else crop.left/2;val y=if(i==0)crop.top else crop.top/2
             return p.buffer.duplicate().apply {position(position()+y*p.rowStride+x*p.pixelStride)}.slice()
         }
-        core.prepare(plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+        core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
             plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,true,1)
-        detector.run();road.run()
+        val detectorStarted=now();performanceDetectorCalls++
+        try {
+            detector.run()
+        }catch(error:Throwable) {
+            performanceDetectorFailures++;throw error
+        }finally {
+            val duration=(now()-detectorStarted)*1000
+            performanceDetectorTotalMs+=duration;performanceLastDetectorMs=duration
+        }
+        var found=detector.values[0];var candidates=count
+        if(ZOOM_IN_COACHING&&channelFirst&&CameraVisionHealth.zoomAllowed(thermalStatus,performanceLastDetectorMs)) {
+            val full=zoomFull?:FloatArray(found.size).also {zoomFull=it}
+            val merged=zoomMerged?:FloatArray(found.size*2).also {zoomMerged=it}
+            found.copyInto(full)
+            val zoomed=runCatching {
+                core.prepareZoom(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+                    plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,fullRange,ZOOM_HORIZON)&&
+                    run {detector.run();core.zoomMerge(full,detector.values[0],count,merged)==count*2}
+            }.getOrDefault(false)
+            // The detector's output array now holds the zoom pass: fall back to the saved full-frame copy.
+            if(zoomed){found=merged;candidates=count*2}else found=full
+            // The lane model below reads the prepared input: restore the full frame.
+            if(lanes!=null)core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+                plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,false,1)
+        }
         // ONNX YOLOv8 coordinates are pixels in the 320x320 model image.
-        val hazard=core.vision(time,detector.values[0],84,count,channelFirst,false,road.values[0],road.values[1],maskWidth,maskHeight)
+        val hazard=core.spatialLabels(frame.sourceId,time,found,candidates,channelFirst)
+        // Same prepared input; at most 2 Hz, only while heat allows optional models and only
+        // when this frame is still fresh, so lane keeping never delays road-user detection.
+        val laneModel=lanes
+        if(laneModel!=null&&time-laneTime>=.5&&now()-time<.15&&CameraVisionHealth.spatialAllowed(thermalStatus)) {
+            laneTime=time
+            runCatching {laneModel.run();core.laneMap(frame.sourceId,time,laneModel.values[0],laneModel.values[1],320,320)}
+        }
         val detections=core.boxes().toList().chunked(6).map {Detection(it[0],it[1],it[2],it[3],it[4],it[5].toInt())}
         val swapped=rotation==90||rotation==270
         val shape=RoadShape.from(core.roadShape());val completed=now()
         return VisionResult(time,hazard[0],hazard[1],hazard[2]!=0.0,(completed-started)*1000,detections,
             if(swapped)crop.height() else crop.width(),if(swapped)crop.width() else crop.height(),shape,completed)
     }
-    override fun close() {detector.close();road.close();tensor.close()}
+    override fun close() {spatial?.close();lanes?.close();detector.close();tensor.close()}
 }
