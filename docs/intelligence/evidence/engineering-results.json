@@ -1,0 +1,1365 @@
+{
+  "date": "2026-10-27",
+  "candidate": "0.6.0",
+  "checks": {
+    "native_ctest_groups": 14,
+    "python_tests": 79,
+    "java_policy_runner": "passed including12 reasoning gates",
+    "android_application_assemble": "passed",
+    "android_instrumentation_assemble": "passed",
+    "android_device_execution": "unavailable; no ADB device"
+  },
+  "check_log_sha256": {
+    "current-ctest.txt": "bf0b48c3546ccd86808fdb420ecf8cb8194c47946cda8471edabfcdb6d35c4b7",
+    "current-python.txt": "4f14fe75db47a412d4cfffb8bb9518bbca91ebc11d165bc2449bb6dacca03127",
+    "current-java.txt": "0cbe2cfba6ddd83344e7ccd4b54de9649d3e569fb350273660bf6275056ceda1",
+    "android-build-final.txt": "82a6b6fe9c0f6fd36cca5503bac339a64ab04d18bc76447f6f228e82a56f1f49"
+  },
+  "models": {
+    "qualified-smol": {
+      "report": {
+        "schema_version": 2,
+        "status": "actual_pretrained_execution",
+        "model_sha256": "48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201",
+        "server_sha256": "94297176d4c2b5ab12c5d633077fdbc35613628f98cea2b6a172d32fb00709eb",
+        "server_command": [
+          ".tools\\intelligence\\windows\\llama-server.exe",
+          "-m",
+          ".tools\\intelligence\\smollm2-360m-instruct-q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "54603",
+          "-c",
+          "4096",
+          "-t",
+          "2",
+          "-tb",
+          "2",
+          "-np",
+          "1",
+          "-ngl",
+          "0",
+          "--jinja"
+        ],
+        "load_ms": 4788.497300003655,
+        "baseline_library_sha256": "86ea9a32b5f45c7d2c8018463ea9b82b7eafa6cfa3e7cfa9d3dccf2062b325b0",
+        "current_library_sha256": "37dbedc880652eed8f2598316ab0ba1470eee06df5287b058a27d99ca5ded36c",
+        "scenario_count": 23,
+        "model_calls": 52,
+        "scenario_evidence": {
+          "recorded_native_perception": 3,
+          "synthetic": 20
+        },
+        "model_wall_ms": {
+          "p50": 1696.5847000246868,
+          "p95": 7737.624900008086,
+          "p99": 8026.133800012758,
+          "max": 8026.133800012758,
+          "mean": 2049.350226923707
+        },
+        "invalid_or_failed": 2,
+        "successful_calls": 50,
+        "request_timeout_seconds": 8,
+        "exceeds_2s_live_budget": 19,
+        "process_counters": {
+          "resident_bytes": 556941312,
+          "peak_resident_bytes": 682139648,
+          "cpu_seconds": 209.15625
+        },
+        "total_decision_wall_ms": {
+          "A_balanced": {
+            "p50": 0.0709999876562506,
+            "p95": 0.14949997421354055,
+            "p99": 0.21019999985583127,
+            "max": 31.436400022357702,
+            "mean": 0.0992918863900436
+          },
+          "B_temporal": {
+            "p50": 0.06649998249486089,
+            "p95": 0.1393999846186489,
+            "p99": 0.18030000501312315,
+            "max": 0.39999998989515007,
+            "mean": 0.0778317567718532
+          },
+          "C_pretrained_hybrid": {
+            "p50": 0.4845999937970191,
+            "p95": 2.2329000057652593,
+            "p99": 1884.1468000027817,
+            "max": 8030.249800009187,
+            "mean": 53.87962065700737
+          }
+        },
+        "prompt_sha256": "44c56ec09b01d953c9f3e9ca457edeca043e9cb79393521338d181e34e217104",
+        "tool_sha256": {
+          "tools/benchmark_intelligence.py": "5dc7edae16eba0f5d654e6602e170f8cf02454d526c21dc4a587467ffd833d4f",
+          "tools/intelligence_model.py": "14381ac2b2ba278cea6036d627e7d84f0f118c58cd49de9181a199037f6e17e0",
+          "tools/replay_coaching.py": "d00b18e714133dbded62f523d12e29b9bec5a35fa52eb04f83b1209c8b36c9c7"
+        },
+        "input_sha256": "7527228f62cd728929cd68993e34fadd6454e1a21ed3aca20fc4391bfd8d6854",
+        "distinct_neural_choices": [
+          "A",
+          "D"
+        ],
+        "instructor_nuisance_recall_silence_metrics": null,
+        "quality_status": "unavailable; no qualified instructor labels",
+        "neural_choice_is_real": true,
+        "metadata_binding_is_deterministic": true,
+        "live_authority": false,
+        "limits": [
+          "Synthetic scenario expectations are not instructor judgments.",
+          "Matched10Hz supplied sensor publications; policy histories diverge according to their own simulated deliveries. Recorded candidate producers have their original replay history.",
+          "Offline logical time freezes during neural inference. Actual wall time and deadline misses are retained.",
+          "No learned model is promoted or claimed superior.",
+          "No physical Android speed, heat, battery or audibility evidence."
+        ]
+      },
+      "cases": [
+        {
+          "scenario_id": "competing-events",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "completed-session-review",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 61,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "important-escalation",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 11,
+            "throttled_or_call_cap": 47,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "left-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "maintaining-speed",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "missing-gps",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "navigation-reroute",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "newly-relevant-person",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 32,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 10
+          }
+        },
+        {
+          "scenario_id": "normal-silence",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "pedestrian-parallel-uncertain",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "recorded-gp2",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 303,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 78,
+            "ineligible_context": 0,
+            "no_approved_choices": 222
+          }
+        },
+        {
+          "scenario_id": "recorded-gp4",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 1,
+            "inference_failed": 2
+          },
+          "invocation_counters": {
+            "ticks": 243,
+            "unchanged_context": 1,
+            "throttled_or_call_cap": 28,
+            "ineligible_context": 0,
+            "no_approved_choices": 211
+          }
+        },
+        {
+          "scenario_id": "recorded-gp9",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 243,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 25,
+            "ineligible_context": 0,
+            "no_approved_choices": 215
+          }
+        },
+        {
+          "scenario_id": "repeated-detections",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "right-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "same-person-addressed",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "slow-inference",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "slowing-before-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "stale-camera",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "temporary-occlusion",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 29,
+            "throttled_or_call_cap": 23,
+            "ineligible_context": 0,
+            "no_approved_choices": 6
+          }
+        },
+        {
+          "scenario_id": "uncertain-optical-motion",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "voice-disabled",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 2
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 45,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "voice-submission-failure",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {
+            "completed": 2
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 45,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        }
+      ],
+      "synthetic_actual_neural_examples": [
+        {
+          "scenario_id": "competing-events",
+          "input_sha256": "a2e756120d69479f69414c933d56a97f86a81d3ff0ab329bdfc73513b5e38a95",
+          "raw_content": "D",
+          "proposal": {
+            "schema_version": 2,
+            "decision": "DEFER",
+            "candidate_index": null,
+            "instruction_id": null,
+            "event_id": null,
+            "reason_code": "NO_USEFUL_INTERVENTION",
+            "confidence": null
+          },
+          "wall_ms": 1563.7849999766331,
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 498,
+            "total_tokens": 500,
+            "prompt_tokens_details": {
+              "cached_tokens": 240
+            }
+          },
+          "timings": {
+            "cache_n": 240,
+            "prompt_n": 258,
+            "prompt_ms": 1493.901,
+            "prompt_per_token_ms": 5.790313953488372,
+            "prompt_per_second": 172.70220717437098,
+            "predicted_n": 2,
+            "predicted_ms": 29.204,
+            "predicted_per_token_ms": 29.204,
+            "predicted_per_second": 34.24188467333242
+          },
+          "metadata_source": "trusted choice binding; reason is deterministic, not generated explanation",
+          "live_authority": false
+        },
+        {
+          "scenario_id": "important-escalation",
+          "input_sha256": "8dd56dd4d264cc222558d3139bd58e3914135444bbeb6470792643bfd055cee7",
+          "raw_content": "A",
+          "proposal": {
+            "schema_version": 2,
+            "decision": "WARN",
+            "candidate_index": 0,
+            "instruction_id": 44,
+            "event_id": "1:1",
+            "reason_code": "IMPORTANT_EVENT",
+            "confidence": null
+          },
+          "wall_ms": 2008.66930000484,
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 589,
+            "total_tokens": 591,
+            "prompt_tokens_details": {
+              "cached_tokens": 237
+            }
+          },
+          "timings": {
+            "cache_n": 237,
+            "prompt_n": 352,
+            "prompt_ms": 1941.347,
+            "prompt_per_token_ms": 5.515190340909091,
+            "prompt_per_second": 181.3174048740385,
+            "predicted_n": 2,
+            "predicted_ms": 38.444,
+            "predicted_per_token_ms": 38.444,
+            "predicted_per_second": 26.011861408802414
+          },
+          "metadata_source": "trusted choice binding; reason is deterministic, not generated explanation",
+          "live_authority": false
+        }
+      ],
+      "failures": [
+        {
+          "scenario_id": "recorded-gp4",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8020.514400006505,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        },
+        {
+          "scenario_id": "recorded-gp4",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8026.133800012758,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        }
+      ],
+      "latency_denominator": "Only returned samples with measured wall_ms. Failures are listed separately, never counted as fast calls.",
+      "quality_metrics": null,
+      "phone_model_execution": null
+    },
+    "qualified-qwen": {
+      "report": {
+        "schema_version": 2,
+        "status": "actual_pretrained_execution",
+        "model_sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+        "server_sha256": "94297176d4c2b5ab12c5d633077fdbc35613628f98cea2b6a172d32fb00709eb",
+        "server_command": [
+          ".tools\\intelligence\\windows\\llama-server.exe",
+          "-m",
+          ".tools\\intelligence\\Qwen3-0.6B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "49729",
+          "-c",
+          "4096",
+          "-t",
+          "2",
+          "-tb",
+          "2",
+          "-np",
+          "1",
+          "-ngl",
+          "0",
+          "--jinja"
+        ],
+        "load_ms": 21250.931100017624,
+        "baseline_library_sha256": "86ea9a32b5f45c7d2c8018463ea9b82b7eafa6cfa3e7cfa9d3dccf2062b325b0",
+        "current_library_sha256": "37dbedc880652eed8f2598316ab0ba1470eee06df5287b058a27d99ca5ded36c",
+        "scenario_count": 23,
+        "model_calls": 52,
+        "scenario_evidence": {
+          "recorded_native_perception": 3,
+          "synthetic": 20
+        },
+        "model_wall_ms": {
+          "p50": 2361.0842999769375,
+          "p95": 8014.430199982598,
+          "p99": 8092.832099995576,
+          "max": 8092.832099995576,
+          "mean": 2670.5218846126136
+        },
+        "invalid_or_failed": 5,
+        "successful_calls": 47,
+        "request_timeout_seconds": 8,
+        "exceeds_2s_live_budget": 30,
+        "process_counters": {
+          "resident_bytes": 1000603648,
+          "peak_resident_bytes": 1160261632,
+          "cpu_seconds": 255.59375
+        },
+        "total_decision_wall_ms": {
+          "A_balanced": {
+            "p50": 0.0813000078778714,
+            "p95": 0.18509998335503042,
+            "p99": 0.2730999840423465,
+            "max": 3.0230999982450157,
+            "mean": 0.10434270782174608
+          },
+          "B_temporal": {
+            "p50": 0.07449998520314693,
+            "p95": 0.16110000433400273,
+            "p99": 0.23239999427460134,
+            "max": 34.5913999772165,
+            "mean": 0.10885445474896853
+          },
+          "C_pretrained_hybrid": {
+            "p50": 0.6173999863676727,
+            "p95": 3.1651000026613474,
+            "p99": 2617.1555999899283,
+            "max": 8135.720799997216,
+            "mean": 70.12306092547567
+          }
+        },
+        "prompt_sha256": "44c56ec09b01d953c9f3e9ca457edeca043e9cb79393521338d181e34e217104",
+        "tool_sha256": {
+          "tools/benchmark_intelligence.py": "5dc7edae16eba0f5d654e6602e170f8cf02454d526c21dc4a587467ffd833d4f",
+          "tools/intelligence_model.py": "14381ac2b2ba278cea6036d627e7d84f0f118c58cd49de9181a199037f6e17e0",
+          "tools/replay_coaching.py": "d00b18e714133dbded62f523d12e29b9bec5a35fa52eb04f83b1209c8b36c9c7"
+        },
+        "input_sha256": "7527228f62cd728929cd68993e34fadd6454e1a21ed3aca20fc4391bfd8d6854",
+        "distinct_neural_choices": [
+          "S"
+        ],
+        "instructor_nuisance_recall_silence_metrics": null,
+        "quality_status": "unavailable; no qualified instructor labels",
+        "neural_choice_is_real": true,
+        "metadata_binding_is_deterministic": true,
+        "live_authority": false,
+        "limits": [
+          "Synthetic scenario expectations are not instructor judgments.",
+          "Matched10Hz supplied sensor publications; policy histories diverge according to their own simulated deliveries. Recorded candidate producers have their original replay history.",
+          "Offline logical time freezes during neural inference. Actual wall time and deadline misses are retained.",
+          "No learned model is promoted or claimed superior.",
+          "No physical Android speed, heat, battery or audibility evidence."
+        ]
+      },
+      "cases": [
+        {
+          "scenario_id": "competing-events",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "completed-session-review",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 61,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "important-escalation",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 11,
+            "throttled_or_call_cap": 47,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "left-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "maintaining-speed",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "missing-gps",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "navigation-reroute",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "newly-relevant-person",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 32,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 10
+          }
+        },
+        {
+          "scenario_id": "normal-silence",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "pedestrian-parallel-uncertain",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "recorded-gp2",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 303,
+            "unchanged_context": 1,
+            "throttled_or_call_cap": 77,
+            "ineligible_context": 0,
+            "no_approved_choices": 222
+          }
+        },
+        {
+          "scenario_id": "recorded-gp4",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 1,
+            "inference_failed": 2
+          },
+          "invocation_counters": {
+            "ticks": 243,
+            "unchanged_context": 1,
+            "throttled_or_call_cap": 28,
+            "ineligible_context": 0,
+            "no_approved_choices": 211
+          }
+        },
+        {
+          "scenario_id": "recorded-gp9",
+          "evidence_kind": "recorded_native_perception",
+          "event_counts": {
+            "A_balanced": 2,
+            "B_temporal": 2,
+            "C_pretrained_hybrid": 2
+          },
+          "model_status_counts": {
+            "inference_failed": 3
+          },
+          "invocation_counters": {
+            "ticks": 243,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 25,
+            "ineligible_context": 0,
+            "no_approved_choices": 215
+          }
+        },
+        {
+          "scenario_id": "repeated-detections",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "right-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "same-person-addressed",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "slow-inference",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "slowing-before-turn",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 44,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "stale-camera",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 0,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {},
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 0,
+            "throttled_or_call_cap": 0,
+            "ineligible_context": 0,
+            "no_approved_choices": 61
+          }
+        },
+        {
+          "scenario_id": "temporary-occlusion",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 29,
+            "throttled_or_call_cap": 23,
+            "ineligible_context": 0,
+            "no_approved_choices": 6
+          }
+        },
+        {
+          "scenario_id": "uncertain-optical-motion",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 3
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 42,
+            "throttled_or_call_cap": 16,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "voice-disabled",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 1,
+            "C_pretrained_hybrid": 1
+          },
+          "model_status_counts": {
+            "completed": 2
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 45,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        },
+        {
+          "scenario_id": "voice-submission-failure",
+          "evidence_kind": "synthetic",
+          "event_counts": {
+            "A_balanced": 1,
+            "B_temporal": 0,
+            "C_pretrained_hybrid": 0
+          },
+          "model_status_counts": {
+            "completed": 2
+          },
+          "invocation_counters": {
+            "ticks": 61,
+            "unchanged_context": 45,
+            "throttled_or_call_cap": 14,
+            "ineligible_context": 0,
+            "no_approved_choices": 0
+          }
+        }
+      ],
+      "synthetic_actual_neural_examples": [
+        {
+          "scenario_id": "competing-events",
+          "input_sha256": "a2e756120d69479f69414c933d56a97f86a81d3ff0ab329bdfc73513b5e38a95",
+          "raw_content": "S",
+          "proposal": {
+            "schema_version": 2,
+            "decision": "SILENCE",
+            "candidate_index": null,
+            "instruction_id": null,
+            "event_id": null,
+            "reason_code": "NO_USEFUL_INTERVENTION",
+            "confidence": null
+          },
+          "wall_ms": 1735.1609999896027,
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 446,
+            "total_tokens": 448,
+            "prompt_tokens_details": {
+              "cached_tokens": 222
+            }
+          },
+          "timings": {
+            "cache_n": 222,
+            "prompt_n": 224,
+            "prompt_ms": 1608.832,
+            "prompt_per_token_ms": 7.182285714285714,
+            "prompt_per_second": 139.23144243774362,
+            "predicted_n": 2,
+            "predicted_ms": 37.064,
+            "predicted_per_token_ms": 37.064,
+            "predicted_per_second": 26.980358299158212
+          },
+          "metadata_source": "trusted choice binding; reason is deterministic, not generated explanation",
+          "live_authority": false
+        }
+      ],
+      "failures": [
+        {
+          "scenario_id": "recorded-gp4",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8092.832099995576,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        },
+        {
+          "scenario_id": "recorded-gp4",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8009.043300000485,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        },
+        {
+          "scenario_id": "recorded-gp9",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8043.769099982455,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        },
+        {
+          "scenario_id": "recorded-gp9",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8010.582799994154,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        },
+        {
+          "scenario_id": "recorded-gp9",
+          "status": "inference_failed",
+          "error": "TimeoutError: timed out",
+          "measured_wall_ms": 8014.430199982598,
+          "clock_scope": "offline decision evaluation freezes scenario time; not live latency qualification"
+        }
+      ],
+      "latency_denominator": "Only returned samples with measured wall_ms. Failures are listed separately, never counted as fast calls.",
+      "quality_metrics": null,
+      "phone_model_execution": null
+    }
+  },
+  "apk": {
+    "path": "build/LearnDrive-0.6.0-debug.apk",
+    "bytes": 248373774,
+    "sha256": "05119ee8ab991fadad389134a4a0f5825fc0ec94c96356ea08e8d9cded7d6c76",
+    "verification": {
+      "zip_crc": "passed",
+      "models_unchanged": {
+        "detector.onnx": "cf8b22e029bcf0bc4da56a86ce9a175623e900d001ec6c88b6c4b8e21b1b1809",
+        "road.onnx": "a90ee1ca89c3e93ae07b1cea57740db239023211be5ebef9a7711dc47d7ecb34",
+        "supercombo.onnx": "2365bae967cce21ce68707c30bf2981bb7081ee5c3e6a3dff793e660f23ff622"
+      },
+      "audio_assets": 55,
+      "gguf_bundled": false,
+      "elf_libraries": [
+        {
+          "library": "lib/arm64-v8a/libdatastore_shared_counter.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libggml-base.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libggml-cpu-android_armv8.0_1.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libggml.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libgmm-jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libimage_processing_util_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libllama.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libmaplibre.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libonnxruntime.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libonnxruntime4j_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libsurface_util_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/libvalhalla-wrapper.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libdatastore_shared_counter.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libgmm-jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libimage_processing_util_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/liblearndrive_reasoning.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libmaplibre.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libonnxruntime.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libonnxruntime4j_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libsurface_util_jni.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/libvalhalla-wrapper.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/liblearndrive_reasoning.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/arm64-v8a/liblearndrive.so",
+          "minimum_load_alignment": 16384
+        },
+        {
+          "library": "lib/x86_64/liblearndrive.so",
+          "minimum_load_alignment": 16384
+        }
+      ],
+      "audio_hashes_unchanged": true,
+      "signature_v2_verified": true,
+      "zipalign_16k_verified": true,
+      "apk_sha256": "05119ee8ab991fadad389134a4a0f5825fc0ec94c96356ea08e8d9cded7d6c76"
+    }
+  }
+}

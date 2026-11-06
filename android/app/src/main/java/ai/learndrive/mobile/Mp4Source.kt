@@ -11,7 +11,7 @@ class Mp4Source : AutoCloseable {
     private val stopped=AtomicBoolean()
     // MediaCodec owns decoded YUV planes; only the reusable input tensor is written.
     // PTS paces playback, while all fusion/rule timestamps use the phone clock.
-    fun play(context:Context,uri:Uri,vision:Vision,result:(VisionResult)->Unit) {
+    fun play(context:Context,uri:Uri,vision:Vision,sourceId:Long,result:(VisionResult)->Unit) {
         val extractor=MediaExtractor();var codec:MediaCodec?=null
         try {
             extractor.setDataSource(context,uri,null)
@@ -42,7 +42,9 @@ class Mp4Source : AutoCloseable {
                             val image=codec.getOutputImage(slot)?:throw IllegalStateException("Decoder cannot expose YUV; use another codec/video")
                             val outputFormat=codec.outputFormat
                             val full=outputFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)&&outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE)==MediaFormat.COLOR_RANGE_FULL
-                            image.use {result(vision.process(it,rotation,due,full))}
+                            val frame=FrameContext(sourceId,CaptureSource.RECORDING,due,info.presentationTimeUs/1e6,
+                                pixelRangeOrigin=if(outputFormat.containsKey(MediaFormat.KEY_COLOR_RANGE))"decoder metadata" else "assumed video range")
+                            image.use {result(vision.process(it,rotation,frame,full))}
                         }
                         outputEnded=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0
                     } finally {codec.releaseOutputBuffer(slot,false)}

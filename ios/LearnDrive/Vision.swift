@@ -1,22 +1,15 @@
 import Foundation
 import AVFoundation
 import CoreML
+import simd
 
 struct VisionResult {let time,tti,confidence,processingMs:Double;let inPath:Bool}
 final class Vision {
     private let core:LDCore
-    private let detector:MLModel
-    private let road:MLModel
-    private let input:MLMultiArray
     init(core:LDCore) throws {
         self.core=core
-        let config=MLModelConfiguration();config.computeUnits = .all
-        guard let d=Bundle.main.url(forResource:"detector",withExtension:"mlmodelc"),let r=Bundle.main.url(forResource:"road",withExtension:"mlmodelc") else{throw AppError.message("Add detector.mlmodelc and road.mlmodelc to the app bundle")}
-        detector=try MLModel(contentsOf:d,configuration:config);road=try MLModel(contentsOf:r,configuration:config)
-        input=try MLMultiArray(shape:[1,3,320,320],dataType:.float32)
-        for model in [detector,road] {
-            guard let c=model.modelDescription.inputDescriptionsByName["images"]?.multiArrayConstraint,c.shape.map(\.intValue)==[1,3,320,320],c.dataType == .float32 else{throw AppError.message("Core ML images input must be float32 [1,3,320,320]")}
-        }
+        guard let spatial=Bundle.main.path(forResource:"supercombo",ofType:"onnx") else{throw AppError.message("Bundled Supercombo model missing")}
+        guard core.startSpatial(spatial) else{throw AppError.message(core.error())}
     }
     private func compact(_ a:MLMultiArray)->[Float] {
         // Core ML may return padded/strided arrays. Respect logical strides.
@@ -28,25 +21,12 @@ final class Vision {
             return pointer[offset]
         }
     }
-    func process(_ frame:CVPixelBuffer,time:Double)throws->VisionResult {
+    func process(_ frame:CVPixelBuffer,time:Double,intrinsics:[NSNumber])throws->VisionResult {
         let start=clockNow()
-        guard core.prepare(frame,tensor:input.dataPointer,bytes:input.count*4,gray:true) else{throw AppError.message(core.error())}
-        let features=try MLDictionaryFeatureProvider(dictionary:["images":MLFeatureValue(multiArray:input)])
-        let detection=try detector.prediction(from:features)
-        let segmentation=try road.prediction(from:features)
-        guard let d=detection.featureValue(for:"detections")?.multiArrayValue,
-              let r=segmentation.featureValue(for:"drivable")?.multiArrayValue,
-              let l=segmentation.featureValue(for:"lanes")?.multiArrayValue,
-              [d,r,l].allSatisfy({$0.dataType == .float32}) else{throw AppError.message("Expected float32 detections/drivable/lanes outputs")}
-        let ds=d.shape.map(\.intValue),rs=r.shape.map(\.intValue)
-        guard ds.count==3,ds[0]==1,(ds[1]==84 || ds[2]==84),rs.count==4,rs[0]==1,rs[1]==2,rs==l.shape.map(\.intValue) else{throw AppError.message("Unsupported YOLOv8 / road output shape")}
-        let cf=ds[1]==84,n=cf ? ds[2]:ds[1]
-        let dv=compact(d),rv=compact(r),lv=compact(l)
-        let h=dv.withUnsafeBufferPointer {dp in rv.withUnsafeBufferPointer {rp in lv.withUnsafeBufferPointer {lp in
-            core.vision(time,detections:dp.baseAddress!,count:dv.count,candidates:Int32(n),channelFirst:cf,road:rp.baseAddress!,lane:lp.baseAddress!,width:Int32(rs[3]),height:Int32(rs[2]))
-        }}}
-        guard let h=h else{throw AppError.message(core.error())}
-        return VisionResult(time:time,tti:h[0].doubleValue,confidence:h[1].doubleValue,processingMs:(clockNow()-start)*1000,inPath:h[2].boolValue)
+        guard let lead=core.spatialFrame(frame,time:time,intrinsics:intrinsics) else{throw AppError.message(core.error())}
+        let measured=core.snapshot(time),closing=measured[1].doubleValue/3.6-lead[2].doubleValue
+        let tti=measured[6].boolValue && closing>0.1 ? lead[0].doubleValue/closing:Double.infinity
+        return VisionResult(time:time,tti:tti,confidence:lead[1].doubleValue,processingMs:(clockNow()-start)*1000,inPath:lead[1].doubleValue>=0.65)
     }
 }
 final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -54,7 +34,8 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
     private let capture=DispatchQueue(label:"camera-capture")
     private let inference=DispatchQueue(label:"vision")
     private let lock=NSLock()
-    private var pending:(CVPixelBuffer,Double)?
+    private var pending:(CVPixelBuffer,Double,[NSNumber])?
+    private var fallbackFov=0.0
     private var running=false
     private var generation=0
     private var workerRunning=false
@@ -66,8 +47,8 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
     var onError:((String)->Void)?
     init(core:LDCore){self.core=core;super.init()}
     // One retained pending CVPixelBuffer, replaced and released under the lock.
-    private func offer(_ frame:CVPixelBuffer,time:Double) {
-        lock.lock();guard running else{lock.unlock();return};pending=(frame,time)
+    private func offer(_ frame:CVPixelBuffer,time:Double,intrinsics:[NSNumber]=[]) {
+        lock.lock();guard running else{lock.unlock();return};pending=(frame,time,intrinsics)
         let start = !workerRunning;workerRunning=true;lock.unlock()
         if start {inference.async {[weak self] in self?.drain()}}
     }
@@ -79,7 +60,7 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
             autoreleasepool {
                 do {
                     if vision==nil {vision=try Vision(core:core)}
-                    let result=try vision!.process(item.0,time:item.1)
+                    let result=try vision!.process(item.0,time:item.1,intrinsics:item.2)
                     lock.lock();let valid=running&&token==generation;lock.unlock()
                     if valid {onResult?(result)}
                 }catch{onError?(error.localizedDescription)}
@@ -98,6 +79,7 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
                     self.session.inputs.forEach {self.session.removeInput($0)};self.session.outputs.forEach {self.session.removeOutput($0)}
                     self.session.sessionPreset = .hd1280x720
                     guard let device=AVCaptureDevice.default(.builtInWideAngleCamera,for:.video,position:.back) else{throw AppError.message("Rear camera unavailable")}
+                    self.fallbackFov=Double(device.activeFormat.videoFieldOfView)
                     let input=try AVCaptureDeviceInput(device:device)
                     guard self.session.canAddInput(input) else{throw AppError.message("Cannot attach camera")};self.session.addInput(input)
                     let output=AVCaptureVideoDataOutput();output.alwaysDiscardsLateVideoFrames=true
@@ -105,6 +87,9 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
                     output.setSampleBufferDelegate(self,queue:self.capture)
                     guard self.session.canAddOutput(output) else{throw AppError.message("Cannot attach analyzer")};self.session.addOutput(output)
                     output.connection(with:.video)?.videoOrientation = .landscapeRight
+                    if let connection=output.connection(with:.video),connection.isCameraIntrinsicMatrixDeliverySupported {
+                        connection.isCameraIntrinsicMatrixDeliveryEnabled=true
+                    }
                     self.capture.async {self.lock.lock();let active=self.running&&self.generation==token;self.lock.unlock();if active{self.session.startRunning()}}
                 }catch{self.onError?(error.localizedDescription)}
             }
@@ -117,7 +102,17 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
         guard t-lastFrame>=interval,let f=CMSampleBufferGetImageBuffer(sampleBuffer) else{return}
         let captured=CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
         guard abs(t-captured)<5 else{onError?("Camera timestamp is not on the uptime clock");return}
-        lastFrame=t;offer(f,time:captured)
+        let width=Double(CVPixelBufferGetWidth(f)),height=Double(CVPixelBufferGetHeight(f))
+        var intrinsics:[NSNumber]=[]
+        if let data=CMGetAttachment(sampleBuffer,key:kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix,attachmentModeOut:nil) as? Data,
+           data.count>=MemoryLayout<simd_float3x3>.size {
+            let k=data.withUnsafeBytes{$0.loadUnaligned(as:simd_float3x3.self)}
+            intrinsics=[NSNumber(value:k.columns.0.x),NSNumber(value:k.columns.1.y),NSNumber(value:k.columns.2.x),NSNumber(value:k.columns.2.y),NSNumber(value:width),NSNumber(value:height)]
+        } else if fallbackFov>0 {
+            let focal=width/(2*tan(fallbackFov * .pi/360))
+            intrinsics=[focal,focal,width/2,height/2,width,height].map{NSNumber(value:$0)}
+        }
+        lastFrame=t;offer(f,time:captured,intrinsics:intrinsics)
     }
     func video(_ url:URL) {
         stop();lock.lock();running=true;let token=generation;lock.unlock()
@@ -140,7 +135,12 @@ final class FrameSource:NSObject,AVCaptureVideoDataOutputSampleBufferDelegate {
                     let pts=CMSampleBufferGetPresentationTimeStamp(sample).seconds;if first==nil{first=pts}
                     let due=start+pts-first!
                     while clockNow()<due {self.lock.lock();let cancelled = !self.running || self.generation != token;self.lock.unlock();if cancelled{reader.cancelReading();return};Thread.sleep(forTimeInterval:0.002)}
-                    if clockNow()-due<0.1,let f=CMSampleBufferGetImageBuffer(sample){self.offer(f,time:clockNow())}
+                    if clockNow()-due<0.1,let f=CMSampleBufferGetImageBuffer(sample) {
+                        let w=Double(CVPixelBufferGetWidth(f)),h=Double(CVPixelBufferGetHeight(f))
+                        let fov=self.fallbackFov>0 ? self.fallbackFov:Double(AVCaptureDevice.default(.builtInWideAngleCamera,for:.video,position:.back)?.activeFormat.videoFieldOfView ?? 60)
+                        let focal=w/(2*tan(fov * .pi/360))
+                        self.offer(f,time:clockNow(),intrinsics:[focal,focal,w/2,h/2,w,h].map{NSNumber(value:$0)})
+                    }
                 }
                 if reader.status == .failed {throw reader.error ?? AppError.message("MP4 decode failed")}
             }catch{self.onError?(error.localizedDescription)}

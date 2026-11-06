@@ -19,5 +19,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)prepare:(CVPixelBufferRef)frame tensor:(void*)tensor bytes:(NSUInteger)bytes gray:(BOOL)gray;
 - (nullable NSArray<NSNumber*>*)vision:(double)time detections:(const float*)detections count:(NSUInteger)count candidates:(int)candidates channelFirst:(BOOL)channelFirst road:(const float*)road lane:(const float*)lane width:(int)width height:(int)height;
 - (NSString*)error;
+- (BOOL)startSpatial:(NSString*)modelPath;
+- (nullable NSArray<NSNumber*>*)spatialFrame:(CVPixelBufferRef)frame time:(double)time intrinsics:(NSArray<NSNumber*>*)intrinsics;
+- (NSArray<NSNumber*>*)dualAdvice:(NSArray<NSNumber*>*)telemetry time:(double)time;
+- (void)dualAccepted:(int)prompt time:(double)time;
+- (BOOL)audioAllowed:(int)prompt time:(double)time;
+- (void)audioAccepted:(int)prompt time:(double)time;
 @end
 NS_ASSUME_NONNULL_END

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LearnDrive event-level instructor annotation (pending template is not ground truth)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "annotation_id", "source_sha256", "split", "reviewer", "status", "reviewed_interval", "encounter_id", "actor_id", "useful_window", "decision", "allowed_prompt_ids", "rationale", "uncertainty", "adjudication"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "annotation_id": {"type": ["string", "null"]},
+    "source_sha256": {"anyOf": [{"type": "string", "pattern": "^[a-f0-9]{64}$"}, {"type": "null"}]},
+    "split": {"enum": [null, "development", "validation", "held_out"]},
+    "reviewer": {
+      "type": "object", "additionalProperties": false, "required": ["role", "id"],
+      "properties": {"role": {"enum": [null, "qualified_instructor", "adjudicator", "engineer"]}, "id": {"type": ["string", "null"]}}
+    },
+    "status": {"enum": ["pending", "reviewed", "uncertain", "adjudicated"]},
+    "reviewed_interval": {"$ref": "#/$defs/window"},
+    "encounter_id": {"type": ["string", "null"]},
+    "actor_id": {"type": ["string", "null"]},
+    "useful_window": {"$ref": "#/$defs/window"},
+    "decision": {"enum": [null, "SILENCE", "COACH", "WARN", "DEFER"]},
+    "allowed_prompt_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 55}},
+    "rationale": {"type": ["string", "null"]},
+    "uncertainty": {"type": ["string", "null"], "description": "Record explicit none if no uncertainty; do not erase disagreements."},
+    "adjudication": {"type": ["object", "null"], "description": "Local reviewer IDs, decisions and disagreements; no automatic model-created label."}
+  },
+  "$defs": {
+    "window": {"anyOf": [{"type": "null"}, {"type": "array", "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}], "items": false, "minItems": 2, "maxItems": 2}]}
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"enum": ["reviewed", "uncertain", "adjudicated"]}}},
+    "then": {"properties": {
+      "annotation_id": {"type": "string", "minLength": 1},
+      "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+      "split": {"enum": ["development", "validation", "held_out"]},
+      "reviewer": {"properties": {"role": {"enum": ["qualified_instructor", "adjudicator"]}, "id": {"type": "string", "minLength": 1}}},
+      "reviewed_interval": {"type": "array"},
+      "decision": {"enum": ["SILENCE", "COACH", "WARN", "DEFER"]},
+      "rationale": {"type": "string", "minLength": 1},
+      "uncertainty": {"type": "string", "minLength": 1}
+    }}
+  }]
+}

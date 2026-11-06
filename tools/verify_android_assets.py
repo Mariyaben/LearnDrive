@@ -6,8 +6,27 @@ from pathlib import Path
 import wave
 import zipfile
 import re
+import struct
 import numpy as np
 import onnxruntime as ort
+
+def elf_runtime_sections(binary):
+    """Compare loaded ELF contents while allowing Gradle to strip debug symbols."""
+    assert binary[:6] == b"\x7fELF\x02\x01", "Expected little-endian ELF64"
+    section_offset = struct.unpack_from("<Q", binary, 40)[0]
+    entry_size, count, names_index = struct.unpack_from("<HHH", binary, 58)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", binary, section_offset + i * entry_size)
+                for i in range(count)]
+    names_section = sections[names_index]
+    names = binary[names_section[4]:names_section[4] + names_section[5]]
+    loaded = {}
+    for name, kind, flags, address, offset, size, *_ in sections:
+        if flags & 2:  # SHF_ALLOC; debug and ordinary symbol tables are excluded.
+            label = names[name:names.index(b"\0", name)].decode("ascii")
+            content = b"" if kind == 8 else binary[offset:offset + size]  # SHT_NOBITS
+            loaded[label] = (address, size, hashlib.sha256(content).hexdigest())
+    assert loaded, "ELF has no loadable sections"
+    return loaded
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--apk", type=Path)
@@ -19,11 +38,15 @@ native_text = (project / "core/include/learndrive/types.hpp").read_text(encoding
 prompt_count = int(re.search(r"promptCount=(\d+)", native_text).group(1))
 enum_text = re.search(r"enum class Prompt.*?\{(.*?)\};", native_text, re.S).group(1)
 ids = {name: int(value) for name, value in re.findall(r"(\w+)=(\d+)", enum_text)}
-native_phrases = {ids[name]: phrase for name, phrase in re.findall(r'case Prompt::(\w+): return "([^"]*)";', native_text)}
+native_phrases = {ids[name]: phrase for name, phrase in re.findall(r'case Prompt::(\w+):\s*return "([^"]*)";', native_text)}
 render_script = (project / "tools/render_android_prompts.ps1").read_text(encoding="utf-8")
 render_phrases = re.findall(r"'([^']*)'", re.search(r"\$phrases = @\((.*?)\)\s*for", render_script, re.S).group(1))
 assert render_phrases == [native_phrases[i] for i in range(1, prompt_count + 1)], "Recorded text differs from native prompt IDs"
 manifest = json.loads((assets / "model-manifest.json").read_text(encoding="utf-8"))
+spatial_manifest=json.loads((assets/"supercombo-manifest.json").read_text(encoding="utf-8"))
+assert hashlib.sha256((assets/"supercombo.onnx").read_bytes()).hexdigest()==spatial_manifest["sha256"]
+assert (assets/"COMMA-LICENSE.txt").is_file()
+print("Verified pinned Comma.ai Supercombo asset and license")
 options = ort.SessionOptions()
 options.intra_op_num_threads = 2
 options.inter_op_num_threads = 1
@@ -49,6 +72,24 @@ for path in sorted((assets / "audio").glob("prompt-*.wav")):
         print("Verified voice", path.name, "%.2f seconds" % (clip.getnframes() / clip.getframerate()))
 assert formats == {(1, 22050, 2)}
 assert {path.name for path in (assets / "audio").glob("prompt-*.wav")} == {f"prompt-{i}.wav" for i in range(1, prompt_count + 1)}
+# Composed-utterance fragments: ids/text match the native catalogue, all recorded.
+fragment_count = int(re.search(r"fragmentCount=(\d+)", native_text).group(1))
+fragment_enum = re.sub(r"//[^\n]*", "", re.search(r"enum class Fragment : int \{(.*?)\};", native_text, re.S).group(1))
+fragment_ids, current = {}, -1
+for part in [p.strip() for p in " ".join(fragment_enum.splitlines()).split(",") if p.strip()]:
+    if "=" in part:
+        name, value = part.split("="); current = int(value); fragment_ids[name.strip()] = current
+    else:
+        current += 1; fragment_ids[part] = current
+native_fragments = {fragment_ids[n]: t for n, t in re.findall(r'case Fragment::(\w+):return "([^"]*)";', native_text)}
+recorded_fragments = re.findall(r"'([^']*)'", re.search(r"\$fragmentTexts = @\((.*?)\)\s*if", render_script, re.S).group(1))
+assert recorded_fragments == [native_fragments[i] for i in range(1, fragment_count + 1)], "Recorded fragment text differs from native fragment IDs"
+for i in range(1, fragment_count + 1):
+    with wave.open(str(assets / "audio" / f"fragment-{i}.wav"), "rb") as clip:
+        assert (clip.getnchannels(), clip.getframerate(), clip.getsampwidth()) == (1, 22050, 2), f"fragment-{i} format"
+        values = np.frombuffer(clip.readframes(clip.getnframes()), dtype="<i2")
+        assert clip.getnframes() > clip.getframerate() // 5 and np.max(np.abs(values.astype(np.int32))) > 1000, f"fragment-{i} silent/short"
+print(f"Verified {fragment_count} instructor fragments")
 if args.image:
     import cv2
     image = cv2.cvtColor(cv2.imread(str(args.image)), cv2.COLOR_BGR2RGB)
@@ -75,4 +116,7 @@ if args.apk:
         for abi in ("arm64-v8a", "x86_64"):
             assert f"lib/{abi}/liblearndrive.so" in archive.namelist()
             assert f"lib/{abi}/libonnxruntime.so" in archive.namelist()
+            assert archive.namelist().count(f"lib/{abi}/libonnxruntime.so")==1,"Duplicate ORT runtime"
+            with zipfile.ZipFile(project/".tools/maven-repo/com/microsoft/onnxruntime/onnxruntime-android/1.22.0/onnxruntime-android-1.22.0.aar") as runtime:
+                assert elf_runtime_sections(archive.read(f"lib/{abi}/libonnxruntime.so")) == elf_runtime_sections(runtime.read(f"jni/{abi}/libonnxruntime.so")), "Native/Java ORT loadable contents mismatch"
         print("APK contains matching models, voices, notices and both native runtimes")

@@ -2,13 +2,420 @@
 #include "learndrive/fusion.hpp"
 #include "learndrive/decision.hpp"
 #include "learndrive/vision.hpp"
+#include "learndrive/navigation.hpp"
+#include "learndrive/ContextualPolicyEngine.hpp"
+#include "learndrive/perception/metric_estimator.hpp"
+#include "learndrive/perception/supercombo.hpp"
+#include "learndrive/coaching/CoachingEngine.hpp"
+#include "learndrive/navigation/JunctionScout.hpp"
+#include "learndrive/navigation/RoadKnowledge.hpp"
+#include "learndrive/BumpDetector.hpp"
 #include <exception>
-struct ld_engine { ld::SensorFusion fusion;ld::DecisionEngine decisions;ld::CameraCoach coach;ld::DrivingCoach driving;ld::ApproachTracker tracker;ld::Transform transform;ld::Gray gray;std::vector<ld::Box> boxes;double visionTime=-1;std::string reason="waiting for telemetry",cameraReason="camera not running",drivingReason="watching for road conditions",error; };
+#include <mutex>
+#include <sstream>
+#include <iomanip>
+#include "learndrive/dual_brain_c_api.h"
+// Composed utterances are produced by an engine but spoken/captioned through
+// static prompt functions (JNI, audio worker); a small registry bridges them.
+static std::mutex utteranceMutex;
+static std::array<ld::coaching::Utterance,100> utteranceRegistry{};
+static std::array<std::string,100> utteranceText{};
+static void registerUtterance(const ld::coaching::Utterance& u) {
+    std::string text;for(size_t i=0;i<u.count;++i){if(i)text+=' ';text+=ld::fragmentText(static_cast<ld::Fragment>(u.fragments[i]));}
+    std::lock_guard<std::mutex> lock(utteranceMutex);const size_t slot=size_t(u.id)%utteranceRegistry.size();
+    utteranceRegistry[slot]=u;utteranceText[slot]=std::move(text);
+}
+struct ld_engine {
+    ld::SensorFusion fusion;ld::DecisionEngine decisions;ld::CameraCoach coach;ld::DrivingCoach driving;
+    ld::ApproachTracker tracker;ld::perception::MetricEstimator metric;ld::cognition::EmbeddedDualBrain dualPolicy;
+    ld::Transform transform;ld::Gray gray;
+    // Zoomed detector pass of the current frame.
+    ld::Transform zoomTransform;ld::Crop zoomCrop;bool zoomReady{};std::vector<ld::Box> boxes;ld_dual_scene scene{},semanticScene{};
+    ld::perception::SpatialOutput spatial{};double spatialTime=-ld::infinity;
+    ld::perception::CameraIntrinsics spatialCamera{};
+    ld::perception::Matrix3 spatialWarp{1,0,0,0,1,0,0,0,1};
+    double visionTime=-1,focalY=ld::infinity,lastAudio=-ld::infinity;
+    std::array<double,ld::promptCount+1> promptTimes{};
+    std::array<uint64_t,ld::promptCount+1> attentionActors{},attentionSources{};
+    ld_reflex_preempt preempt=nullptr;void* audioContext=nullptr;
+    const char* dualReason="waiting for a fresh scene";
+    std::string reason="waiting for telemetry",cameraReason="camera not running",drivingReason="watching for road conditions",error;
+    uint64_t sourceId{},guidanceSequence{};int sourceKind=LD_SOURCE_CAMERA;
+    ld::Hazard semanticHazard{};
+    ld::Decision cameraDecision{};
+    ld::navigation::RouteCoach navigation;
+    ld::navigation::ProviderTurnCoach providerNavigation;
+    ld_guidance_result guidance{};
+    double guidanceTime=-ld::infinity;
+    double sourceStartedAt=0;
+    double spatialUnavailableAt=-ld::infinity;
+    ld::coaching::CoachingEngine coaching;
+    ld::coaching::WorldState coachingWorld{};
+    double coachingRouteReceipt=-ld::infinity;
+    ld::navigation::JunctionScout scout; // Junction ahead without a destination (road geometry + GPS).
+    // Provider route line (in memory only), speed bumps (mapped and learned) and the bump detector.
+    ld::navigation::RouteLine routeLine;
+    ld::navigation::BumpMap bumps;
+    ld::BumpDetector bumpDetector;
+    struct FixSample {double time=-ld::infinity,lat{},lon{},bearing{},speedMps{},accuracy=ld::infinity;bool bearingValid{};};
+    std::array<FixSample,8> fixes{};size_t fixCursor{},fixCount{};
+    struct BumpLog {ld::BumpEvent event;uint64_t id{};bool located{};};
+    std::array<BumpLog,32> bumpLog{};size_t bumpLogHead{},bumpLogCount{};
+    double lastMotion=-ld::infinity;
+    double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
+    bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
+    double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
+    uint64_t coachingRouteEpoch{};
+    double coachingRouteEta=ld::infinity;
+    std::string coachingDiagnostics;
+    std::string intelligenceContext;
+    std::string replayWorld;
+    ld::EngineSample coachingEngineSample{};
+    ld_engine(){promptTimes.fill(-ld::infinity);}
+};
+// Where the car was at `time` (between GPS fixes, or just after the last one), and its heading.
+static bool positionAt(const ld_engine& e,double time,double& lat,double& lon,double& heading) {
+    if(!e.fixCount||!std::isfinite(time))return false;
+    const ld_engine::FixSample* before=nullptr;const ld_engine::FixSample* after=nullptr;
+    for(size_t i=0;i<e.fixCount;++i) {
+        const auto& f=e.fixes[i];
+        if(f.time<=time&&(!before||f.time>before->time))before=&f;
+        if(f.time>=time&&(!after||f.time<after->time))after=&f;
+    }
+    if(!before||before->accuracy>15)return false;
+    const double kx=111320*std::cos(before->lat*ld::pi/180),ky=110540;
+    if(after&&after!=before&&after->time-before->time<=3&&after->accuracy<=15) {
+        const double f=(time-before->time)/(after->time-before->time);
+        lat=before->lat+(after->lat-before->lat)*f;lon=before->lon+(after->lon-before->lon)*f;
+        const double dx=(after->lon-before->lon)*kx,dy=(after->lat-before->lat)*ky;
+        if(after->bearingValid)heading=after->bearing;
+        else if(std::hypot(dx,dy)>=3)heading=std::fmod(std::atan2(dx,dy)*180/ld::pi+360.,360.);
+        else return false;
+        return true;
+    }
+    if(after==before&&time==before->time){lat=before->lat;lon=before->lon;}
+    else {
+        // Just after the last fix: dead-reckon along its bearing (GPS arrives once a second).
+        if(time-before->time>2||!before->bearingValid)return false;
+        const double d=before->speedMps*(time-before->time),b=before->bearing*ld::pi/180;
+        lat=before->lat+d*std::cos(b)/ky;lon=before->lon+d*std::sin(b)/kx;
+    }
+    if(!before->bearingValid)return false;
+    heading=before->bearing;return true;
+}
+// A finished jolt from the motion sensor: learn the bump where the car was, keep it for diagnostics.
+static void handleBump(ld_engine& e,const ld::BumpEvent& event) {
+    ld_engine::BumpLog log{event,0,false};
+    double lat{},lon{},heading{};
+    if(event.accepted()&&e.sourceKind==LD_SOURCE_CAMERA&&positionAt(e,event.time,lat,lon,heading)) {
+        log.located=true;log.id=e.bumps.felt(event.time,lat,lon,heading);
+    }
+    const size_t slot=(e.bumpLogHead+e.bumpLogCount)%e.bumpLog.size();
+    e.bumpLog[slot]=log;
+    if(e.bumpLogCount<e.bumpLog.size())++e.bumpLogCount; else e.bumpLogHead=(e.bumpLogHead+1)%e.bumpLog.size();
+}
+static uint64_t confirmedSpatialLead(const ld_engine& e,double time) noexcept {
+    // A model probability is not an independently verified object. In replay,
+    // unfamiliar optics/low-resolution imagery produced confident ghost leads.
+    // Require a fresh road-user box with independent optical closing evidence
+    // at the model's projected lead foot. Detection alone cannot validate TTI.
+    constexpr uint64_t missing=std::numeric_limits<uint64_t>::max();
+    if(!e.spatialCamera.valid()||!ld::cognition::fresh(time,e.visionTime))return missing;
+    const auto& lead=e.spatial.leads[0];
+    if(!std::isfinite(lead.distanceM)||lead.distanceM<=0)return missing;
+    const double x=256+910*lead.lateralM/lead.distanceM;
+    const double y=47.6+910*1.22/lead.distanceM; // pinned model's canonical camera height
+    const auto& m=e.spatialWarp;const double w=m[6]*x+m[7]*y+m[8];
+    if(!std::isfinite(w)||std::abs(w)<1e-9)return missing;
+    const double px=(m[0]*x+m[1]*y+m[2])/w/e.spatialCamera.width;
+    const double py=(m[3]*x+m[4]*y+m[5])/w/e.spatialCamera.height;
+    for(size_t i=0;i<std::min(e.boxes.size(),size_t(64));++i) {
+        const auto& b=e.boxes[i];
+        const bool vehicle=b.category==1||b.category==2||b.category==3||b.category==5||b.category==7;
+        const bool closing=std::isfinite(b.tti)&&b.tti>0&&std::isfinite(b.confidence)&&b.confidence>=.65;
+        if(vehicle&&closing&&b.score>=.4&&b.score<=1&&px>=b.x-.02&&px<=b.x+b.w+.02&&py>=b.y-.03&&py<=b.y+b.h+.03)
+            return uint64_t(b.id);
+    }
+    return missing;
+}
+static void updateLeadSupport(ld_engine& e,double time) {
+    for(auto& b:e.boxes)b.leadTime=-ld::infinity;
+    if(!ld::cognition::fresh(time,e.spatialTime)||!ld::cognition::fresh(time,e.visionTime))return;
+    const auto measured=e.sourceKind==LD_SOURCE_RECORDING?ld::Telemetry{}:e.fusion.snapshot(time);
+    const auto scene=ld::perception::spatialScene(e.spatial,measured,e.spatialTime,0);
+    const auto& lead=e.spatial.leads[0];
+    if(!scene.count||!scene.hazards[0].inTrajectory||scene.hazards[0].lateralDistanceM>=1.8||
+       !std::isfinite(lead.absoluteSpeedMps)||lead.absoluteSpeedMps<0||
+       !std::isfinite(lead.lateralVelocityMps)||std::abs(lead.lateralVelocityMps)>.8)return;
+    const auto matched=confirmedSpatialLead(e,time);
+    for(auto& b:e.boxes)if(uint64_t(b.id)==matched)b.leadTime=e.spatialTime;
+}
+static bool attentionPrompt(int id) {
+    return id==int(ld::Prompt::pedestrianSpace)||id==int(ld::Prompt::riderSpace)||
+        id==int(ld::Prompt::vehicleSpace)||id==int(ld::Prompt::roadUserQuiet);
+}
+static bool audioAllowedFor(const ld_engine* e,int id,double now,const ld::Decision* candidate=nullptr) {
+    if(!e||id<=0||id>ld::promptCount||!std::isfinite(now)||now<0||now<e->lastAudio)return false;
+    const bool emergency=id==int(ld::Prompt::emergency)||id==int(ld::Prompt::brakeHarder)||id==int(ld::Prompt::emergencyStop);
+    if(emergency)return true;
+    if(now-e->lastAudio<3.5)return false;
+    if(now-e->promptTimes[id]>=10)return true;
+    // Phrase dedup normally spans the source. Only an independently verified
+    // distinct entry may supersede the same-class attention already spoken.
+    return candidate&&attentionPrompt(id)&&candidate->newEncounter&&candidate->actorId>0&&
+        e->attentionSources[id]==e->sourceId&&e->attentionActors[id]==uint64_t(candidate->entryReferenceId)&&
+        e->coach.newEncounterEligible(candidate->actorId,candidate->entryReferenceId,now);
+}
+static std::string cameraReason(const ld_engine& e,const ld::Decision& d) {
+    if(!d.actorId)return d.reason;
+    return d.reason+"; encounter="+std::to_string(d.actorId)+"; reference="+std::to_string(d.entryReferenceId)+
+        "; source="+std::to_string(e.sourceId)+"; new_entry="+(d.newEncounter?"1":"0");
+}
+static ld::Telemetry coachingTelemetry(ld_telemetry a) {
+    return {a.time,a.speed,a.pitch,a.acceleration,a.progress,bool(a.calibrated),bool(a.speed_valid),bool(a.pitch_valid),bool(a.braking),bool(a.hard_braking),bool(a.shock)};
+}
+static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
+    using namespace ld::coaching;
+    auto w=e.coachingWorld;w.now=now;w.sourceId=e.sourceId;w.actorCount=0;
+    w.captureTime=e.visionTime;
+    w.frameSequence=e.visionTime>=0?uint64_t(e.visionTime*1000000)+1:0;
+    // Original recording motion never comes from the phone. In live operation
+    // fresh fusion may add current braking/shock evidence between rule ticks.
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto measured=e.fusion.snapshot(now);
+        if(measured.calibrated&&ld::cognition::fresh(now,measured.time,.15))w.telemetry=measured;
+    }
+    w.gradeBand=w.telemetry.calibrated&&w.telemetry.pitchValid?ld::slopeBand(w.telemetry.pitchDegrees):0;
+    w.roadCaptureTime=e.driving.roadTime();w.roadValid=e.driving.shape().valid;w.roadBend=e.driving.shape().bend;
+    w.engineCaptureTime=e.coachingEngineSample.time;
+    w.engineValid=ld::cognition::fresh(now,w.engineCaptureTime,1)&&e.coachingEngineSample.gear>=1&&e.coachingEngineSample.gear<=e.coachingEngineSample.maxGear&&
+        e.coachingEngineSample.rpm>=500&&e.coachingEngineSample.rpm<=12000&&e.coachingEngineSample.underLoad;
+    w.engineRpm=e.coachingEngineSample.rpm;w.engineLowerRpm=e.coachingEngineSample.lowerRpm;w.engineUpperRpm=e.coachingEngineSample.upperRpm;
+    w.engineGear=e.coachingEngineSample.gear;w.engineMaxGear=e.coachingEngineSample.maxGear;w.engineUnderLoad=e.coachingEngineSample.underLoad;
+    if(e.sourceKind==LD_SOURCE_RECORDING||e.sourceKind==LD_SOURCE_SCREEN) {
+        // MP4/screen test speed settings and the phone holding the playback
+        // are not measurements of the recorded vehicle's response.
+        w.telemetry.speedValid=false;w.telemetry.pitchValid=false;w.telemetry.calibrated=false;
+        w.telemetry.braking=w.telemetry.hardBraking=w.telemetry.shock=false;
+        w.telemetry.longitudinalAcceleration=std::numeric_limits<double>::quiet_NaN();
+    }
+    for(const auto& b:e.boxes) {
+        if(w.actorCount==w.actors.size())break;
+        // The learner's own bonnet/dashboard, detected as a vehicle, is not a road user.
+        if(RiskCoach::egoVehicle(b.x,b.y,b.w,b.h))continue;
+        const double center=b.x+b.w*.5,foot=b.y+b.h;
+        const bool relevant=foot>.5&&center>.18&&center<.82;
+        auto& a=w.actors[w.actorCount++];a={};a.identity={IdentitySpace::Optical,uint64_t(b.id),0};a.captureTime=e.visionTime;
+        // Presence confidence is the detector score. The optical-TTI estimate's
+        // own confidence only qualifies a closing claim; a weak TTI estimate
+        // must not erase a confidently detected road user.
+        a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;
+        a.confidence=a.opticalClosing?std::min(b.confidence,double(b.score)):b.score;a.tti=b.tti;a.category=b.category;
+        a.relevant=relevant;a.inPath=false;
+        if(ld::cognition::fresh(now,e.semanticScene.capture_time))for(size_t i=0;i<std::min(e.semanticScene.count,size_t(64));++i)
+            if(e.semanticScene.hazards[i].id==uint64_t(b.id)){a.inPath=e.semanticScene.hazards[i].in_trajectory!=0;break;}
+        a.leadSupported=ld::cognition::fresh(now,b.leadTime);
+        a.x=b.x;a.y=b.y;a.w=b.w;a.h=b.h;
+    }
+    auto attention=[&](uint64_t id) {
+        if(!id||w.actorCount>=w.actors.size()||!e.coach.actorRelevant(int(id),now))return;
+        for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==Identity{IdentitySpace::Attention,id,0})return;
+        ld::Box match;if(!e.coach.actorBox(int(id),now,match)||RiskCoach::egoVehicle(match.x,match.y,match.w,match.h))return;
+        // The attention track describes the coach's last processed capture, which
+        // can precede a newer published frame until the next rule tick. Stamp it
+        // with its own capture and detector score; never pair an old box with
+        // the newer frame's clock or boxes.
+        const double observed=e.coach.lastCapture();
+        ActorObservation a;a.identity={IdentitySpace::Attention,id,0};a.captureTime=observed;a.relevant=true;a.category=match.category;
+        a.x=match.x;a.y=match.y;a.w=match.w;a.h=match.h;a.confidence=match.score;
+        if(observed==e.visionTime)for(const auto& b:e.boxes)if(b.category==match.category&&ld::iou(match,b)>.5f) {
+            a.opticalClosing=std::isfinite(b.tti)&&b.tti>0&&b.confidence>=.65;
+            a.confidence=a.opticalClosing?std::min(double(b.score),b.confidence):b.score;a.tti=b.tti;a.leadSupported=ld::cognition::fresh(now,b.leadTime);break;
+        }
+        w.actors[w.actorCount++]=a;
+    };
+    attention(uint64_t(e.cameraDecision.actorId));
+    const auto& accepted=e.coaching.acceptedTicket();
+    if(accepted.valid&&accepted.candidate.identity.space==IdentitySpace::Attention)attention(accepted.candidate.identity.id);
+    if(e.scene.count&&e.scene.hazards[0].id==0x100000001ULL&&w.actorCount<w.actors.size()) {
+        const auto id=confirmedSpatialLead(e,now);
+        for(const auto& a:w.actors)if(a.identity.space==IdentitySpace::Optical&&a.identity.id==id&&a.opticalClosing) {
+            auto spatial=a;spatial.identity={IdentitySpace::Spatial,0x100000001ULL,0};spatial.captureTime=e.scene.capture_time;
+            spatial.inPath=bool(e.scene.hazards[0].in_trajectory);w.actors[w.actorCount++]=spatial;break;
+        }
+    }
+    const bool provider=e.providerNavigation.active();const auto route=provider?e.providerNavigation.context(now):e.navigation.context(now);
+    w.route={};w.route.routeId=route.routeId;w.route.eventId=route.featureId;w.route.epoch=e.coachingRouteEpoch;
+    w.route.captureTime=provider?e.coachingRouteReceipt:route.fixTime;w.route.gpsTime=route.fixTime;
+    w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
+    w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
+    w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
+    w.hornRules=e.hornRules;
+    w.arriving=provider&&e.providerNavigation.arriving(now);
+    if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
+    else if(e.sourceKind==LD_SOURCE_CAMERA) {
+        // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
+        const auto up=e.fusion.cameraUp(now);
+        if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));
+            w.horizon=std::clamp(.5+.96*std::tan(pitch),.25,.85);w.horizonMeasured=true;}
+    }
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto ahead=e.scout.current(now);
+        const auto line=e.routeLine.ahead(now,e.bumps);
+        if(line.matched) {
+            // Navigating: the route the car will actually take. Its bends need the provider's
+            // maneuver positions (a turn is not a bend); without them the road scout's bend stands.
+            w.mapTime=line.fixTime;w.bumpAheadM=line.bumpDistanceM;w.bumpId=line.bumpId;
+            if(line.bendsKnown){w.bendAheadM=line.bendDistanceM;w.bendId=line.bendId;w.bendRight=line.bendRight;}
+            else if(ahead.matched){w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;}
+        } else if(ahead.matched) {
+            w.mapTime=ahead.fixTime;w.bumpAheadM=ahead.bumpDistanceM;w.bumpId=uint64_t(std::max<int64_t>(0,ahead.bumpNode));
+            w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;
+            // Learned (and mapped) bumps on the road walked ahead.
+            size_t n=0;const auto* path=e.scout.path(n);
+            const auto hit=e.bumps.along(path,n,400);
+            if(hit.distanceM<w.bumpAheadM){w.bumpAheadM=hit.distanceM;w.bumpId=hit.id;}
+        }
+    }
+    // No route: the next junction an instructor would prepare for on the current road.
+    // Direction is unknown, so it is a generic junction (feature 3), never a turn.
+    if(!w.route.valid&&e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto j=e.scout.current(now);
+        if(j.valid&&j.nodeId>0&&j.wayId>0) {
+            w.route={};w.route.routeId=uint64_t(j.wayId);w.route.eventId=uint64_t(j.nodeId);w.route.epoch=1;
+            w.route.captureTime=j.fixTime;w.route.gpsTime=j.fixTime;w.route.distanceM=j.distanceM;w.route.feature=3;
+            w.route.valid=true;w.route.provider=false;w.route.etaSeconds=ld::infinity;
+        }
+    }
+    return w;
+}
 extern "C" {
+void ld_set_reflex_preempt(ld_engine* e,ld_reflex_preempt fn,void* context){if(e){e->preempt=fn;e->audioContext=context;}}
+void* ld_reflex_context(ld_engine* e){return e?e->audioContext:nullptr;}
 ld_engine* ld_create(void) { try {return new ld_engine;} catch(...) {return nullptr;} }
 void ld_destroy(ld_engine* e) {delete e;}
-void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->driving.reset();e->tracker.reset();e->boxes.clear();e->visionTime=-1;e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
-void ld_imu(ld_engine* e,double t,const double a[3],const double g[3],const double l[3],int has) {if(e&&a&&g&&l) e->fusion.imu({t,{a[0],a[1],a[2]},{g[0],g[1],g[2]},{l[0],l[1],l[2]},has!=0});}
+void ld_reset(ld_engine* e) {if(e) {e->fusion.reset();e->bumpDetector.reset();e->driving.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->visionTime=-1;e->coaching.invalidateEvidence();e->error.clear();}} // Recalibration preserves tactical prompt cooldown.
+void ld_camera_intrinsics(ld_engine* e,double fy) {if(e) {e->focalY=std::isfinite(fy)&&fy>0?fy:ld::infinity;e->metric.reset();}}
+int ld_camera_up(ld_engine* e,double t,double out[3]) {
+    if(!e||!out)return 0;const auto up=e->fusion.cameraUp(t);
+    out[0]=up.x;out[1]=up.y;out[2]=up.z;return up.norm()>.9;
+}
+int ld_audio_allowed(ld_engine* e,int id,double now) {
+    const auto* candidate=e&&e->guidance.origin==LD_GUIDANCE_CAMERA&&e->guidance.source_id==e->sourceId&&
+        e->guidance.prompt==id&&e->guidance.actor_id==uint64_t(e->cameraDecision.actorId)?&e->cameraDecision:nullptr;
+    return audioAllowedFor(e,id,now,candidate);
+}
+void ld_audio_accepted(ld_engine* e,int id,double now) {
+    if(!e||id<=0||id>ld::promptCount||!std::isfinite(now)||now<0)return;
+    e->promptTimes[id]=now;e->lastAudio=now;
+    e->attentionActors[id]=e->attentionSources[id]=0;
+}
+int ld_spatial_publish(ld_engine* e,double time,const float* output,size_t count) {
+    if(!e||!std::isfinite(time)||time<0||time<e->spatialTime||time<e->spatialUnavailableAt)return 0;
+    try {
+        e->spatial=ld::perception::decodeSupercombo(output,count);e->spatialTime=time;
+        updateLeadSupport(*e,time);
+        const auto measured=e->sourceKind==LD_SOURCE_RECORDING?ld::Telemetry{}:e->fusion.snapshot(time);
+        const auto s=ld::perception::spatialScene(e->spatial,measured,time,e->scene.sequence+1);
+        const auto matched=confirmedSpatialLead(*e,time);
+        const bool confirmed=matched!=std::numeric_limits<uint64_t>::max()&&s.count>0;
+        e->scene={};e->scene.sequence=s.sequence;e->scene.capture_time=time;e->scene.count=confirmed?s.count:0;
+        for(size_t i=0;i<e->scene.count;++i){const auto& h=s.hazards[i];e->scene.hazards[i]={h.id,int(h.type),int(h.lane),
+            h.distanceM,h.ttiSeconds,h.confidence,int(h.inTrajectory),int(h.decelerating),h.lateralDistanceM,h.opticalRelativeVelocityMps};}
+        if(time>=e->semanticScene.capture_time&&time-e->semanticScene.capture_time<ld::maxVisionAgeSeconds) {
+            for(size_t i=0;i<e->semanticScene.count&&e->scene.count<64;++i) {
+                auto h=e->semanticScene.hazards[i];
+                if((h.type==LD_VEHICLE||h.type==LD_BUS)&&confirmed&&h.id==matched) {
+                    if(h.type==LD_BUS&&h.in_trajectory)e->scene.hazards[0].type=LD_BUS;
+                    continue;
+                }
+                if(std::isfinite(h.tti_s))h.tti_s=std::max(0.,h.tti_s-(time-e->semanticScene.capture_time));
+                e->scene.hazards[e->scene.count++]=h;
+            }
+        }
+        ld::RoadShape shape;
+        const auto& left=e->spatial.lanes[1];const auto& right=e->spatial.lanes[2];
+        if(left.probability>.65&&right.probability>.65&&left.stdM<1&&right.stdM<1) {
+            shape.valid=true;
+            const double change=(left.points[20].y+right.points[20].y-left.points[10].y-right.points[10].y)/2;
+            shape.bend=change>.8?1:change<-.8?-1:0;
+            for(int i=0;i<5;++i) {
+                const auto p=e->spatial.path[8+i*3];double x=0,y=0;
+                if(ld::perception::projectVehicle({910,910,256,47.6,512,256},p,x,y)) {
+                    const auto& m=e->spatialWarp;const double w=m[6]*x+m[7]*y+m[8];
+                    if(std::abs(w)>1e-9&&e->spatialCamera.valid()){
+                        shape.points.push_back(float((m[0]*x+m[1]*y+m[2])/w/e->spatialCamera.width));
+                        shape.points.push_back(float((m[3]*x+m[4]*y+m[5])/w/e->spatialCamera.height));
+                    }
+                }
+            }
+        }
+        e->driving.road(time,shape);return 1;
+    }catch(const std::exception& ex){e->error=ex.what();e->spatial={};e->spatialTime=-ld::infinity;return 0;}
+}
+int ld_spatial_geometry(ld_engine* e,const double g[9]) {
+    if(!e||!g)return 0;
+    try {
+        e->spatialCamera={g[0],g[1],g[2],g[3],int(g[4]),int(g[5])};
+        e->spatialWarp=ld::perception::supercomboWarp(e->spatialCamera,{g[6],g[7],g[8]});return 1;
+    }catch(...){e->spatialCamera={};return 0;}
+}
+int ld_spatial_semantics(ld_engine* e,double time,const float* detections,size_t count,int candidates,int cf,double out[3]) {
+    if(!e||!out)return 0;
+    try {
+        auto boxes=ld::decodeYolo(detections,count,84,candidates,cf!=0,false,e->transform);
+        ld::LaneMap map;map.width=32;map.height=24;map.road.resize(32*24);map.lane.resize(32*24);
+        if(e->spatialCamera.valid()&&time>=e->spatialTime&&time-e->spatialTime<ld::maxVisionAgeSeconds) {
+            std::array<std::array<std::array<double,2>,33>,2> lines{};
+            for(int side=0;side<2;++side)for(int i=0;i<33;++i) {
+                const auto& line=e->spatial.lanes[side+1];double x=0,y=0;
+                lines[side][i]={-1,-1};
+                if(line.probability<.65||line.stdM>1||!ld::perception::projectVehicle({910,910,256,47.6,512,256},line.points[i],x,y))continue;
+                const auto& m=e->spatialWarp;const double w=m[6]*x+m[7]*y+m[8];
+                if(std::abs(w)>1e-9)lines[side][i]={(m[0]*x+m[1]*y+m[2])/w/e->spatialCamera.width,
+                    (m[3]*x+m[4]*y+m[5])/w/e->spatialCamera.height};
+            }
+            for(int row=0;row<map.height;++row) {
+                const double y=(row+.5)/map.height;double edges[2]{-1,-1};
+                for(int side=0;side<2;++side)for(int i=1;i<33;++i) {
+                    const auto a=lines[side][i-1],b=lines[side][i];
+                    if(a[1]<0||b[1]<0||y<std::min(a[1],b[1])||y>std::max(a[1],b[1])||std::abs(a[1]-b[1])<1e-8)continue;
+                    edges[side]=a[0]+(b[0]-a[0])*(y-a[1])/(b[1]-a[1]);break;
+                }
+                if(edges[0]<0||edges[1]<0)continue;
+                for(int col=0;col<map.width;++col){const double x=(col+.5)/map.width;
+                    if(x>std::min(edges[0],edges[1])&&x<std::max(edges[0],edges[1]))map.road[row*map.width+col]=1;}
+            }
+        }
+        const auto hazard=e->tracker.update(time,boxes,e->gray,map);
+        e->semanticScene={};e->semanticScene.capture_time=time;e->semanticScene.count=std::min(boxes.size(),size_t(64));
+        for(size_t i=0;i<e->semanticScene.count;++i) {
+            const auto& b=boxes[i];const double cx=b.x+b.w/2;
+            const bool path=map.inRoad(float(cx),std::min(.99f,b.y+b.h));
+            const auto metric=e->metric.update(uint64_t(b.id),b.category,b.w*e->transform.width,e->spatialCamera.fx,time);
+            e->semanticScene.hazards[i]={uint64_t(b.id),b.category==0?LD_PEDESTRIAN:b.category==5?LD_BUS:LD_VEHICLE,
+                path?LD_EGO:LD_LANE_UNKNOWN,metric.distanceM,b.tti,std::isfinite(b.tti)?std::min(double(b.score),b.confidence):b.score,
+                int(path),0,metric.valid?std::abs((cx*e->spatialCamera.width-e->spatialCamera.cx)*metric.distanceM/e->spatialCamera.fx):ld::infinity,
+                metric.relativeVelocityMps};
+        }
+        e->boxes=std::move(boxes);e->visionTime=time;
+        updateLeadSupport(*e,time);
+        e->semanticHazard=hazard;
+        out[0]=hazard.tti;out[1]=hazard.confidence;out[2]=hazard.inPath;return 1;
+    }catch(const std::exception& ex){e->error=ex.what();return 0;}
+}
+void ld_imu(ld_engine* e,double t,const double a[3],const double g[3],const double l[3],int has) {
+    if(!e||!a||!g||!l)return;
+    e->fusion.imu({t,{a[0],a[1],a[2]},{g[0],g[1],g[2]},{l[0],l[1],l[2]},has!=0});
+    // Speed bumps felt by the phone (only once the phone plane is normalized).
+    const auto m=e->fusion.motion();
+    if(!m.valid||m.time!=t)return;
+    e->lastMotion=t;
+    const auto s=e->fusion.snapshot(t);
+    e->bumpDetector.sample(t,m.vertical,m.pitchRate,m.rollRate,s.speedValid?s.speedKmh:std::numeric_limits<double>::quiet_NaN(),m.handled);
+    ld::BumpEvent event;
+    while(e->bumpDetector.pop(event))handleBump(*e,event);
+}
 int ld_gps(ld_engine* e,double t,double v,double a) {return e&&e->fusion.gps(t,v,a);}
 ld_telemetry ld_snapshot(ld_engine* e,double time) {
     if(!e) return {};
@@ -22,6 +429,7 @@ int ld_inclination(ld_engine* e,double time,double* out,size_t capacity) {
     return 5;
 }
 const char* ld_calibration_reason(ld_engine* e) {return e?e->fusion.calibrationReason():"Motion sensors unavailable";}
+uint64_t ld_calibration_id(ld_engine* e) {return e?e->fusion.calibrationId():0;}
 ld_telemetry ld_advice_telemetry(ld_telemetry measured,int requireGps,double manualSpeed) {
     ld::Telemetry t;t.speedKmh=measured.speed;t.speedValid=measured.speed_valid;
     auto selected=ld::DecisionEngine::adviceTelemetry(t,requireGps!=0,manualSpeed);
@@ -46,41 +454,527 @@ int ld_decide(ld_engine* e,ld_telemetry a,double ht,double tti,double conf,int p
     } catch(const std::exception& ex) {e->error=ex.what();return 0;}
 }
 void ld_accepted(ld_engine* e,double time) {if(e&&std::isfinite(time)&&time>=0)e->decisions.accepted(time);}
-void ld_camera_started(ld_engine* e,double time) {if(e) {e->coach.start(time);e->driving.reset();e->tracker.reset();e->boxes.clear();e->visionTime=-1;}}
+void ld_camera_started(ld_engine* e,double time) {if(e) {e->coach.start(time);e->driving.reset();e->dualPolicy.reset();e->tracker.reset();e->metric.reset();e->boxes.clear();e->scene={};e->semanticScene={};e->spatial={};e->spatialTime=-ld::infinity;e->scene.capture_time=-ld::infinity;e->visionTime=-1;}}
 int ld_camera_decide(ld_engine* e,double time,int ready,int braking,int shock) {
     if(!e)return 0;
-    try {auto d=e->coach.evaluate(time,e->visionTime,e->boxes,ready!=0,braking!=0,shock!=0);
-        e->cameraReason=d.reason;return int(d.prompt);}
+    try {auto d=e->coach.evaluate(time,e->visionTime,e->boxes,ready!=0,braking!=0,shock!=0,0,false,false,
+        e->transform.height>0?double(e->transform.width)/e->transform.height:16.0/9);e->cameraDecision=d;
+        e->cameraReason=cameraReason(*e,d);return int(d.prompt);}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
 }
 void ld_camera_accepted(ld_engine* e,int prompt,double time) {if(e)e->coach.accepted(static_cast<ld::Prompt>(prompt),time);}
 int ld_camera_decide_telemetry(ld_engine* e,ld_telemetry t,int ready,int manual) {
     if(!e)return 0;
-    try {auto d=e->coach.evaluate(t.time,e->visionTime,e->boxes,ready!=0,t.braking||t.hard_braking,t.shock,t.speed,t.speed_valid,manual!=0);
-        e->cameraReason=d.reason;return int(d.prompt);}
+    try {auto d=e->coach.evaluate(t.time,e->visionTime,e->boxes,ready!=0,t.braking||t.hard_braking,t.shock,t.speed,t.speed_valid,manual!=0,
+        e->transform.height>0?double(e->transform.width)/e->transform.height:16.0/9);e->cameraDecision=d;
+        e->cameraReason=cameraReason(*e,d);return int(d.prompt);}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
 }
 const char* ld_camera_reason(ld_engine* e) {return e?e->cameraReason.c_str():"camera not running";}
 void ld_driving_reset(ld_engine* e) {if(e)e->driving.reset();}
 void ld_engine_sample(ld_engine* e,double time,int gear,int maxGear,double rpm,double lower,double upper,int load) {
-    if(e)e->driving.engine({time,rpm,lower,upper,gear,maxGear,load!=0});
+    if(e){e->coachingEngineSample={time,rpm,lower,upper,gear,maxGear,load!=0};e->driving.engine(e->coachingEngineSample);}
 }
 int ld_driving_decide(ld_engine* e,ld_telemetry a,int ready,int manual,int slope) {
     if(!e)return 0;
     try {
         ld::Telemetry t{a.time,a.speed,a.pitch,a.acceleration,a.progress,bool(a.calibrated),bool(a.speed_valid),bool(a.pitch_valid),bool(a.braking),bool(a.hard_braking),bool(a.shock)};
-        const double age=t.time-e->visionTime;
-        const bool clearPath=e->visionTime>=0&&age>=0&&age<ld::maxVisionAgeSeconds&&e->boxes.empty();
-        auto d=e->driving.evaluate(t,ready!=0,manual!=0,slope!=0,clearPath);e->drivingReason=d.reason;return int(d.prompt);
+        auto d=e->driving.evaluate(t,ready!=0,manual!=0,slope!=0);e->drivingReason=d.reason;return int(d.prompt);
     }catch(const std::exception& ex) {e->error=ex.what();return 0;}
 }
 void ld_driving_accepted(ld_engine* e,int prompt,double time) {if(e)e->driving.accepted(static_cast<ld::Prompt>(prompt),time);}
 const char* ld_driving_reason(ld_engine* e) {return e?e->drivingReason.c_str():"engine unavailable";}
-int ld_prompt_priority(int prompt) {return ld::priority(static_cast<ld::Prompt>(prompt));}
+static ld::cognition::Action actionForPrompt(int prompt) {
+    using A=ld::cognition::Action;using P=ld::Prompt;
+    switch(static_cast<P>(prompt)) {
+    case P::holdLaneDistance:return A::holdLaneAndDistance;
+    case P::keepSafeGap:return A::keepSafeGap;
+    case P::slowSmoothly:return A::slowSmoothly;
+    case P::watchPedestrians:return A::watchPedestrians;
+    case P::prepareBend:return A::prepareBend;
+    case P::observeSign:return A::observeSign;
+    default:return A::none;
+    }
+}
+static int promptForAction(ld::cognition::Action action) {
+    using A=ld::cognition::Action;using P=ld::Prompt;
+    switch(action) {
+    case A::holdLaneAndDistance:return int(P::holdLaneDistance);
+    case A::keepSafeGap:return int(P::keepSafeGap);
+    case A::slowSmoothly:return int(P::slowSmoothly);
+    case A::watchPedestrians:return int(P::watchPedestrians);
+    case A::prepareBend:return int(P::prepareBend);
+    case A::observeSign:return int(P::observeSign);
+    default:return 0;
+    }
+}
+static int dualPolicyEvaluate(ld_engine* e,ld_telemetry a,double now,int* suppress,bool preempt) {
+    if(!e||!suppress)return 0;
+    try {
+        ld::cognition::SceneState s;s.sequence=e->scene.sequence;s.captureTime=e->scene.capture_time;
+        s.telemetry={a.time,a.speed,a.pitch,a.acceleration,a.progress,bool(a.calibrated),bool(a.speed_valid),
+            bool(a.pitch_valid),bool(a.braking),bool(a.hard_braking),bool(a.shock)};s.count=std::min(e->scene.count,size_t(64));
+        for(size_t i=0;i<s.count;++i) {const auto& h=e->scene.hazards[i];s.hazards[i]={h.id,
+            static_cast<ld::cognition::HazardType>(h.type),static_cast<ld::cognition::Lane>(h.lane),h.distance_m,h.tti_s,
+            h.confidence,bool(h.in_trajectory),bool(h.decelerating),h.lateral_distance_m,h.optical_relative_velocity_mps};}
+        if(ld::cognition::fresh(now,e->spatialTime)&&s.count>0&&s.hazards[0].id==0x100000001ULL) {
+            const auto live=ld::perception::spatialScene(e->spatial,s.telemetry,e->spatialTime,s.sequence);
+            if(live.count){const auto type=s.hazards[0].type;s.hazards[0]=live.hazards[0];s.hazards[0].type=type;}
+        }
+        const auto d=e->dualPolicy.evaluate(s,now);
+        *suppress=d.suppressOtherAlerts;e->dualReason=d.reason;
+        if(d.brakeNow) {
+            const int id=int(d.reflexCommand==ld::cognition::ReflexCommand::BRAKE_HARDER?ld::Prompt::brakeHarder:
+                d.reflexCommand==ld::cognition::ReflexCommand::EMERGENCY_STOP?ld::Prompt::emergencyStop:ld::Prompt::emergency);
+            if(preempt&&e->preempt)e->preempt(e->audioContext,id);
+            return id;
+        }
+        return promptForAction(d.action);
+    } catch(const std::exception& ex) {e->error=ex.what();*suppress=0;return 0;}
+}
+int ld_dual_policy_decide(ld_engine* e,ld_telemetry a,double now,int* suppress) {
+    return dualPolicyEvaluate(e,a,now,suppress,true);
+}
+void ld_dual_policy_accepted(ld_engine* e,int prompt,double time) {
+    if(e)e->dualPolicy.accepted(actionForPrompt(prompt),prompt==int(ld::Prompt::emergency)||prompt==int(ld::Prompt::brakeHarder)||prompt==int(ld::Prompt::emergencyStop),time);
+}
+void ld_dual_policy_reset(ld_engine* e) {if(e)e->dualPolicy.reset();}
+const char* ld_dual_policy_reason(ld_engine* e) {return e?e->dualReason:"engine unavailable";}
+int ld_guidance_begin(ld_engine* e,uint64_t id,int kind,double now) {
+    if(!e||!id||id<=e->sourceId||kind<LD_SOURCE_CAMERA||kind>LD_SOURCE_SCREEN||!std::isfinite(now)||now<0)return 0;
+    ld_camera_started(e,now);e->sourceId=id;e->sourceKind=kind;e->guidance={};e->guidanceTime=now;e->sourceStartedAt=now;
+    e->spatialCamera={};e->focalY=ld::infinity;e->gray={};e->transform={};e->semanticHazard={};
+    e->spatialUnavailableAt=-ld::infinity;
+    e->navigation.invalidateFix();
+    e->providerNavigation.invalidateFix();
+    e->providerNavigation.unavailable();
+    e->coaching.beginSource(id);e->coachingWorld={};e->coachingWorld.sourceId=id;
+    if(e->coaching.configured())e->coach.accepted(ld::Prompt::camera,now);
+    return 1;
+}
+int ld_spatial_unavailable_source(ld_engine* e,uint64_t id,double time) {
+    if(!e||!id||id!=e->sourceId||!std::isfinite(time)||time<e->sourceStartedAt||
+       time<e->spatialTime||time<e->visionTime||time<e->spatialUnavailableAt)return 0;
+    e->spatialUnavailableAt=time;
+    // Repeated unavailable frames must not cancel fresh semantic-only decisions.
+    if(!e->spatialCamera.valid()&&!std::isfinite(e->spatialTime))return 1;
+    e->spatialCamera={};e->spatial={};e->spatialTime=-ld::infinity;
+    e->metric.reset();e->tracker.reset();e->semanticHazard={};
+    e->scene={};e->semanticScene={};e->scene.capture_time=e->semanticScene.capture_time=-ld::infinity;
+    for(auto& box:e->boxes){box.tti=ld::infinity;box.expansion=0;box.confidence=0;box.leadTime=-ld::infinity;}
+    e->driving.roadUnavailable(time);
+    e->guidance.eligible=0;
+    return 1;
+}
+int ld_spatial_publish_source(ld_engine* e,uint64_t id,double time,const float* out,size_t n) {
+    return e&&id&&id==e->sourceId&&time>=e->sourceStartedAt&&e->spatialCamera.valid()?ld_spatial_publish(e,time,out,n):0;
+}
+int ld_spatial_semantics_source(ld_engine* e,uint64_t id,double time,const float* d,size_t n,int candidates,int cf,double out[3]) {
+    return e&&id&&id==e->sourceId&&std::isfinite(time)&&time>=e->sourceStartedAt&&time>=e->visionTime?
+        ld_spatial_semantics(e,time,d,n,candidates,cf,out):0;
+}
+int ld_guidance_decide(ld_engine* e,const ld_guidance_request* q,ld_guidance_result* out) {
+    if(!e||!q||!out)return 0;
+    ld_guidance_result r{};r.actor_category=-1;r.sequence=++e->guidanceSequence;r.source_id=q->source_id;
+    r.capture_time=e->visionTime;r.scene_age=q->now-e->visionTime;
+    if(e->coaching.configured()) {
+        using namespace ld::coaching;
+        if(q->source_id!=e->sourceId||!q->source_id||!std::isfinite(q->now)||q->now<e->guidanceTime||
+            !std::isfinite(q->telemetry.time)||q->telemetry.time>q->now) {r.blocked=LD_GUIDANCE_INVALID;*out=r;return 1;}
+        auto t=q->telemetry;
+        if(e->sourceKind==LD_SOURCE_RECORDING) {t.pitch=t.acceleration=std::numeric_limits<double>::quiet_NaN();t.progress=0;t.calibrated=t.pitch_valid=t.braking=t.hard_braking=t.shock=0;}
+        const bool simulation=e->sourceKind==LD_SOURCE_SIMULATION;
+        const double ht=simulation?q->hazard_time:e->semanticHazard.time,tti=simulation?q->tti:e->semanticHazard.tti;
+        const double conf=simulation?q->confidence:e->semanticHazard.confidence;const bool path=simulation?q->in_path!=0:e->semanticHazard.inPath;
+        // Candidate producers remain unchanged. Logical/caption presentation is
+        // available even when PCM is muted or the output is unavailable.
+        r.tactical=ld_decide(e,t,ht,tti,conf,path,1,0);
+        if(!simulation) {r.reflex=dualPolicyEvaluate(e,t,q->now,&r.suppress,false);r.camera=ld_camera_decide_telemetry(e,t,1,0);}
+        r.terrain=ld_driving_decide(e,t,1,q->manual,q->slope_enabled&&e->sourceKind!=LD_SOURCE_RECORDING);
+        e->coachingWorld.telemetry=coachingTelemetry(t);e->coachingWorld.active=q->active!=0;
+        e->coachingWorld.allowCritical=q->allow_emergency_commands!=0;e->coachingWorld.audioReady=q->audio_ready!=0;e->coachingWorld.simulation=simulation;
+        auto w=coachingCurrent(*e,q->now);w.candidateCount=0;
+        auto add=[&](int id,int origin,Identity identity,EventKind kind,double capture,double maxAge=ld::maxVisionAgeSeconds) -> Candidate* {
+            if(!id||w.candidateCount>=w.candidates.size())return nullptr;
+            auto& c=w.candidates[w.candidateCount++];c={};c.prompt=static_cast<ld::Prompt>(id);c.origin=origin;c.identity=identity;c.kind=kind;
+            c.captureTime=capture;c.maxAge=maxAge;c.expiresAt=capture+maxAge;c.supported=true;
+            c.critical=id==4||id==19||id==42||id==43;return &c;
+        };
+        if(r.camera&&e->cameraDecision.actorId) {
+            const auto& d=e->cameraDecision;const Identity key{IdentitySpace::Attention,uint64_t(d.actorId),0};
+            auto* c=add(r.camera,LD_GUIDANCE_CAMERA,key,d.evidenceKind==3?EventKind::Critical:d.evidenceKind==2?EventKind::Approach:EventKind::Attention,e->visionTime);
+            if(c) {c->actorCategory=d.actorCategory;c->evidenceKind=d.evidenceKind;c->x=d.actorX;c->y=d.actorY;c->w=d.actorW;c->h=d.actorH;
+                for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==key){c->confidence=w.actors[i].confidence;c->tti=w.actors[i].tti;c->urgent=d.evidenceKind>=2&&w.actors[i].opticalClosing&&c->tti<5;break;}}
+        }
+        auto approach=[&](int id,int origin,double capture) {
+            if(!id)return;Identity key{IdentitySpace::Tactical,1,0};double best=ld::infinity,confidence=0;bool supported=simulation&&path;
+            for(size_t i=0;i<w.actorCount;++i) {const auto& a=w.actors[i];
+                if(a.identity.space==IdentitySpace::Attention||!a.relevant||!a.opticalClosing||(!a.inPath&&!a.leadSupported)||a.tti>=best)continue;
+                best=a.tti;confidence=a.confidence;key=a.identity;supported=true;
+            }
+            if(simulation){best=tti;confidence=conf;}
+            auto* c=add(id,origin,key,(id==4||id==42||id==43)?EventKind::Critical:EventKind::Approach,capture);
+            if(c){c->supported=supported;c->tti=best;c->confidence=confidence;c->urgent=supported&&std::isfinite(best)&&best<5;
+                for(size_t i=0;i<w.actorCount;++i)if(w.actors[i].identity==key){c->captureTime=std::min(c->captureTime,w.actors[i].captureTime);c->expiresAt=c->captureTime+c->maxAge;break;}}
+        };
+        approach(r.tactical,LD_GUIDANCE_TACTICAL,ht);
+        approach(r.reflex,LD_GUIDANCE_REFLEX,e->scene.capture_time);
+        if(r.terrain) {
+            const auto p=static_cast<ld::Prompt>(r.terrain);const int band=ld::slopePromptBand(p);
+            const bool bend=p==ld::Prompt::bendLeft||p==ld::Prompt::bendRight||p==ld::Prompt::bendLeftQuiet||p==ld::Prompt::bendRightQuiet||p==ld::Prompt::bendLeftGear||p==ld::Prompt::bendRightGear;
+            const bool shift=p==ld::Prompt::shiftUp||p==ld::Prompt::shiftDown;
+            auto* c=add(r.terrain,LD_GUIDANCE_TERRAIN,{band?IdentitySpace::Slope:bend?IdentitySpace::Bend:shift?IdentitySpace::Engine:IdentitySpace::None,
+                uint64_t(band?band+5:bend?e->driving.shape().bend+2:r.terrain),shift?uint64_t(e->coachingEngineSample.gear):0},band?EventKind::Slope:bend?EventKind::Bend:shift?EventKind::Shift:EventKind::Status,
+                bend?e->driving.roadTime():t.time);
+            if(c)c->mechanicalMeasured=shift&&w.engineValid;
+        }
+        if(!r.suppress&&e->sourceKind==LD_SOURCE_CAMERA) {
+            const int navigation=int(e->providerNavigation.active()?e->providerNavigation.evaluate(q->now,t.braking||t.hard_braking,t.shock):e->navigation.evaluate(q->now,t.braking||t.hard_braking,t.shock));
+            add(navigation,LD_GUIDANCE_NAVIGATION,{IdentitySpace::Route,w.route.eventId,w.route.routeId},EventKind::Route,w.route.captureTime,w.route.provider?3:2.5);
+        }
+        e->coachingWorld=w;
+        const auto d=e->coaching.decide(w,r.sequence);const auto& c=d.ticket.candidate;
+        if(d.ticket.valid) {r.prompt=CoachingEngine::spokenId(c);r.origin=c.origin;
+            if(c.utterance)if(const auto* u=e->coaching.utterance(c.utterance))registerUtterance(*u);r.capture_time=c.captureTime;r.scene_age=q->now-c.captureTime;
+            if(c.identity.space==IdentitySpace::Attention){r.actor_id=c.identity.id;r.actor_category=c.actorCategory;r.evidence_kind=c.evidenceKind;r.actor_x=c.x;r.actor_y=c.y;r.actor_w=c.w;r.actor_h=c.h;}}
+        r.eligible=d.eligible;r.semantic_available=ld::cognition::fresh(q->now,e->visionTime);r.spatial_available=ld::cognition::fresh(q->now,e->spatialTime);
+        r.blocked=d.blocked==Block::None?LD_GUIDANCE_OK:d.blocked==Block::Inactive?LD_GUIDANCE_INACTIVE:d.blocked==Block::CriticalDisabled?LD_GUIDANCE_RESEARCH_ONLY:
+            d.blocked==Block::Stale||d.blocked==Block::Revision?LD_GUIDANCE_INVALID:LD_GUIDANCE_COOLDOWN;
+        e->guidance=r;e->guidanceTime=q->now;*out=r;return 1;
+    }
+    if(q->source_id!=e->sourceId||!q->source_id||!std::isfinite(q->now)||q->now<e->guidanceTime||
+       !std::isfinite(q->telemetry.time)||q->telemetry.time>q->now||q->now-q->telemetry.time>=ld::maxVisionAgeSeconds)r.blocked=LD_GUIDANCE_INVALID;
+    else if(!q->active)r.blocked=LD_GUIDANCE_INACTIVE;
+    else {
+        const bool simulation=e->sourceKind==LD_SOURCE_SIMULATION;
+        auto t=q->telemetry;
+        // Until an original-recording telemetry sidecar is supported, phone IMU
+        // and GPS must never be presented as motion of the recorded vehicle.
+        if(e->sourceKind==LD_SOURCE_RECORDING) {
+            t.pitch=t.acceleration=std::numeric_limits<double>::quiet_NaN();
+            t.progress=0;t.calibrated=t.pitch_valid=t.braking=t.hard_braking=t.shock=0;
+        }
+        const double ht=simulation?q->hazard_time:e->semanticHazard.time;
+        const double tti=simulation?q->tti:e->semanticHazard.tti;
+        const double confidence=simulation?q->confidence:e->semanticHazard.confidence;
+        const bool path=simulation?q->in_path!=0:e->semanticHazard.inPath;
+        r.tactical=ld_decide(e,t,ht,tti,confidence,path,q->audio_ready,0);
+        if(!simulation) {
+            r.reflex=dualPolicyEvaluate(e,t,q->now,&r.suppress,false);
+            r.camera=ld_camera_decide_telemetry(e,t,q->audio_ready,q->manual);
+        }
+        r.terrain=ld_driving_decide(e,t,q->audio_ready,q->manual,q->slope_enabled&&e->sourceKind!=LD_SOURCE_RECORDING);
+        r.prompt=r.tactical;r.origin=r.prompt?LD_GUIDANCE_TACTICAL:LD_GUIDANCE_NONE;
+        auto choose=[&](int id,int origin){if(ld_prompt_priority(id)>ld_prompt_priority(r.prompt)){r.prompt=id;r.origin=origin;}};
+        choose(r.reflex,LD_GUIDANCE_REFLEX);
+        if(!r.suppress){
+            // Live camera attention wins equal-priority ties with routine route preparation.
+            choose(r.camera,LD_GUIDANCE_CAMERA);
+            if(e->sourceKind==LD_SOURCE_CAMERA)choose(int(e->providerNavigation.active()?
+                e->providerNavigation.evaluate(q->now,t.braking||t.hard_braking,t.shock):
+                e->navigation.evaluate(q->now,t.braking||t.hard_braking,t.shock)),LD_GUIDANCE_NAVIGATION);
+            choose(r.terrain,LD_GUIDANCE_TERRAIN);choose(r.camera,LD_GUIDANCE_CAMERA);}
+        if(r.origin==LD_GUIDANCE_CAMERA) {
+            const auto& d=e->cameraDecision;r.actor_id=d.actorId;r.actor_category=d.actorCategory;r.evidence_kind=d.evidenceKind;
+            r.actor_x=d.actorX;r.actor_y=d.actorY;r.actor_w=d.actorW;r.actor_h=d.actorH;
+        }
+        const bool emergency=r.prompt==4||r.prompt==19||r.prompt==42||r.prompt==43;
+        if(emergency&&!q->allow_emergency_commands)r.blocked=LD_GUIDANCE_RESEARCH_ONLY;
+        else if(!q->audio_ready)r.blocked=LD_GUIDANCE_AUDIO;
+        else if(r.prompt&&!audioAllowedFor(e,r.prompt,q->now,r.origin==LD_GUIDANCE_CAMERA?&e->cameraDecision:nullptr))r.blocked=LD_GUIDANCE_COOLDOWN;
+        r.eligible=r.prompt!=0&&r.blocked==LD_GUIDANCE_OK;
+        r.semantic_available=ld::cognition::fresh(q->now,e->visionTime);
+        r.spatial_available=ld::cognition::fresh(q->now,e->spatialTime);
+        if(r.eligible&&r.origin==LD_GUIDANCE_REFLEX&&emergency&&e->preempt)e->preempt(e->audioContext,r.prompt);
+    }
+    if(r.blocked!=LD_GUIDANCE_INVALID){e->guidance=r;e->guidanceTime=q->now;}
+    *out=r;return 1;
+}
+int ld_guidance_pending(ld_engine* e,uint64_t sequence,int prompt,double now) {
+    if(e&&e->coaching.configured())return e->coaching.pending(sequence,prompt,coachingCurrent(*e,now),now);
+    if(!e||!e->guidance.eligible||sequence!=e->guidance.sequence||prompt!=e->guidance.prompt||
+       e->guidance.source_id!=e->sourceId||!std::isfinite(now)||now<e->guidanceTime||
+       now-e->guidanceTime>=ld::maxVisionAgeSeconds||!ld_audio_allowed(e,prompt,now))return 0;
+    if(e->guidance.origin==LD_GUIDANCE_CAMERA&&e->guidance.actor_id&&
+       (e->visionTime!=e->guidance.capture_time||now-e->guidance.capture_time>=ld::maxVisionAgeSeconds||
+        !e->coach.actorRelevant(int(e->guidance.actor_id),now)))return 0;
+    if(e->guidance.origin==LD_GUIDANCE_NAVIGATION&&!(e->providerNavigation.active()?
+        e->providerNavigation.context(now):e->navigation.context(now)).valid)return 0;
+    if(e->guidance.origin==LD_GUIDANCE_NAVIGATION&&e->providerNavigation.active()&&
+       int(e->providerNavigation.evaluate(now,false,false))!=prompt)return 0;
+    return 1;
+}
+int ld_guidance_accepted(ld_engine* e,uint64_t sequence,int prompt,double now) {
+    if(e&&e->coaching.configured())return ld_coaching_accept(e,sequence,prompt,now,1);
+    if(!ld_guidance_pending(e,sequence,prompt,now))return 0;
+    ld_audio_accepted(e,prompt,now);
+    if(e->guidance.origin==LD_GUIDANCE_CAMERA&&prompt>0&&prompt<=ld::promptCount&&attentionPrompt(prompt)&&e->guidance.actor_id) {
+        e->attentionActors[prompt]=e->guidance.actor_id;e->attentionSources[prompt]=e->sourceId;
+    }
+    if(prompt>=2&&prompt<=4)ld_accepted(e,now);
+    if(e->guidance.origin==LD_GUIDANCE_REFLEX)ld_dual_policy_accepted(e,prompt,now);
+    if(e->guidance.origin==LD_GUIDANCE_NAVIGATION) {
+        if(e->providerNavigation.active())e->providerNavigation.accepted(now);
+        else e->navigation.accepted(now);
+    }
+    ld_driving_accepted(e,prompt,now);
+    if(e->sourceKind!=LD_SOURCE_SIMULATION)ld_camera_accepted(e,prompt,now);
+    e->guidance.eligible=0;return 1;
+}
+int ld_coaching_configure(ld_engine* e,int profile,int voice,uint64_t revision) {
+    if(!e||voice<0||voice>1||!e->coaching.configure(profile,voice!=0,revision))return 0;
+    e->coaching.beginSource(e->sourceId);e->guidance.eligible=0;
+    if(e->sourceId)e->coach.accepted(ld::Prompt::camera,std::max(e->sourceStartedAt,e->guidanceTime));
+    return 1;
+}
+int ld_coaching_accept(ld_engine* e,uint64_t sequence,int prompt,double now,int submitted) {
+    if(!e||!e->coaching.configured()||submitted<0||submitted>1||!e->coaching.accept(sequence,prompt,coachingCurrent(*e,now),now,submitted!=0))return 0;
+    const auto& ticket=e->coaching.acceptedTicket();const auto& c=ticket.candidate;
+    if(c.origin==LD_GUIDANCE_CAMERA&&c.identity.space==ld::coaching::IdentitySpace::Attention)
+        e->coach.acceptedActor(static_cast<ld::Prompt>(prompt),now,int(c.identity.id),c.evidenceKind);
+    // The event ledger, not unrelated producers' mutable pending fields, owns
+    // logical acceptance. In particular a reflex cannot acknowledge a person
+    // selected by CameraCoach or retire a different navigation maneuver.
+    if(submitted)ld_audio_accepted(e,prompt,now);
+    e->guidance.eligible=0;return 1;
+}
+int ld_coaching_playback_valid(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
+    return e&&e->coaching.playbackValid(sequence,prompt,coachingCurrent(*e,now),now,revision);
+}
+int ld_coaching_delivery_event(ld_engine* e,uint64_t sequence,int prompt,double now,int stage) {
+    return e&&e->coaching.deliveryEvent(sequence,prompt,static_cast<ld::coaching::DeliveryStage>(stage),now);
+}
+void ld_coaching_playback_started(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision) {
+    if(e)e->coaching.playbackStarted(sequence,prompt,coachingCurrent(*e,now),now,revision);
+}
+int ld_coaching_diagnostics(ld_engine* e,double now,double* out,size_t capacity) {return e?int(e->coaching.diagnostics(now,out,capacity)):0;}
+const char* ld_coaching_diagnostics_json(ld_engine* e,double now) {
+    if(!e)return "{}";
+    try{e->coachingDiagnostics=e->coaching.diagnosticsJson(now);return e->coachingDiagnostics.c_str();}
+    catch(...){return "{}";}
+}
+const char* ld_coaching_context_json(ld_engine* e) {
+    if(!e)return "{}";
+    try{e->intelligenceContext=e->coaching.interpretedSceneJson();return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+void ld_coaching_junction_lesson(ld_engine* e,int enabled){if(e)e->coaching.enableJunctionLesson(enabled!=0);}
+void ld_coaching_automatic(ld_engine* e,int enabled){if(e)e->coaching.enableAutomaticCoaching(enabled!=0);}
+void ld_coaching_task_scheduling(ld_engine* e,int enabled){if(e)e->coaching.enableTaskScheduling(enabled!=0);}
+const char* ld_coaching_drive_json(ld_engine* e){
+    if(!e)return "{}";try{e->intelligenceContext=e->coaching.drive().json(e->coaching.task());return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+const char* ld_coaching_task_json(ld_engine* e){
+    if(!e)return "{}";try{e->intelligenceContext=e->coaching.task().json();return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+int ld_coaching_continuation_valid(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision){
+    return e&&e->coaching.continuationValid(sequence,prompt,coachingCurrent(*e,now),now,revision);
+}
+const char* ld_coaching_continuation_reason(ld_engine* e,uint64_t sequence,int prompt,double now,uint64_t revision){
+    return e?e->coaching.continuationReason(sequence,prompt,coachingCurrent(*e,now),now,revision):"ENGINE_UNAVAILABLE";
+}
+int ld_coaching_task_speech_allowed(ld_engine* e){
+    if(!e)return 0;using P=ld::coaching::TaskPhase;const auto phase=e->coaching.task().progress().phase;
+    return phase==P::Preparing||phase==P::AwaitingDelivery||phase==P::ObservingResponse||phase==P::Approach||phase==P::Entry;
+}
+int ld_coaching_task_execution_quiet(ld_engine* e){
+    if(!e)return 0;const auto& s=e->coaching.task().progress();
+    return e->coaching.task().enabled()&&s.phase==ld::coaching::TaskPhase::ExecutionQuiet&&s.leadSeconds>=0&&s.leadSeconds<8;
+}
+const char* ld_coaching_world_snapshot_json(ld_engine* e) {
+    if(!e||e->coachingWorld.route.provider)return "{}";
+    try {
+        const auto& w=e->coachingWorld;std::ostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17);
+        const auto scalar=[&](auto value){if(std::isfinite(double(value)))out<<value;else out<<"null";};
+        const auto array=[&](auto... values){size_t i=0;out<<'[';((i++?out<<',':out,scalar(values)),...);out<<']';};
+        out<<"{\"packed_version\":1,\"header\":";
+        array(w.sourceId,w.frameSequence,w.now,w.telemetry.time,w.telemetry.speedKmh,w.telemetry.pitchDegrees,w.telemetry.longitudinalAcceleration,
+            w.telemetry.calibrated,w.telemetry.speedValid,w.telemetry.pitchValid,w.telemetry.braking,w.telemetry.hardBraking,w.telemetry.shock,
+            w.active,w.audioReady,w.allowCritical,w.simulation,w.route.routeId,w.route.eventId,w.route.epoch,w.route.captureTime,w.route.distanceM,w.route.etaSeconds,
+            w.route.feature,w.route.valid,w.route.provider,w.route.gpsTime,w.roadCaptureTime,w.engineCaptureTime,w.roadBend,w.gradeBand,w.roadValid,w.engineValid,w.captureTime);
+        out<<",\"actors\":[";
+        for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){if(i)out<<',';const auto& a=w.actors[i];array(int(a.identity.space),a.identity.id,a.identity.scope,a.captureTime,a.confidence,a.tti,a.category,a.relevant,a.inPath,a.opticalClosing,a.leadSupported,a.x,a.y,a.w,a.h);}
+        out<<"],\"candidates\":[";
+        for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){if(i)out<<',';const auto& c=w.candidates[i];array(int(c.prompt),c.origin,int(c.identity.space),c.identity.id,c.identity.scope,int(c.kind),c.captureTime,c.maxAge,c.expiresAt,c.confidence,c.tti,c.supported,c.urgent,c.critical,c.mechanicalMeasured,c.actorCategory,c.evidenceKind,c.x,c.y,c.w,c.h);}
+        // Road knowledge from the map (OpenStreetMap and learned bumps; never provider content).
+        out<<"],\"map\":";array(w.mapTime,w.bumpAheadM,w.bumpId,w.bendAheadM,w.bendId,w.bendRight);
+        out<<"}";e->replayWorld=out.str();return e->replayWorld.c_str();
+    }catch(...){return "{}";}
+}
+const char* ld_guidance_reason(ld_engine* e) {
+    if(!e)return "engine unavailable";
+    if(e->coaching.configured())return e->coaching.reason();
+    switch(e->guidance.blocked) {
+    case LD_GUIDANCE_INACTIVE:return "source inactive";
+    case LD_GUIDANCE_INVALID:return "stale source or invalid time";
+    case LD_GUIDANCE_AUDIO:return "audio unavailable";
+    case LD_GUIDANCE_COOLDOWN:return "global audio cooldown or duplicate lock";
+    case LD_GUIDANCE_RESEARCH_ONLY:return "experimental emergency command disabled";
+    default:break;
+    }
+    switch(e->guidance.origin) {
+    case LD_GUIDANCE_REFLEX:return ld_dual_policy_reason(e);
+    case LD_GUIDANCE_TACTICAL:return ld_decision_reason(e);
+    case LD_GUIDANCE_TERRAIN:return ld_driving_reason(e);
+    case LD_GUIDANCE_NAVIGATION:return e->providerNavigation.active()?
+        "Provider turn estimate with measured GPS; no exact-distance, gear or safe-speed inference":
+        "Offline map preparation cue; no gear or safe-speed inference";
+    default:return ld_camera_reason(e);
+    }
+}
+int ld_prompt_priority(int prompt) {return ld::isComposite(prompt)?ld::compositePriority(prompt):ld::priority(static_cast<ld::Prompt>(prompt));}
+int ld_navigation_route(ld_engine* e,uint64_t id,const double* coordinates,size_t points,const int* maneuvers,size_t count) {
+    if(!e)return 0;
+    e->navigation.clear();e->providerNavigation.clear();e->guidance.eligible=0;
+    if(!coordinates||points<2||points>100000||count>10000||(!maneuvers&&count))return 0;
+    try {
+        std::vector<ld::navigation::Coordinate> shape(points);
+        for(size_t i=0;i<points;++i)shape[i]={coordinates[i*2],coordinates[i*2+1]};
+        std::vector<ld::navigation::Maneuver> turns(count);
+        for(size_t i=0;i<count;++i) {
+            if(maneuvers[i*2]<0){e->navigation.clear();return 0;}
+            turns[i]={size_t(maneuvers[i*2]),maneuvers[i*2+1]};
+        }
+        e->guidance.eligible=0;
+        return e->navigation.load(id,shape.data(),shape.size(),turns.data(),turns.size());
+    }catch(const std::exception& ex){e->error=ex.what();e->navigation.clear();return 0;}
+}
+int ld_navigation_turn_update(ld_engine* e,const ld_navigation_turn* turn) {
+    if(!e||!turn||e->sourceKind!=LD_SOURCE_CAMERA||turn->received_at<e->sourceStartedAt)return 0;
+    const ld::navigation::TurnInput input{turn->provider,turn->session,turn->route_epoch,turn->sequence,
+        turn->received_at,static_cast<ld::navigation::TurnState>(turn->state),turn->step_number,
+        static_cast<ld::navigation::TurnKind>(turn->maneuver),turn->estimated_remaining_m,turn->estimated_remaining_seconds};
+    if(!e->providerNavigation.update(input))return 0;
+    e->coachingRouteReceipt=turn->received_at;e->coachingRouteEpoch=turn->route_epoch;e->coachingRouteEta=turn->estimated_remaining_seconds;
+    e->navigation.clear();e->guidance.eligible=0;return 1;
+}
+void ld_navigation_turn_unavailable(ld_engine* e) {
+    if(!e)return;e->providerNavigation.unavailable();
+    if(e->guidance.origin==LD_GUIDANCE_NAVIGATION)e->guidance.eligible=0;
+}
+void ld_navigation_clear(ld_engine* e){if(e){e->navigation.clear();e->providerNavigation.clear();e->guidance.eligible=0;}}
+int ld_navigation_fix(ld_engine* e,uint64_t source,double time,double lat,double lon,double accuracy,
+    double speed,double speedAccuracy,int speedValid,double bearing,int bearingValid) {
+    if(!e||!source||source!=e->sourceId||e->sourceKind!=LD_SOURCE_CAMERA||time<e->sourceStartedAt)return 0;
+    if(e->guidance.origin==LD_GUIDANCE_NAVIGATION)e->guidance.eligible=0;
+    const ld::navigation::Fix fix{time,lat,lon,accuracy,speed,bearing,speedAccuracy,bool(speedValid),bool(bearingValid)};
+    const auto providerAccepted=e->providerNavigation.fix(fix);
+    if(std::isfinite(lat)&&std::isfinite(lon)) {
+        e->scout.update(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:ld::infinity,accuracy); // km/h
+        e->routeLine.fix(time,lat,lon,accuracy,bearing,bearingValid!=0,speedValid?speed:ld::infinity);
+        // Recent fixes place felt bumps; a learned bump driven over without a jolt is a miss.
+        if(std::isfinite(accuracy)&&accuracy>=0) {
+            e->fixes[e->fixCursor]={time,lat,lon,bearing,speedValid&&std::isfinite(speed)?speed/3.6:0,accuracy,bearingValid!=0&&std::isfinite(bearing)};
+            e->fixCursor=(e->fixCursor+1)%e->fixes.size();e->fixCount=std::min(e->fixCount+1,e->fixes.size());
+        }
+        e->bumps.travel(time,lat,lon,bearing,bearingValid!=0,speedValid?speed:std::numeric_limits<double>::quiet_NaN(),accuracy,
+            time-e->lastMotion<.5&&time>=e->lastMotion);
+    }
+    return e->providerNavigation.active()?providerAccepted:e->navigation.fix(fix);
+}
+int ld_navigation_context(ld_engine* e,double now,double* out,size_t capacity) {
+    if(!e||!out||capacity<17)return 0;
+    const auto c=e->providerNavigation.active()?e->providerNavigation.context(now):e->navigation.context(now);
+    const double v[]={double(c.routeId),double(c.featureId),double(c.feature),double(c.match),c.fixTime,c.progressM,
+        c.distanceM,c.headingChangeDegrees,c.estimatedRadiusM,c.approachSpeedLimitKmh,double(c.valid),double(c.maneuverType),double(c.maneuverShapeIndex),c.maneuverDistanceM,
+        c.gpsSpeedKmh,c.speedAccuracyMps,c.horizontalAccuracyM};
+    std::copy_n(v,17,out);return 17;
+}
+const char* ld_navigation_status(ld_engine* e,double now) {
+    return e?(e->providerNavigation.active()?e->providerNavigation.status(now):
+        ld::navigation::RouteCoach::status(e->navigation.context(now).match)):"Navigation unavailable";
+}
 int ld_prompt_count(void) {return ld::promptCount;}
 int ld_slope_band(double degrees) {return ld::slopeBand(degrees);}
-int ld_prompt_may_interrupt(int next,int current) {return ld::mayInterrupt(static_cast<ld::Prompt>(next),static_cast<ld::Prompt>(current));}
-const char* ld_prompt_text(int p) {return ld::promptText(static_cast<ld::Prompt>(p));}
+int ld_prompt_may_interrupt(int next,int current) {
+    if(!ld::isComposite(next)&&!ld::isComposite(current))return ld::mayInterrupt(static_cast<ld::Prompt>(next),static_cast<ld::Prompt>(current));
+    // Composed utterances: only urgent content (priority >= 4) interrupts, and only lower-priority speech.
+    const int pn=ld_prompt_priority(next),pc=current?ld_prompt_priority(current):0;
+    if(!current)return 1;
+    return pn>=4&&pn>pc;
+}
+const char* ld_prompt_text(int p) {
+    if(!ld::isComposite(p))return ld::promptText(static_cast<ld::Prompt>(p));
+    thread_local std::string copy;
+    {std::lock_guard<std::mutex> lock(utteranceMutex);const size_t slot=size_t(p)%utteranceRegistry.size();
+        copy=utteranceRegistry[slot].id==p?utteranceText[slot]:std::string();}
+    return copy.c_str();
+}
+int ld_prompt_fragments(int p,int* out,size_t capacity) {
+    if(!out||!ld::isComposite(p))return 0;
+    std::lock_guard<std::mutex> lock(utteranceMutex);const auto& u=utteranceRegistry[size_t(p)%utteranceRegistry.size()];
+    if(u.id!=p)return 0;size_t n=std::min(u.count,capacity);for(size_t i=0;i<n;++i)out[i]=u.fragments[i];return int(n);
+}
+int ld_fragment_count(void) {return ld::fragmentCount;}
+int ld_road_way(ld_engine* e,int64_t way,int road_class,const int64_t* nodes,const double* lat_lon,size_t count) {
+    try {return e&&e->scout.addWay(way,road_class,nodes,lat_lon,count);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
+}
+void ld_road_clear(ld_engine* e){if(e)e->scout.clear();}
+void ld_road_bump(ld_engine* e,int64_t node) {
+    if(!e||node<=0)return;
+    e->scout.addBump(node);
+    double lat{},lon{};if(e->scout.nodePosition(node,lat,lon))e->bumps.addMapped(uint64_t(node),lat,lon);
+}
+int ld_route_line(ld_engine* e,const double* lat_lon,size_t count) {
+    try {return e&&e->routeLine.load(lat_lon,count);}catch(const std::exception& ex){if(e){e->error=ex.what();e->routeLine.clear();}return 0;}
+}
+void ld_route_maneuvers(ld_engine* e,double time,const double* ahead_m,size_t count){if(e)e->routeLine.maneuvers(time,ahead_m,count);}
+int ld_bump_restore(ld_engine* e,double lat,double lon,double heading,int observations,int misses) {
+    try {return e&&e->bumps.restore(lat,lon,heading,observations,misses);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
+}
+int ld_bumps_learned(ld_engine* e,double* out,size_t capacity) {
+    if(!e||(!out&&capacity))return 0;
+    int n=0;
+    for(size_t i=0;i<e->bumps.size()&&size_t(n+1)*5<=capacity;++i) {
+        const auto& b=e->bumps.at(i);if(b.mapped)continue;
+        double* o=out+size_t(n)*5;o[0]=b.lat;o[1]=b.lon;o[2]=b.heading;o[3]=b.observations;o[4]=b.misses;++n;
+    }
+    return n;
+}
+int ld_bump_event(ld_engine* e,double* out,size_t capacity) {
+    if(!e||!out||capacity<12||!e->bumpLogCount)return 0;
+    const auto log=e->bumpLog[e->bumpLogHead];e->bumpLogHead=(e->bumpLogHead+1)%e->bumpLog.size();--e->bumpLogCount;
+    const auto& v=log.event;
+    const double values[]={v.time,double(v.accepted()),double(int(v.reason)),v.peakVertical,v.secondVertical,v.axleGapS,
+        v.peakPitchRate,v.peakRollRate,v.speedKmh,v.backgroundRms,double(log.id!=0),double(log.located)};
+    std::copy_n(values,12,out);return 1;
+}
+const char* ld_bump_reason(int reason){return ld::bumpReasonText(static_cast<ld::BumpReason>(std::clamp(reason,0,6)));}
+int ld_road_knowledge(ld_engine* e,double now,double* out,size_t capacity) {
+    if(!e||!out||capacity<10)return 0;
+    const auto line=e->routeLine.ahead(now,e->bumps);
+    out[0]=e->routeLine.loaded();out[1]=line.matched;out[2]=line.bendsKnown;out[3]=line.bendDistanceM;out[4]=line.bendRight;
+    out[5]=line.bumpDistanceM;out[6]=line.bumpLearned;out[7]=double(e->bumps.learnedCount());out[8]=double(e->bumps.usableLearnedCount());
+    out[9]=double(e->routeLine.bendCount());
+    return 1;
+}
+void ld_coaching_horn_rules(ld_engine* e,int enabled){if(e)e->hornRules=enabled!=0;}
+void ld_camera_horizon(ld_engine* e,double fraction){if(e)e->horizonOverride=std::isfinite(fraction)&&fraction>.2&&fraction<.9?fraction:std::numeric_limits<double>::quiet_NaN();}
+int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height) {
+    if(!e||!source||source!=e->sourceId||!drivable||!lanes||e->transform.size<=0||!std::isfinite(time))return 0;
+    try {
+        const auto map=ld::decodeLanes(drivable,lanes,width,height,e->transform);
+        // Lane lines just ahead of the bonnet: nearest line left and right of the image centre.
+        double sumLeft=0,sumRight=0;int rows=0;
+        for(int row=int(.68*map.height);row<=int(.86*map.height)&&row<map.height;++row) {
+            double left=-1,right=2;int start=-1;
+            for(int x=0;x<=map.width;++x){const bool on=x<map.width&&map.lane[size_t(row*map.width+x)]>.5f;
+                if(on&&start<0)start=x;
+                if(!on&&start>=0){const double c=(start+x)*.5/map.width;if(c<.5)left=std::max(left,c);else right=std::min(right,c);start=-1;}}
+            if(left>=0&&right<=1){sumLeft+=left;sumRight+=right;++rows;}
+        }
+        e->laneTime=time;e->laneValid=rows>=3;
+        if(rows){e->laneLeft=float(sumLeft/rows);e->laneRight=float(sumRight/rows);}
+        return 1;
+    }catch(const std::exception& ex){e->laneValid=false;e->error=ex.what();return 0;}
+}
+int ld_road_junction(ld_engine* e,double now,double* out,size_t capacity) {
+    if(!e||!out||capacity<4)return 0;const auto j=e->scout.current(now);
+    out[0]=j.valid;out[1]=j.distanceM;out[2]=double(j.nodeId);out[3]=j.roadEnds;
+    // Optional: matched road, bump and bend ahead, and how many roads are loaded.
+    if(capacity>=9){out[4]=j.matched;out[5]=j.bumpDistanceM;out[6]=j.bendDistanceM;out[7]=j.bendRight;out[8]=double(e->scout.wayCount());}
+    return 1;
+}
+const char* ld_fragment_text(int f) {return ld::fragmentText(static_cast<ld::Fragment>(f));}
 int ld_road_shape(ld_engine* e,double* out,size_t capacity) {
     if(!e||!out||capacity<13)return 0;
     std::fill_n(out,13,0);auto& shape=e->driving.shape();out[0]=e->driving.roadTime();out[1]=shape.valid;out[2]=shape.bend;
@@ -96,13 +990,62 @@ size_t ld_boxes(ld_engine* e,float* out,size_t capacity) {
 }
 int ld_preprocess(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save) {
     if(!e) return 0;
+    e->zoomReady=false;
     try {e->transform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save?&e->gray:nullptr);e->error.clear();return 1;}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
+}
+int ld_preprocess_zoom(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,float horizon) {
+    if(!e)return 0;
+    e->zoomReady=false;
+    try {
+        const bool swap=rot==90||rot==270;
+        // Same frame as the last full preparation (its transform maps the merge).
+        if(e->transform.size!=size||e->transform.width!=(swap?h:w)||e->transform.height!=(swap?w:h))throw std::invalid_argument("zoom needs the same frame prepared first");
+        e->zoomCrop=ld::zoomCrop(e->transform.width,e->transform.height,horizon);
+        e->zoomTransform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,nullptr,&e->zoomCrop);
+        e->zoomReady=true;e->error.clear();return 1;
+    }catch(const std::exception& ex){e->error=ex.what();return 0;}
+}
+int ld_zoom_merge(ld_engine* e,const float* full,const float* zoom,int candidates,float* out,size_t out_count) {
+    if(!e)return 0;
+    try {
+        if(!e->zoomReady||!full||!zoom||!out||candidates<=0||candidates>15000||out_count!=size_t(84)*candidates*2)throw std::invalid_argument("invalid zoom merge");
+        // [84,N] full + [84,N] zoom -> [84,2N] channel-first.
+        std::vector<float> mapped(zoom,zoom+size_t(84)*candidates);
+        ld::zoomToFull(mapped.data(),candidates,e->transform,e->zoomTransform,e->zoomCrop);
+        const size_t n=size_t(candidates);
+        for(size_t c=0;c<84;++c) {
+            std::copy(full+c*n,full+(c+1)*n,out+c*2*n);
+            std::copy(mapped.data()+c*n,mapped.data()+(c+1)*n,out+c*2*n+n);
+        }
+        e->error.clear();return candidates*2;
+    }catch(const std::exception& ex){e->error=ex.what();return 0;}
 }
 int ld_vision(ld_engine* e,double t,const float* d,size_t n,int c,int candidates,int cf,int normalized,const float* road,const float* lane,int w,int h,double out[3]) {
     if(!e||!out) return 0;
     try {auto boxes=ld::decodeYolo(d,n,c,candidates,cf!=0,normalized!=0,e->transform);auto lanes=ld::decodeLanes(road,lane,w,h,e->transform);
-        auto hazard=e->tracker.update(t,boxes,e->gray,lanes);e->driving.road(t,ld::roadShape(lanes));e->boxes=std::move(boxes);e->visionTime=t;out[0]=hazard.tti;out[1]=hazard.confidence;out[2]=hazard.inPath?1:0;e->error.clear();return 1;}
-    catch(const std::exception& ex) {e->driving.road(t,{});e->boxes.clear();e->visionTime=-1;e->error=ex.what();out[0]=ld::infinity;out[1]=0;out[2]=0;return 0;}
+        auto hazard=e->tracker.update(t,boxes,e->gray,lanes);e->semanticHazard=hazard;const auto shape=ld::roadShape(lanes);e->driving.road(t,shape);
+        e->scene.capture_time=t;++e->scene.sequence;e->scene.count=std::min(boxes.size(),size_t(64));
+        for(size_t i=0;i<e->scene.count;++i) {
+            const auto& b=boxes[i];const float cx=b.x+b.w/2,foot=b.y+b.h;
+            const bool path=cx>.3f&&cx<.7f&&lanes.inRoad(cx,std::min(.99f,foot));
+            const int type=b.category==0?LD_PEDESTRIAN:b.category==5?LD_BUS:
+                (b.category==1||b.category==2||b.category==3||b.category==7)?LD_VEHICLE:b.category==11?LD_SIGN:LD_UNKNOWN;
+            const auto metric=e->metric.update(static_cast<uint64_t>(b.id),b.category,b.w*e->transform.width,e->focalY,t);
+            const double tti=std::isfinite(metric.ttiSeconds)?metric.ttiSeconds:b.tti;
+            e->scene.hazards[i]={static_cast<uint64_t>(b.id),type,path?LD_EGO:LD_LANE_UNKNOWN,metric.distanceM,tti,
+                std::isfinite(tti)?std::min(double(b.score),b.confidence):double(b.score),path?1:0,0,
+                std::max(.25,std::abs(double(cx-.5f))*4.0),metric.relativeVelocityMps};
+        }
+        if(shape.valid&&shape.bend!=0&&e->scene.count<64) {
+            auto& h=e->scene.hazards[e->scene.count++];h={static_cast<uint64_t>(0xffffffffffffffffULL),LD_BEND,LD_EGO,
+                ld::infinity,ld::infinity,.9,1,0,1.0,0};
+        }
+        e->semanticScene=e->scene;e->boxes=std::move(boxes);e->visionTime=t;out[0]=hazard.tti;out[1]=hazard.confidence;out[2]=hazard.inPath?1:0;e->error.clear();return 1;}
+    catch(const std::exception& ex) {e->driving.road(t,{});e->boxes.clear();e->scene={};e->scene.capture_time=-ld::infinity;e->visionTime=-1;e->error=ex.what();out[0]=ld::infinity;out[1]=0;out[2]=0;return 0;}
+}
+int ld_dual_read_vision(ld_engine* e,ld_dual_scene* out) {
+    if(!e||!out||!std::isfinite(e->visionTime)||e->visionTime<0)return 0;
+    *out=e->scene;return 1;
 }
 }

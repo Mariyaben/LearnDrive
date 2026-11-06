@@ -7,12 +7,25 @@ public final class CameraVisionHealth {
     private CameraVisionHealth() {}
 
     // PowerManager thermal states: none=0, light=1, moderate=2, severe=3, critical=4.
+    // Heat sheds the expensive optional work first (see spatialAllowed) and keeps the
+    // road-user detector inside the 350 ms coaching freshness gate. A 1.5 s interval
+    // under "severe" heat silenced all coaching in the 2026-11-04 drive.
     public static double intervalSeconds(int thermal) {
         if (thermal >= 4) return Double.POSITIVE_INFINITY;
-        if (thermal == 3) return 1.5;
-        if (thermal == 2) return .75;
-        if (thermal == 1) return .4;
-        return .25;
+        if (thermal == 3) return 1.0 / 5;
+        if (thermal == 2) return 1.0 / 10;
+        if (thermal == 1) return 1.0 / 20;
+        return 1.0 / 30;
+    }
+
+    /** Supercombo spatial inference is optional; it is the first workload shed under heat. */
+    public static boolean spatialAllowed(int thermal) {
+        return thermal < 2;
+    }
+
+    /** The zoomed second detector pass doubles detector work: only with no heat and a fast detector. */
+    public static boolean zoomAllowed(int thermal, Double lastDetectorMs) {
+        return thermal <= 0 && (lastDetectorMs == null || lastDetectorMs <= 45.0);
     }
 
     public static boolean shouldAnalyze(double now, double lastStarted, int thermal) {

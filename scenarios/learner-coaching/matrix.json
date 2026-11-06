@@ -1,0 +1,74 @@
+[
+  {
+    "id": "jodhpur-clear-semantic-hz8-delay224",
+    "video": "build/public-traffic/clips/jodhpur-clear.mp4",
+    "mode": "semantic",
+    "fps": 25,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "jodhpur-rain-semantic-hz8-delay224",
+    "video": "build/public-traffic/clips/jodhpur-rain.mp4",
+    "mode": "semantic",
+    "fps": 25,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "udacity-challenge-semantic-hz8-delay224",
+    "video": "build/public-traffic/clips/udacity-challenge.mp4",
+    "mode": "semantic",
+    "fps": 30,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "udacity-curves-semantic-hz8-delay224",
+    "video": "build/public-traffic/clips/udacity-curves.mp4",
+    "mode": "semantic",
+    "fps": 25,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "bangalore-semantic-hz8-delay224",
+    "video": "build/public-traffic-extension/clips/bangalore-cv-raman.mp4",
+    "mode": "semantic",
+    "fps": 30,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "bangalore-semantic-hz4-delay224",
+    "video": "build/public-traffic-extension/clips/bangalore-cv-raman.mp4",
+    "mode": "semantic",
+    "fps": 30,
+    "hz": 4,
+    "delay": 224,
+    "speed": 30
+  },
+  {
+    "id": "bangalore-semantic-hz8-delay500",
+    "video": "build/public-traffic-extension/clips/bangalore-cv-raman.mp4",
+    "mode": "semantic",
+    "fps": 30,
+    "hz": 8,
+    "delay": 500,
+    "speed": 30
+  },
+  {
+    "id": "bangalore-spatial-hz8-delay224",
+    "video": "build/public-traffic-extension/clips/bangalore-cv-raman.mp4",
+    "mode": "spatial",
+    "fps": 20,
+    "hz": 8,
+    "delay": 224,
+    "speed": 30
+  }
+]
