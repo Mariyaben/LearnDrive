@@ -51,6 +51,7 @@ class Native:
             "cached_frame": ([P, C.c_double, P], C.c_int),
             "prepare": ([P, P, P], C.c_int),
             "prepare_zoom": ([P, P, P, C.c_float], C.c_int),
+            "prepare_mosaic": ([P, P, P, C.c_double], C.c_int),
             "camera_horizon": ([P, C.c_double], None),
             "zoom_merge": ([P, P, P, C.c_int, P, C.c_size_t], C.c_int),
             "labels": ([P, C.c_double, P, C.c_size_t, C.c_int], C.c_int),
@@ -268,6 +269,9 @@ def main():
     parser.add_argument("--detector-zoom", action="store_true",
                         help="Second detector pass on a 2x crop of the road ahead, as Android runs it when the phone is cool")
     parser.add_argument("--zoom-horizon", type=float, default=0.58, help="Zoom crop centre as a fraction of the frame height")
+    parser.add_argument("--mosaic", action="store_true",
+                        help="The app's detector mosaic: road band + 2x zoom band of the far road in ONE inference "
+                             "(horizon from --camera-horizon, else mid-image)")
     parser.add_argument("--camera-horizon", type=float,
                         help="Horizon row of the filmed camera (fraction of height) for road-user distance; default mid-image")
     parser.add_argument("--render", action="store_true")
@@ -333,6 +337,12 @@ def main():
     if args.detector_zoom:
         runtime["detector_zoom"] = {"horizon": args.zoom_horizon, "merge": "native ld_zoom_merge",
                                     "cached_candidates": ZOOM_CACHED_CANDIDATES}
+    if args.mosaic:
+        if args.detector_zoom:
+            raise ValueError("--mosaic replaces --detector-zoom")
+        runtime["detector_mosaic"] = {"horizon": args.camera_horizon if args.camera_horizon is not None else 0.5,
+                                      "layout": "native ld_preprocess_mosaic; zoom band mapped back before decoding",
+                                      "cached_candidates": ZOOM_CACHED_CANDIDATES}
     provenance = inference_provenance(ROOT, args.video, ASSETS, args.library.resolve(), geometry.tolist(),
         args.fps, args.semantic_hz, spatial, runtime, decoder, Path(__file__), args.policy_independent_cache)
     cache_key = inference_key(provenance)
@@ -350,14 +360,21 @@ def main():
                                ptr(geometry) if spatial else None)
         if not handle:
             raise RuntimeError("Native Supercombo initialization failed")
+        if args.mosaic and args.camera_horizon is not None:
+            native.camera_horizon(handle, args.camera_horizon)  # The mosaic's zoom band follows the horizon.
         last_semantic = -math.inf
         try:
             for index, frame in enumerate(frames(args.video, width, height, args.fps)):
                 timestamp = index / args.fps
                 started = time.perf_counter()
                 if timestamp - last_semantic >= 1 / args.semantic_hz - 1e-9:
-                    native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
+                    if args.mosaic:
+                        native.require(handle, native.prepare_mosaic(handle, ptr(frame), ptr(tensor), timestamp))
+                    else:
+                        native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
                     found = np.ascontiguousarray(detector.run(None, {"images": tensor})[0][0], np.float32)
+                    if args.mosaic:
+                        found = decodable_candidates(found)  # bounded cache; same decoded boxes
                     if args.detector_zoom:
                         native.require(handle, native.prepare_zoom(handle, ptr(frame), ptr(tensor), args.zoom_horizon))
                         zoomed = np.ascontiguousarray(detector.run(None, {"images": tensor})[0][0], np.float32)
@@ -538,7 +555,11 @@ def main():
                     except StopIteration as error:
                         raise RuntimeError("Video ended before its verified inference cache") from error
                     decoded_index += 1
-                native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
+                # The same image layout as inference, so cached zoom-band boxes decode to frame geometry.
+                if args.mosaic:
+                    native.require(handle, native.prepare_mosaic(handle, ptr(frame), ptr(tensor), timestamp + args.pre_roll_seconds))
+                else:
+                    native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
                 values = np.ascontiguousarray(detections[semantic_indices[index]])
                 native.require(handle, native.labels(handle, timestamp + args.pre_roll_seconds, ptr(values), values.size, values.shape[1]))
                 semantic_capture_time = timestamp

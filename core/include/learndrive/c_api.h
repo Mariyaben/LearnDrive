@@ -198,6 +198,13 @@ int ld_preprocess(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint
 // Optional zoomed detector pass (distant road users ahead): letterboxes a square crop
 // of the SAME frame just prepared with ld_preprocess, centred on `horizon` (fraction of
 // the upright height). Keeps the full-frame transform.
+// The detector image as a mosaic: the road band (full width, from just above the horizon down)
+// plus a 2x zoom of the far road around the horizon in the space letterboxing would waste; one
+// inference sees road users about twice as far ahead. The horizon follows the camera's measured
+// pitch at `time`. Detections are decoded as usual: zoom-band boxes are mapped back to frame
+// geometry first, so distances are unchanged. Returns 2 with a zoom band, 1 for a plain
+// letterbox (no room), 0 on error.
+int ld_preprocess_mosaic(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,int save_gray,double time);
 int ld_preprocess_zoom(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,float horizon);
 // Merges YOLO raw output of the full frame and of the zoom (both [84,N] channel-first)
 // into [84,2N] full-frame model pixels for the usual decoding and NMS. Returns 2N or 0.

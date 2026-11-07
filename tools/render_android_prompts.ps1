@@ -60,7 +60,8 @@ try {
         'You are drifting left. Move back to the centre of your lane',
         'You are drifting right. Keep left',
         'Speed bump ahead. Slow down, clutch down and change down',
-        'Sharp bend ahead. Sound the horn and keep left')
+        'Sharp bend ahead. Sound the horn and keep left',
+        'The route has changed. Keep going and follow the new route')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         if ($PromptIds.Count -eq 0 -and $FragmentIds.Count -gt 0) { continue } # Fragments only.

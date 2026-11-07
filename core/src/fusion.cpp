@@ -2,7 +2,7 @@
 namespace ld {
 void SensorFusion::reset() {const auto id=calibrationId_;*this=SensorFusion{};calibrationId_=id;}
 void SensorFusion::restartCalibration(const char* reason) {
-    calibrated_=false;start_=-1;count_=linearCount_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
+    calibrated_=false;start_=-1;count_=linearCount_=0;pitchBias_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
     sum_=squares_=gyroSum_=linearSum_={};calibrationProgress_=0;
     calibrationReason_=reason;
     poseCursor_=poseCount_=0;
@@ -62,6 +62,10 @@ void SensorFusion::imu(const ImuSample& s) {
         up_=(up_*(1-alpha)+measured.unit()*alpha).unit();
     }
     pitch_=std::asin(std::clamp(up_.dot(forward_),-1.0,1.0))*180/pi;
+    // A phone that sags or tilts in its mount reads as a hill that never ends. Over a minute of
+    // driving roads average level, so that long-term mean is the mount's offset; real hills come
+    // and go well within it. Only while moving on fresh GPS speed (not parked on a slope).
+    if(velocity_>4&&lastGps_>=0&&s.time-lastGps_<3)pitchBias_+=(pitch_-pitchBias_)*std::min(1.,dt/60.);
     filteredPitch_+=(pitch_-filteredPitch_)*(1-std::exp(-dt/.4));
     if(pitchTrailTime_<0||s.time-pitchTrailTime_>=.25) {
         pitchTrail_[pitchCursor_]=filteredPitch_;pitchCursor_=(pitchCursor_+1)%pitchTrail_.size();
@@ -103,7 +107,7 @@ bool SensorFusion::gps(double t,double v,double accuracy) {
 }
 Telemetry SensorFusion::snapshot(double t) const {
     Telemetry out;
-    out.time=t; out.speedKmh=velocity_*3.6; out.pitchDegrees=pitch_;
+    out.time=t; out.speedKmh=velocity_*3.6; out.pitchDegrees=pitch_-pitchBias_;
     out.longitudinalAcceleration=acceleration_; out.calibrationProgress=calibrationProgress_;
     out.calibrated=calibrated_;
     bool fresh=std::isfinite(t)&&lastImu_>=0&&t>=lastImu_&&t-lastImu_<.25;
@@ -142,9 +146,9 @@ Inclination SensorFusion::inclination(double time) const {
     Inclination result;result.progress=telemetry.calibrationProgress;
     // Beyond this range the mounted-vehicle interpretation is unreliable.
     if(!telemetry.pitchValid||telemetry.shock||std::abs(pitch_)>30||up_.dot(referenceUp_)<.5)return result;
-    result.valid=true;result.pitchDegrees=pitch_;
+    result.valid=true;result.pitchDegrees=pitch_-pitchBias_;
     result.rollDegrees=std::atan2(up_.dot(right_),up_.dot(referenceUp_))*180/pi;
-    result.gradePercent=100*std::tan(pitch_*pi/180);
+    result.gradePercent=100*std::tan(result.pitchDegrees*pi/180);
     return result;
 }
 }

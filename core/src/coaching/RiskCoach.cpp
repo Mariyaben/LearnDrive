@@ -142,6 +142,15 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         (void)tracks;
         const Motion* motion=associate(a.identity.id,a.category,a.x,a.y,a.w,a.h,a.captureTime);
         ActorRisk r;r.id=motion?motion->id:a.identity.id;r.category=a.category;
+        // A "person" sitting on a bicycle or motorcycle is its rider: judge it as a two-wheeler
+        // (an oncoming rider needs "keep left, ease off", not "person ahead, brake now").
+        if(a.category==0)for(size_t k=0;k<std::min(w.actorCount,w.actors.size());++k) {
+            const auto& b=w.actors[k];
+            if(k==i||b.identity.space!=IdentitySpace::Optical||(b.category!=1&&b.category!=3)||!cognition::fresh(now,b.captureTime))continue;
+            const double overlap=std::min(a.x+a.w,b.x+b.w)-std::max(a.x,b.x);
+            // The rider's body stands on the bike: wide horizontal overlap, the bike under the person's middle.
+            if(overlap>.5*std::min(a.w,b.w)&&b.y<a.y+a.h&&b.y+b.h>a.y+a.h*.5){r.category=b.category;break;}
+        }
         r.center=a.x+a.w*.5;r.foot=a.y+a.h;r.left=r.center<.5;
         if(masked(r.center,r.foot))continue; // Part of the learner's own car.
         // Clipped at the left/right image edge near the bottom: alongside, being passed.
@@ -165,24 +174,41 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             // Fixed in the frame while the car moves, low in the image: part of the
             // learner's own car (dashboard ornament, mount, bonnet), not a road user.
             attached=v>5&&r.foot>.8&&dt>=.5&&std::abs(lateral)<.015&&std::abs(r.expansion)<.05;
+            // ...or at the side edge of the frame at any height: a phone mount arm or a pillar.
+            if(v>5&&dt>=.5&&(a.x<.02f||a.x+a.w>.98f)&&std::abs(lateral)<.012&&std::abs(r.expansion)<.04)attached=true;
         }
         if(attached)continue;
         // Below-horizon position as if the camera were level, and the ground distance it implies.
         const double foot=r.foot-shift;r.distanceM=groundDistance(foot);
+        // Cut off at the top (image edge, or the sky the detector mosaic left out) or bottom:
+        // the apparent height says nothing about distance.
+        const bool clippedTop=a.y<.01f||a.y<=w.visibleTop+.01;
+        const double sizeM=clippedTop||a.y+a.h>.99f?std::numeric_limits<double>::infinity():sizeDistance(r.category,a.h);
+        // A small box must stand on the road where its size says it is: a person printed on a
+        // billboard, or anything raised above the road, has its "feet" far too high for its size.
+        if(w.horizonMeasured&&a.h<.15f&&std::isfinite(sizeM)&&(!std::isfinite(r.distanceM)||r.distanceM>2.2*sizeM||r.distanceM<sizeM/2.2))continue;
+        // A "person" coming toward us faster than anyone walks or jogs (its own approach, after
+        // removing ours, > 3.5 m/s) is a rider whose bike the detector missed (head-on riders
+        // often show only the body): oncoming traffic, not a pedestrian to brake for.
+        if(r.category==0&&r.expansion>0&&std::isfinite(sizeM)&&speedKnown&&sizeM*r.expansion-std::max(0.,v)/3.6>3.5)r.category=3;
+        // Far away the ground cue is fragile (a fraction of a degree of horizon error); where
+        // both cues agree, their geometric mean is the distance.
+        if(std::isfinite(sizeM)&&std::isfinite(r.distanceM)&&r.distanceM>15)r.distanceM=std::sqrt(r.distanceM*sizeM);
         // Flow-based TTC only for road users close enough for it to be plausible.
         if(std::isfinite(a.tti)&&a.tti>0&&(a.h>.15f||r.foot>.85))r.ttc=a.tti;
         if(r.expansion>.08)r.ttc=std::min(r.ttc,1/r.expansion);
         const double edge=std::max(0.,std::abs(r.center-.5)-a.w*.5),half=corridor(foot);
         r.inPath=edge<half&&foot>.45;
         if(!r.inPath&&r.inwardRate>.03)r.enterSeconds=(edge-half)/r.inwardRate;
-        // Near enough to matter now: within ~25 m, or 2.5 stopping distances when faster.
-        const bool near=r.distanceM<=std::max(25.,2.5*stopM);
+        // Near enough to matter now: within ~6 s at this speed (an instructor names a road user
+        // in the path well before braking is needed), at least ~25 m or 2.5 stopping distances.
+        const double mps=(speedKnown?std::max(0.,v):15)/3.6,reach=std::max({25.,2.5*stopM,6*mps});
+        const bool near=r.distanceM<=reach;
         // "Brake now" is for road users inside stopping distance plus a margin; a distant
         // box's noisy growth must not read as an imminent collision.
         // Two independent cues must agree before braking advice: ground contact below the
         // horizon (fragile near the horizon) and apparent size (unusable when clipped).
-        const bool clipped=a.y<.01f||a.y+a.h>.99f;
-        const double confirmM=clipped?r.distanceM:std::max(r.distanceM,sizeDistance(a.category,a.h));
+        const double confirmM=std::isfinite(sizeM)?std::max(r.distanceM,sizeM):r.distanceM;
         const bool brakeRange=confirmM<=1.5*stopM+6,slowRange=confirmM<=3*stopM+12;
         // 2. Classify the conflict.
         // Keep-left traffic: a vehicle right of the path centre that is closing fast
@@ -203,8 +229,8 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         else if(r.inPath&&near&&slowRange&&r.ttc<stopping+2.5+(r.category==5||r.category==7?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
         // Crawling up to a vulnerable road user right in front: be ready to stop.
         else if(r.inPath&&foot>.62&&vulnerable(r.category)&&v>3&&v<15) {r.kind=RiskKind::InPath;r.level=2;}
-        else if(r.category==0&&!r.inPath&&edge<half+.15&&foot>.55&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
-        else if(r.inPath&&foot>.58&&v>5) {r.kind=RiskKind::InPath;r.level=1;}
+        else if(r.category==0&&!r.inPath&&edge<half+.15&&r.distanceM<=std::max(24.,5*mps)&&foot>.52&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
+        else if(r.inPath&&r.distanceM<=std::max(15.,.8*reach)&&foot>.52&&v>5) {r.kind=RiskKind::InPath;r.level=1;}
         else if(r.inPath&&foot>.58&&!speedKnown) {r.kind=RiskKind::InPath;r.level=1;} // Awareness only (see actionFor).
         // Temporal confirmation: a road user must be seen consistently before it can
         // drive an instruction (single-frame flickers of the mount or reflections cannot).

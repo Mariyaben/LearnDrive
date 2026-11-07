@@ -65,6 +65,8 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
     private val directionTile=FrameLayout(context).apply {background=CoachStyle.panel(context,CoachStyle.amber,12,android.graphics.Color.TRANSPARENT)
         addView(directionIcon,LayoutParams(dp(28),dp(28),Gravity.CENTER))}
     private var directionKind="location"
+    // The next-maneuver card under the map (hidden while Google's own banner shows the same).
+    private val routeCard=LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(10),dp(14),dp(10));setBackgroundColor(CoachStyle.raised)}
     private var destinationPage=false
     private var keyboardVisible=false
     private var running=false
@@ -89,7 +91,6 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         coachStrip.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_VERTICAL;addView(coachContext,LinearLayout.LayoutParams(-1,-2));addView(coachText,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(5)})},LinearLayout.LayoutParams(0,-1,1f))
         coachStrip.addView(quickStartButton,LinearLayout.LayoutParams(-2,dp(56)).apply {marginStart=dp(12)});content.addView(coachStrip,LinearLayout.LayoutParams(-1,dp(96)))
         mapColumn.addView(mapHost,LinearLayout.LayoutParams(-1,0,1f))
-        val routeCard=LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(10),dp(14),dp(10));setBackgroundColor(CoachStyle.raised)}
         routeCard.addView(directionTile,LinearLayout.LayoutParams(dp(46),dp(46)).apply {marginEnd=dp(12)})
         routeCard.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;addView(maneuverText);addView(navigationStatus,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(4)})},LinearLayout.LayoutParams(0,-2,1f))
         routeCard.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.END;addView(maneuverDistance);addView(maneuverProvider)},LinearLayout.LayoutParams(-2,-2).apply {marginStart=dp(8)})
@@ -140,6 +141,8 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         val valid=gear?.takeIf {it in 1..12&&!evidence.isNullOrBlank()};gearValue.setTextIfChanged(valid?.let {"Gear $it"}?:"Gear —");gearSource.setTextIfChanged(if(valid==null)"Not measured" else evidence.orEmpty())
         val visibility=if(valid==null)GONE else VISIBLE;if(gearTile.visibility!=visibility)gearTile.visibility=visibility
     }
+    /** Google's banner already shows the maneuver and distance: give the map that room. */
+    fun setRouteCardVisible(visible:Boolean){val v=if(visible)VISIBLE else GONE;if(routeCard.visibility!=v)routeCard.visibility=v}
     fun setDestination(label:String?){destinationButton.setTextIfChanged(label?.takeIf {it.isNotBlank()}?:"Where to?")}
     fun setCoachPresentation(instruction:String,context:String){coachText.setTextIfChanged(instruction);coachContext.setTextIfChanged(context)}
     fun setManeuver(instruction:String?,distanceMetres:Double?=null) {

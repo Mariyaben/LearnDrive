@@ -125,10 +125,11 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     if(primaryActor)plan.ctx(actorContext(*primaryActor));
     if(!actions(primary.prompt,v,plan))return false;
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
-    if(primary.lessonStep)navigation(w,primary.lessonStep,v,plan);
     // Indian road practice the recorded sentence does not say: sound the horn when entering
     // a junction and before passing a person or two-wheeler at the road edge.
     if(primary.prompt==Prompt::junctionEntry)plan.act(F::soundHorn);
+    // What Google says is there (after the horn, so pulling over at the destination drops it).
+    if(primary.lessonStep)navigation(w,primary.lessonStep,v,plan);
     if(primaryActor&&primaryActor->kind==RiskKind::Roadside&&(primaryActor->category==0||primaryActor->category==1||primaryActor->category==3)&&v>5)
         plan.act(F::soundHorn);
     const bool urgent=primary.urgent;
@@ -190,6 +191,9 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=named&&primary.origin!=5&&!plan.navigation())
             plan.ctx(w.route.feature==4?F::leftTurnAhead:w.route.feature==5?F::rightTurnAhead:F::junctionAhead);
     }
+    // An urgent instruction has room for one scene word: the reason (what is there), never the
+    // slope ("Downhill. Brake now." gave no reason to brake). The slope still sets the gear.
+    if(urgent&&plan.contexts>1){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);}
     // An urgent moment sounds different from routine advice: "Brake now", not "Brake gently".
     if(urgent&&plan.has(F::brakeGently)){plan.drop(F::brakeGently);plan.act(F::brakeNow);}
     // 6. Make the action set consistent: braking replaces easing off; one gear target.

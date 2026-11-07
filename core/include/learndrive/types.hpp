@@ -57,8 +57,10 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     // Lane keeping on marked roads (lane lines seen consistently), origin 6.
     driftLeftCentre=87,driftRightKeepLeft=88,
     // Road knowledge ahead from the map (origin 6): speed bump, sharp (blind) bend.
-    bumpAhead=89,bendHorn=90 };
-constexpr int promptCount=90;
+    bumpAhead=89,bendHorn=90,
+    // Google found a new route (a missed turn, or a better way): calm, no blame, no promise.
+    routeChanged=91 };
+constexpr int promptCount=91;
 inline bool isRiskPrompt(Prompt p){const int i=int(p);return i>=81&&i<=86;}
 // Instructor phrase fragments. The situation planner composes one utterance per
 // moment from these (context clauses, then actions), e.g. "Uphill. Oncoming truck.
@@ -132,7 +134,7 @@ inline bool isActorActionPrompt(Prompt p){const int i=int(p);return i>=64&&i<=68
 // Prompts the risk coach (origin 7) may use.
 inline bool riskMayUse(Prompt p){return isRiskPrompt(p)||isActorActionPrompt(p)||p==Prompt::pedestrianSpace||p==Prompt::riderSpace||p==Prompt::vehicleSpace;}
 // Vehicle-control coaching from measured speed/slope/route (origin 6).
-inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=90);}
+inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=91);}
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -176,7 +178,7 @@ inline int priority(Prompt p) {
     case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::oncomingKeepLeft:return 4;
     case Prompt::vehicleCrossingWait:case Prompt::personCrossingStop:return 5;
     case Prompt::personLeftSpace:case Prompt::personRightSpace:case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return 3;
-    case Prompt::bumpAhead:return 3;case Prompt::bendHorn:return 2;
+    case Prompt::bumpAhead:return 3;case Prompt::bendHorn:return 2;case Prompt::routeChanged:return 2;
     case Prompt::crossedLookAgain:return 2;
     case Prompt::ease:case Prompt::close:case Prompt::closeGear:case Prompt::holdLaneDistance:case Prompt::keepSafeGap:
     case Prompt::slowSmoothly:case Prompt::watchPedestrians:return 3;
@@ -222,6 +224,7 @@ inline const char* promptText(Prompt p) {
     case Prompt::driftRightKeepLeft:return "You are drifting right. Keep left";
     case Prompt::bumpAhead:return "Speed bump ahead. Slow down, clutch down and change down";
     case Prompt::bendHorn:return "Sharp bend ahead. Sound the horn and keep left";
+    case Prompt::routeChanged:return "The route has changed. Keep going and follow the new route";
     case Prompt::junctionApproach:return "Set a suitable approach speed. Prepare to give way";
     case Prompt::hill: return "Uphill. Lower gear if needed";
     case Prompt::ease: return "Ease off accelerator";
