@@ -15,7 +15,7 @@
     <!-- Only for the opt-in instructor benchmark recording; requested when the user chooses it. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <application android:label="LearnDrive.AI" android:allowBackup="false" android:theme="@style/LearnDriveTheme" android:supportsRtl="true">
+    <application android:label="LearnDrive.AI" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/LearnDriveTheme" android:supportsRtl="true">
         <meta-data android:name="com.google.android.geo.API_KEY" android:value="${MAPS_API_KEY}" />
         <service android:name=".navigation.google.GoogleNavigationUpdatesService" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:windowSoftInputMode="adjustResize">

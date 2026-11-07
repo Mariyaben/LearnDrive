@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher foreground: the learner plate (the in-app brand mark), an amber tile with a bold
+     asphalt "L", on a soft shadow. Kept inside the 66 dp safe circle so no launcher mask clips it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shadow -->
+    <path
+        android:fillColor="#73000000"
+        android:pathData="M43.5,30.6 H64.5 A8.5,8.5 0 0 1 73,39.1 V60.1 A8.5,8.5 0 0 1 64.5,68.6 H43.5 A8.5,8.5 0 0 1 35,60.1 V39.1 A8.5,8.5 0 0 1 43.5,30.6 Z" />
+    <!-- Plate -->
+    <path android:pathData="M43.5,28 H64.5 A8.5,8.5 0 0 1 73,36.5 V57.5 A8.5,8.5 0 0 1 64.5,66 H43.5 A8.5,8.5 0 0 1 35,57.5 V36.5 A8.5,8.5 0 0 1 43.5,28 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="28"
+                android:endX="54"
+                android:endY="66"
+                android:startColor="#FFFFC54F"
+                android:endColor="#FFF4A30E" />
+        </aapt:attr>
+    </path>
+    <!-- The L -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M48.3,36.55 L48.3,56.5 L62.55,56.5"
+        android:strokeWidth="6.46"
+        android:strokeColor="#FF0B0F0E"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter" />
+</vector>
