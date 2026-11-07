@@ -35,6 +35,12 @@ void navigation(const WorldState& w,int step,double v,Plan& plan) noexcept {
         if(m==1||m==2){plan.ctx(m==1?F::leftTurnHere:F::rightTurnHere);}
         else if(m==7){plan.ctx(F::giveWayRight);}
         else if(m==9){plan.ctx(F::pullOver);plan.drop(F::lookBothWays);plan.drop(F::soundHorn);plan.act(F::checkMirrors);}
+        // A fork, a ramp or a merge is not a junction to stop at: no clutch, no looking both ways,
+        // no horn; keep to the side (or merge) and check the mirrors.
+        else if(m==3||m==4||m==5) {
+            plan.drop(F::clutchDown);plan.drop(F::lookBothWays);plan.drop(F::soundHorn);plan.act(F::checkMirrors);
+            if(m==5)plan.ctx(F::mergeCarefully);else if(w.route.side<0)plan.ctx(F::keepLeft);else if(w.route.side>0)plan.ctx(F::keepRightRoute);
+        }
         return;
     }
     F what=F::none;
@@ -122,6 +128,10 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     Plan plan;plan.horn=w.hornRules;
     // 1. The primary road user (if any) names the situation it is about.
     const ActorRisk* primaryActor=primary.identity.space==IdentitySpace::Optical?risk.riskForOptical(primary.identity.id):nullptr;
+    // A road-user instruction always says who it is about: if that road user's track cannot be
+    // found, the recorded sentence (which names it) is spoken instead (Nov 4: a bare "Stop and
+    // wait. Let them pass.").
+    if(primary.origin==7&&!primaryActor)return false;
     if(primaryActor)plan.ctx(actorContext(*primaryActor));
     if(!actions(primary.prompt,v,plan))return false;
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
@@ -188,7 +198,8 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         // Only once its preparation is due or given: naming the turn earlier and again at
         // its own instruction is repetition, not information.
         const double named=j.prepareLead>0?j.prepareLead+1:25;
-        if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=named&&primary.origin!=5&&!plan.navigation())
+        // Not once "turn here" was said or the turn is under way (Nov 5: "Left turn ahead" after it).
+        if(j.event&&j.leadSeconds>=actByEntryClose&&j.leadSeconds<=named&&!j.entryDelivered&&primary.origin!=5&&!plan.navigation())
             plan.ctx(w.route.feature==4?F::leftTurnAhead:w.route.feature==5?F::rightTurnAhead:F::junctionAhead);
     }
     // An urgent instruction has room for one scene word: the reason (what is there), never the

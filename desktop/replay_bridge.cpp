@@ -74,6 +74,9 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
         f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1);
 }
 EXPORT void replay_camera_horizon(Replay* r,double fraction){ld_camera_horizon(r->engine,fraction);}
+EXPORT void replay_camera_yaw(Replay* r,double time,double rate){ld_camera_yaw(r->engine,time,rate);}
+// The phone's audio rule: may instruction `next` interrupt the one playing (`current`)?
+EXPORT int replay_prompt_may_interrupt(int next,int current){return ld_prompt_may_interrupt(next,current);}
 // The app's detector mosaic for the frame (same YUV layout as replay_prepare); 2 = zoom band.
 EXPORT int replay_prepare_mosaic(Replay* r,const uint8_t* yuv,float* tensor,double time) {
     const auto f=r->frame(yuv);

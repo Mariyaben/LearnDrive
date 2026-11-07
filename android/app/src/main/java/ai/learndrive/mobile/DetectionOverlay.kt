@@ -21,12 +21,14 @@ open class DetectionOverlay(context:Context):View(context) {
     override fun onDraw(canvas:Canvas) {
         super.onDraw(canvas)
         val frame=result?:return
-        val scale=minOf(width.toFloat()/frame.width,height.toFloat()/frame.height)
-        val w=frame.width*scale;val h=frame.height*scale;val dx=(width-w)/2;val dy=(height-h)/2
+        // The preview fills the view aligned to its bottom-right (PreviewView FILL_END): a wide panel
+        // crops the top of the picture (sky), a tall one its left side.
+        val scale=maxOf(width.toFloat()/frame.width,height.toFloat()/frame.height)
+        val w=frame.width*scale;val h=frame.height*scale;val dx=width-w;val dy=height-h
         frame.road?.takeIf {it.valid&&it.points.isNotEmpty()}?.let {road ->
             val path=Path();road.points.forEachIndexed {i,p->if(i==0)path.moveTo(dx+p.x*w,dy+p.y*h) else path.lineTo(dx+p.x*w,dy+p.y*h)}
             canvas.drawPath(path,roadPaint)
-            canvas.drawText(road.status,dx+8,dy+labels.textSize+8,labels)
+            canvas.drawText(road.status,maxOf(dx,0f)+8,maxOf(dy,0f)+labels.textSize+8,labels)
         }
         for(box in frame.detections) {
             val left=dx+box.x*w;val top=dy+box.y*h

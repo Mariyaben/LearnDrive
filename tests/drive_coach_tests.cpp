@@ -12,7 +12,10 @@ using namespace ld;using namespace ld::coaching;
 namespace {
 int passed=0;
 void check(bool b,const char* reason){if(!b)throw std::runtime_error(reason);}
-template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
+int failed=0;
+// Every group runs: one failure no longer hides the rest of the suite.
+template<class F>void test(const char* name,F f){try{f();++passed;std::cout<<"PASS "<<name<<'\n';}
+    catch(const std::exception& e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}}
 WorldState road(double t){WorldState w;w.sourceId=1;w.frameSequence=uint64_t(t*1000)+1;w.now=w.captureTime=t;
     w.active=w.audioReady=true;w.telemetry={t,30,0,0,1,true,true,true,false,false,false};return w;}
 // Act-by schedule at 30 km/h: preparation 6.5-14.5 s, "brake, change down" 6.5-10.5 s,
@@ -140,6 +143,20 @@ int main(int argc,char** argv){try {
         const int plan=at(Prompt::junctionPlanLeft),approach=std::max(at(Prompt::junctionBrakeGearDown),at(Prompt::junctionGearDown)),entry=at(Prompt::junctionEntry),exit=at(Prompt::turnExit);
         if(!(plan>=0&&approach>plan&&entry>approach&&exit>entry)){for(int x:said)std::cerr<<x<<' ';std::cerr<<std::endl;}
         check(plan>=0&&approach>plan&&entry>approach&&exit>entry,"instructor junction sequence incomplete or out of order");});
+    test("a started junction entry finishes inside the junction through braking, a jolt and a late frame",[]{Fixture f(1,true);
+        uint64_t entry=0;double start=0;
+        for(int i=10;i<=420&&!entry;++i){const double t=i/10.;auto w=road(t);const double lead=40-t;
+            w.telemetry.speedKmh=t<32?30:std::max(8.,30-(t-32)*4);junction(w,lead);w.route.distanceM=lead*w.telemetry.speedKmh/3.6;
+            const auto d=f.decide(w);if(!d.eligible)continue;const int p=int(d.ticket.candidate.prompt);
+            if(!f.e->accept(f.seq,p,w,t,true))continue;check(f.e->playbackStarted(f.seq,p,w,t,1),"onset");
+            if(p==int(Prompt::junctionEntry)){entry=f.seq;start=t;}else check(f.e->deliveryEvent(f.seq,p,DeliveryStage::Completed,t),"completion");}
+        check(entry!=0,"entry step missing");
+        // 2.5 s later the car is in the junction: Google moved to its next step, the learner brakes,
+        // the road jolts and the camera frame is late. The sentence finishes.
+        auto w=road(start+2.5);junction(w,60);w.route.eventId=10;w.route.feature=0;w.telemetry.speedKmh=10;
+        w.telemetry.braking=w.telemetry.shock=true;w.captureTime=start+1.9;
+        check(f.e->continuationValid(entry,int(Prompt::junctionEntry),w,start+2.5,1),"entry instruction cut off inside the junction");
+        w.route.routeId=99;check(!f.e->continuationValid(entry,int(Prompt::junctionEntry),w,start+2.5,1),"lesson continued after Google replaced the route");});
     test("risk coach reasons over each road user's own motion history",[]{Fixture f(2);
         // A car crossing from the left toward the path at a junction, growing as it nears.
         for(int i=10;i<=26;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=12;
@@ -152,10 +169,14 @@ int main(int argc,char** argv){try {
         check(top.kind==RiskKind::Crossing,"crossing road user not recognised");});
     test("one picture of the moment: uphill, oncoming truck and a pedestrian become one instruction",[]{
         Fixture f(2);std::string spoken;bool composed=false;
-        for(int i=10;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=25;w.telemetry.pitchDegrees=7;w.gradeBand=slopeBand(7);
-            // Truck coming down toward us on the right, growing in the image.
+        // A quiet lead-in (10 km/h on the flat: the truck still out of reach, the pedestrian below
+        // roadside speed) gives both road users real motion history before the uphill begins.
+        for(int i=5;i<=40;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=t<1?10:25;w.telemetry.pitchDegrees=t<1?0:7;w.gradeBand=slopeBand(w.telemetry.pitchDegrees);
+            // Truck coming down toward us in its own lane, 2.4 m right of our path, closing at 15 m/s
+            // (ours 6.9 + its 8): its box grows, sits on the road and drifts outward like a real one.
+            const double gap=std::max(6.,40-15*(t-1));
             ActorObservation k;k.identity={IdentitySpace::Optical,701,0};k.captureTime=t;k.confidence=.9;k.relevant=true;k.category=7;
-            const float s=float(.14*std::exp(.35*(t-1)));k.w=s;k.h=s;k.x=float(.66-s*.5);k.y=float(.74-s);w.actors[w.actorCount++]=k;
+            const float s=float(.96*3/gap);k.h=s;k.w=s*.9f;k.x=float(.5+.72*2.4/gap)-k.w*.5f;k.y=float(.5+.96*1.25/gap)-s;w.actors[w.actorCount++]=k;
             // Pedestrian standing at the left edge of the road.
             ActorObservation p;p.identity={IdentitySpace::Optical,702,0};p.captureTime=t;p.confidence=.9;p.relevant=true;p.category=0;
             p.x=.22f;p.y=.45f;p.w=.06f;p.h=.25f;w.actors[w.actorCount++]=p;
@@ -168,6 +189,62 @@ int main(int argc,char** argv){try {
         check(spoken.find("Uphill.")!=std::string::npos&&spoken.find("Oncoming truck.")!=std::string::npos&&spoken.find("Person on the left.")!=std::string::npos,
             "the instruction does not name the slope, the truck and the pedestrian together");
         check(spoken.find("Keep left.")!=std::string::npos,"no keep-left plan for an oncoming truck");});
+    // Ground-consistent synthetic road users (focal ~0.96 image heights = 0.72 image widths,
+    // camera 1.25 m up, horizon mid-image): a box at forward distance z and lateral offset X.
+    auto place=[](WorldState& w,uint64_t id,int category,double z,double X,double tall,double wide,double imageShift=0){
+        ActorObservation a;a.identity={IdentitySpace::Optical,id,0};a.captureTime=w.now;a.confidence=.9;a.relevant=true;a.category=category;
+        a.h=float(.96*tall/z);a.w=float(.72*wide/z);a.x=float(.5+.72*X/z+imageShift)-a.w*.5f;a.y=float(.5+.96*1.25/z)-a.h;w.actors[w.actorCount++]=a;};
+    auto said=[](Fixture& f,const WorldState& w,std::vector<int>& prompts){const auto d=f.decide(w);if(!d.eligible)return;
+        const auto& c=d.ticket.candidate;prompts.push_back(int(c.prompt));
+        check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");};
+    auto has=[](const std::vector<int>& v,Prompt p){return std::find(v.begin(),v.end(),int(p))!=v.end();};
+    test("turning is not crossing: a parked car on a left bend (Nov 4/6), with the turn rate known",[&]{
+        // The learner drives a left arc (20 km/h, 15 deg/s); a car is parked 2.6 m inside the bend
+        // 22 m ahead. In the turning car's frame it stays at the road edge, but turning slides it
+        // across the image toward the path.
+        auto run=[&](bool yaw){Fixture f(2);std::vector<int> p;const double v=5.56,omega=.26,R=v/omega,rin=R-2.6,phi=22/R;
+            const double ox=rin*std::sin(phi),oy=R-rin*std::cos(phi);
+            for(int i=5;i<=40;++i){const double t=i/10.,psi=omega*(t-.5),dx=ox-R*std::sin(psi),dy=oy-(R-R*std::cos(psi));
+                const double z=dx*std::cos(psi)+dy*std::sin(psi),left=-dx*std::sin(psi)+dy*std::cos(psi);if(z<4)break;
+                auto w=road(t);w.telemetry.speedKmh=20;w.yawRate=omega;w.yawKnown=yaw;place(w,801,2,z,-left,1.5,1.8);said(f,w,p);}
+            return p;};
+        check(has(run(false),Prompt::vehicleCrossingWait),"control: without the turn rate the bend should read as crossing");
+        check(!has(run(true),Prompt::vehicleCrossingWait),"a parked car on a bend was called crossing");});
+    test("a figure on a billboard is not a road user; a person standing there is",[&]{
+        auto run=[&](bool ground){Fixture f(2);std::vector<int> p;
+            // The phone measures its horizon (here mid-image). The billboard's printed figure is
+            // 2.4 m tall with its feet 1 m above the road (just under the camera's 1.25 m).
+            for(int i=5;i<=30;++i){const double t=i/10.,z=std::max(4.,18-7.8*(t-.5));auto w=road(t);w.telemetry.speedKmh=28;w.horizonMeasured=true;
+                if(ground)place(w,802,0,z,-2.4,1.7,.5);
+                else{ActorObservation a;a.identity={IdentitySpace::Optical,802,0};a.captureTime=t;a.confidence=.9;a.relevant=true;a.category=0;
+                    a.h=float(.96*2.4/z);a.w=a.h*.3f;a.x=float(.5-.72*2.4/z)-a.w*.5f;a.y=float(.5+.96*.25/z)-a.h;w.actors[w.actorCount++]=a;}
+                said(f,w,p);}
+            return p;};
+        const auto real=run(true),billboard=run(false);
+        check(has(real,Prompt::personLeftSpace)||has(real,Prompt::personEaseCover)||has(real,Prompt::pedestrianSpace),"control: a person at the roadside got no instruction");
+        for(Prompt q:{Prompt::personLeftSpace,Prompt::personRightSpace,Prompt::personEaseCover,Prompt::pedestrianSpace,Prompt::personCrossingStop,Prompt::brakeReadyStop,Prompt::clutchHoldBrake})
+            check(!has(billboard,q),"a billboard figure produced a road-user instruction");});
+    test("a person half hidden behind a car is still a road user, not a billboard",[&]{Fixture f(1);
+        bool person=false;
+        for(int i=5;i<=30;++i){const double t=i/10.,zc=std::max(6.,18-5.56*(t-.5));auto w=road(t);w.telemetry.speedKmh=20;w.horizonMeasured=true;
+            place(w,805,2,zc,-1.2,1.2,1.7);  // a low car stopped ahead-left
+            const auto car=w.actors[w.actorCount-1];
+            // A person standing just beyond it: only the part above its roof shows, so the box bottom
+            // is the car's roof line, rising in the image as the learner approaches.
+            const double zp=zc+1;ActorObservation a;a.identity={IdentitySpace::Optical,806,0};a.captureTime=t;a.confidence=.9;a.relevant=true;a.category=0;
+            a.y=float(.5+.96*(1.25-1.75)/zp);a.h=car.y-a.y;a.w=float(.72*.5/zp);a.x=float(.5+.72*-1.2/zp)-a.w*.5f;w.actors[w.actorCount++]=a;
+            f.decide(w);for(size_t k=0;k<f.e->risk().riskCount();++k)person|=f.e->risk().riskAt(k).category==0;}
+        check(person,"a person half hidden behind a car was dropped");});
+    test("a person walking along the road edge ahead never gets 'Brake now'",[&]{Fixture f(1);std::vector<int> p;
+        for(int i=5;i<=30;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=20;
+            place(w,803,0,std::max(5.,24-5.56*(t-.5)+1.2*(t-.5)),1.9,1.7,.5);said(f,w,p);} // walking away from us at 1.2 m/s
+        check(!has(p,Prompt::brakeReadyStop)&&!has(p,Prompt::clutchHoldBrake),"roadside pedestrian got a braking instruction");});
+    test("a rider head-on in the middle of the road is oncoming, not 'Brake now' (Nov 6)",[&]{Fixture f(1);std::vector<int> p;
+        for(int i=5;i<=25;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=16;
+            place(w,804,3,std::max(6.,32-(4.44+7)*(t-.5)),.2,1.6,.7);said(f,w,p);}
+        if(!has(p,Prompt::oncomingKeepLeft)){for(int x:p)std::cerr<<x<<' ';std::cerr<<std::endl;}
+        check(has(p,Prompt::oncomingKeepLeft),"head-on rider not called oncoming");
+        check(!has(p,Prompt::brakeReadyStop),"head-on rider got 'Brake now'");});
     test("downhill adds engine braking to the plan for the same pedestrian",[]{
         auto run=[](double pitch){Fixture f(2);std::string said;
             for(int i=10;i<=30;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;w.telemetry.pitchDegrees=pitch;w.gradeBand=slopeBand(pitch);
@@ -249,15 +326,19 @@ int main(int argc,char** argv){try {
         // A routine advisory validated at onset finishes while perception is live.
         w=road(1.36);check(f.e->continuationValid(1,64,w,1.36,1),"detector dropout truncated routine speech");
         w=road(2.05);auto gone=w;user(gone);gone.actors[0].relevant=false;check(f.e->continuationValid(1,64,gone,2.05,1),"moved-aside actor truncated routine speech");
-        w=road(2.1);w.captureTime=1.5;check(!f.e->continuationValid(1,64,w,2.1,1),"routine speech continued while perception was blind");
-        w=road(2.1);w.telemetry.shock=true;check(!f.e->continuationValid(1,64,w,2.1,1),"shock did not stop routine speech");
+        // Started speech finishes its sentence through a late camera frame, a jolt or braking
+        // (Nov 6: those cut nearly every instruction mid-word); it stops when perception stops.
+        w=road(2.1);w.captureTime=1.5;check(f.e->continuationValid(1,64,w,2.1,1),"a late camera frame cut routine speech off");
+        w=road(2.1);w.telemetry.shock=w.telemetry.braking=true;check(f.e->continuationValid(1,64,w,2.1,1),"a jolt or braking cut routine speech off");
+        w=road(2.1);w.active=false;check(!f.e->continuationValid(1,64,w,2.1,1),"routine speech continued after perception stopped");
         // Urgent speech and the 0.7.1 comparison mode keep the original 350 ms budget.
         Fixture u(1,true);w=road(1);user(w,8,true);check(u.accept(w,true)==67&&u.e->playbackStarted(1,67,w,1,1),"urgent onset");
         // An urgent risk instruction finishes its sentence while perception is live
         // (road user seen within 3.5 s), and stops when perception goes blind.
         w=road(1.36);check(u.e->continuationValid(1,67,w,1.36,1),"urgent instruction truncated by a brief detector dropout");
         w=road(4.6);check(!u.e->continuationValid(1,67,w,4.6,1),"urgent speech outlived its evidence");
-        w=road(1.5);w.captureTime=1.0;check(!u.e->continuationValid(1,67,w,1.5,1),"urgent speech continued with blind perception");
+        w=road(1.5);w.captureTime=1.0;check(u.e->continuationValid(1,67,w,1.5,1),"a late camera frame cut an urgent instruction off");
+        w=road(1.5);w.active=false;check(!u.e->continuationValid(1,67,w,1.5,1),"urgent speech continued after perception stopped");
         Fixture old(1,true);old.e->enableTaskScheduling(false);w=road(1);user(w);check(old.accept(w,true)==44&&old.e->playbackStarted(1,44,w,1,1),"old onset");
         w=road(1.36);check(!old.e->continuationValid(1,44,w,1.36,1),"0.7.1 comparison mode changed");
         user(w,99);check(!old.e->continuationValid(1,44,w,1.36,1),"replacement actor continued old cue");});
@@ -311,5 +392,5 @@ int main(int argc,char** argv){try {
                 check(state.find(std::string("\"")+key+"\":0")==std::string::npos,"mixed drive omitted a supported task family");
         }
     });
-    std::cout<<passed<<" automatic driving groups passed (including 90 matrix cases and three continuous mixed drives)\n";return 0;
+    std::cout<<passed<<" automatic driving groups passed (including 90 matrix cases and three continuous mixed drives)\n";if(failed)std::cerr<<failed<<" groups failed\n";return failed?1:0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

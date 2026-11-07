@@ -76,6 +76,10 @@ private:
     void learnMask(const WorldState&,double v) noexcept;
     uint64_t nextMotion_=1;
     int proposal_{},proposalLevel_{};bool urgent_{},proposalClosing_{};uint64_t proposalId_{};double proposalCapture_=-1,lastGapCue_=-1;
+    // Recent turn rate (rad/s, left positive), to remove turning from road users' image motion.
+    std::array<double,96> yawT_{},yawV_{};size_t yawCursor_{},yawCount_{};
+    double lastOncomingCue_=-1;
+    double meanYaw(double from,double to) const noexcept;
     std::array<uint32_t,8> counts_{};
 };
 }

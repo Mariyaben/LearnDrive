@@ -182,6 +182,9 @@ void ld_coaching_horn_rules(ld_engine*,int enabled);
 // Horizon row (fraction of image height) for filmed/replayed video, where the phone's own
 // pitch does not describe the camera; NaN restores the measured camera pitch.
 void ld_camera_horizon(ld_engine*,double fraction);
+// Replays of filmed video: the camera's turn rate (rad/s, left positive) measured at `time`
+// from the video itself; the phone uses its gyroscope.
+void ld_camera_yaw(ld_engine*,double time,double radiansPerSecond);
 // Lane model output (two-channel logits, drivable + lanes, model image size) for
 // the frame most recently prepared; lane keeping on marked roads only.
 int ld_lane_map(ld_engine*,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height);

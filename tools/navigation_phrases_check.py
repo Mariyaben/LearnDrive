@@ -90,7 +90,8 @@ def run_case(native, durations, fragment_durations, maneuver, side, exit_, nxt, 
             playing = 0
         native.tick(handle, t, v, 1, playing, rv.ptr(decision))
         selected = int(decision[0])
-        if selected and decision[6] and decision[7]:
+        # As on the phone: a new instruction starts only if nothing plays or it may interrupt it.
+        if selected and decision[6] and decision[7] and (not playing or native.may_interrupt(selected, playing)):
             if native.coaching_accepted(handle, selected, t) and native.coaching_onset(handle, selected, t):
                 said.append((t, left, v, native.prompt(selected).decode()))
                 playing, playing_until = selected, t + duration(selected)
@@ -108,6 +109,8 @@ def main():
     native._bind({"navigation_at": ([P, C.c_double, C.c_uint64, C.c_int, C.c_int, C.c_double, C.c_double, C.c_double,
                                      C.c_double, C.c_double, C.c_double], C.c_int),
                   "navigation_detail": ([P, C.c_double, C.c_int, C.c_int, C.c_int, C.c_double], None)})
+    native._bind({"prompt_may_interrupt": ([C.c_int, C.c_int], C.c_int)})
+    native.may_interrupt = native.prompt_may_interrupt
     durations, fragment_durations = {}, {}
     for prompt in range(1, native.prompt_count() + 1):
         with wave.open(str(ASSETS / f"audio/prompt-{prompt}.wav"), "rb") as clip:

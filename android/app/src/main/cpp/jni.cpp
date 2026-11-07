@@ -157,6 +157,7 @@ JNIEXPORT jintArray JNICALL JNI(promptFragments)(JNIEnv* e,jobject,jint id) {
     if(out&&n>0)e->SetIntArrayRegion(out,0,n,fragments);return out;
 }
 JNIEXPORT jint JNICALL JNI(fragmentCount)(JNIEnv*,jobject) {return ld_fragment_count();}
+JNIEXPORT jstring JNICALL JNI(fragmentText)(JNIEnv* e,jobject,jint id) {return e->NewStringUTF(ld_fragment_text(id));}
 JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint roadClass,jlongArray nodes,jdoubleArray latLon) {
     const jsize n=e->GetArrayLength(nodes);if(n<2||e->GetArrayLength(latLon)!=2*n)return JNI_FALSE;
     std::vector<int64_t> ids(static_cast<size_t>(n));std::vector<double> ll(static_cast<size_t>(2*n));

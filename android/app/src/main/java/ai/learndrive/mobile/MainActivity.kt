@@ -216,6 +216,9 @@ class MainActivity : ComponentActivity() {
     private var scriptStart=0.0
     private var lastRender=0.0
     @Volatile private var audioStatus="Loading bundled voice"
+    // The phone's own natural voice (offline), rendered once per phrase; see PhoneVoice.
+    private lateinit var phoneVoice:ai.learndrive.mobile.audio.PhoneVoice
+    @Volatile private var voiceStatus="Natural voice: starting"
     private var visionStatus="Starting camera and bundled models"
     @Volatile private var warningStatus="Hold the phone still for calibration"
     private val pickVideo=registerForActivityResult(ActivityResultContracts.OpenDocument()) {uri->if(uri!=null)startVideo(uri)}
@@ -283,7 +286,9 @@ class MainActivity : ComponentActivity() {
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
-        preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FIT_CENTER;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
+        // Fill the road camera panel, aligned to the bottom: a wide panel crops sky, never the road
+        // (DetectionOverlay draws boxes with the same mapping).
+        preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FILL_END;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
         overlay=DetectionOverlay(this)
         cameraFrame=FrameLayout(this).apply {addView(preview,FrameLayout.LayoutParams(-1,-1));addView(this@MainActivity.overlay,FrameLayout.LayoutParams(-1,-1))}
         dashboard=ai.learndrive.mobile.ui.UnifiedDriveDashboard(this,cameraFrame)
@@ -368,6 +373,12 @@ class MainActivity : ComponentActivity() {
         moreOptions.addView(Switch(this).apply {
             tag="coaching-voice";text="Coaching voice";setTextColor(CoachStyle.text);isChecked=coachingSettings.voiceEnabled
             setOnCheckedChangeListener {_,enabled->changeCoachingSettings(coachingSettings.profile,enabled)}
+        })
+        moreOptions.addView(Switch(this).apply {
+            tag="natural-voice";text="Natural phone voice";setTextColor(CoachStyle.text)
+            isChecked=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+            setOnCheckedChangeListener {_,enabled->if(::audio.isInitialized)audio.naturalVoice=enabled
+                getSharedPreferences("driving_advice",MODE_PRIVATE).edit().putBoolean("naturalVoice",enabled).apply()}
         })
         moreOptions.addView(text("Minimal keeps essential cues. Balanced spaces routine coaching. Guided adds more reminders. Visual coaching continues with voice off.",12f))
         reasoningStatus=text("Local pretrained AI is experimental, optional and off. It never speaks or controls live guidance.",12f)
@@ -539,8 +550,13 @@ class MainActivity : ComponentActivity() {
                 showSetup->{hideKeyboard();showSetup=false;updateSetupUi()}
                 else->finish()}
         }})
+        phoneVoice=ai.learndrive.mobile.audio.PhoneVoice(this) {message->main.post {voiceStatus=message}}
         audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority,
-            fragmentCount=core.fragmentCount(),fragments=core::promptFragments) {message->main.post {audioStatus=message}}
+            fragmentCount=core.fragmentCount(),fragments=core::promptFragments,fragmentText=core::fragmentText,
+            promptText=core::promptText,phoneVoice=phoneVoice) {message->main.post {audioStatus=message}}
+        audio.naturalVoice=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+        // Every phrase the coach can say, so the phone voice takes over only when all are rendered.
+        phoneVoice.require((1..core.promptCount()).map {core.promptText(it)}+(1..core.fragmentCount()).map {core.fragmentText(it)})
         audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
         researchEmergencies=Switch(this).apply {text="Lab only: unvalidated emergency commands";isChecked=false}
@@ -932,7 +948,7 @@ class MainActivity : ComponentActivity() {
             else if(!roadSource())"Lab screen test selected. Select the road camera to set up a mounted session."
             else if(moving)"Setup paused: measured speed is above 1 km/h. Stop and park before setup."
             else "Confirm the fixed forward-facing mount before starting."
-        setupStatus.setUiText("$heading\n$alignment\nCoaching: ${coachingSettings.profile.label} · voice ${if(coachingSettings.voiceEnabled)audioStatus else "off"}\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
+        setupStatus.setUiText("$heading\n$alignment\nCoaching: ${coachingSettings.profile.label} · voice ${if(coachingSettings.voiceEnabled)"$audioStatus · $voiceStatus" else "off"}\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
         // The entry action stays stable while frame age/capability changes. Its modal
         // explains readiness; both actual admission paths still enforce canStartRoad.
         setupStart.setUiText(if(!roadSource())"Use mounted road camera" else "Start session")
@@ -1223,9 +1239,8 @@ class MainActivity : ComponentActivity() {
             else->"measured speed unavailable"
         }
         currentAdvice=AdviceDisplay(telemetry,speedSource)
-        val mute=telemetry.braking||telemetry.hardBraking||telemetry.shock
-        if(mute&&!suppressed){audio.cancel();main.post {coachCaption.clear()}}
-        suppressed=mute
+        // Braking or a jolt never cuts an instruction off mid-word (Nov 6): the native engine
+        // decides what may start and lets started speech finish its sentence.
         val result=lastVision?.takeIf {it.frame?.sourceId==config.sourceId}
         val htime=if(desk)t else result?.time?:0.0
         val htti=if(desk)row?.tti?:config.tti else result?.tti?:Double.POSITIVE_INFINITY
@@ -1496,5 +1511,5 @@ class MainActivity : ComponentActivity() {
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {if(::phoneVoice.isInitialized)phoneVoice.close();if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }

@@ -198,6 +198,7 @@ class NativeCore : AutoCloseable {
     /** Fragment ids of a composed utterance (id >= 1000), in speaking order. */
     external fun promptFragments(id:Int):IntArray
     external fun fragmentCount():Int
+    external fun fragmentText(id:Int):String
     @Synchronized fun drivingReset()=drivingReset(handle)
     @Synchronized fun engineSample(t:Double,gear:Int,maxGear:Int,rpm:Double,lower:Double,upper:Double,load:Boolean)=engineSample(handle,t,gear,maxGear,rpm,lower,upper,load)
     @Synchronized fun drivingAdvice(t:Telemetry,ready:Boolean,manual:Boolean,slope:Boolean)=drivingAdvice(handle,t.values(),ready,manual,slope)

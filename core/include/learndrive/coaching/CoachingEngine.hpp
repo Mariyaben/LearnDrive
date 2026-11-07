@@ -91,6 +91,9 @@ struct WorldState {
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;
     bool horizonMeasured{};
+    // Turn rate (rad/s, left positive) from the gyroscope, or a replay's estimate from the video.
+    double yawRate{};
+    bool yawKnown{};
     // Top of the image the detector saw (fraction of height): above it (sky, cropped by the
     // detector mosaic) a box is cut off, so its apparent height says nothing about distance.
     double visibleTop{};

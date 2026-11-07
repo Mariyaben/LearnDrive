@@ -11,7 +11,10 @@ using namespace ld::coaching;
 namespace {
 int passed=0;
 void check(bool b,const char* why){if(!b)throw std::runtime_error(why);}
-template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
+int failed=0;
+// Every group runs: one failure no longer hides the rest of the suite.
+template<class F>void test(const char* name,F f){try{f();++passed;std::cout<<"PASS "<<name<<'\n';}
+    catch(const std::exception& e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}}
 WorldState world(double now,uint64_t source=1) {
     WorldState w;w.now=now;w.sourceId=source;w.frameSequence=uint64_t(now*1000)+1;w.captureTime=now;
     w.telemetry={now,30,0,0,1,true,true,true,false,false,false};w.active=true;w.audioReady=true;return w;
@@ -283,5 +286,5 @@ int main(){try {
         check(ld_coaching_continuation_valid(e.get(),d.sequence,d.prompt,t+.13,1),"stale box paired with newer frame truncated speech");
         check(std::string(ld_coaching_continuation_reason(e.get(),d.sequence,d.prompt,t+.13,1))=="OK","continuation reason");
     });
-    std::cout<<passed<<" coaching groups passed\n";return 0;
+    std::cout<<passed<<" coaching groups passed\n";if(failed)std::cerr<<failed<<" groups failed\n";return failed?1:0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
