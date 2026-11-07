@@ -145,6 +145,10 @@ class NativeCore : AutoCloseable {
     @Synchronized fun routeLine(latLon:DoubleArray?):Boolean=routeLine(handle,latLon)
     /** Metres from the car to each remaining maneuver, nearest first, at [time] (elapsedRealtime s). */
     @Synchronized fun routeManeuvers(time:Double,ahead:DoubleArray)=routeManeuvers(handle,time,ahead)
+    /** Detail of the Google step last sent with [navigationTurn] (same receipt time). Memory only. */
+    @Synchronized fun navigationStepDetail(receivedAt:Double,side:Int,roundaboutExit:Int,nextManeuver:Int,nextGapMeters:Double)=
+        navigationStepDetail(handle,receivedAt,side,roundaboutExit,nextManeuver,nextGapMeters)
+    private external fun navigationStepDetail(h:Long,receivedAt:Double,side:Int,roundaboutExit:Int,nextManeuver:Int,nextGapMeters:Double)
     /** A speed bump learned on this phone in an earlier drive. */
     @Synchronized fun bumpRestore(lat:Double,lon:Double,heading:Double,observations:Int,misses:Int):Boolean=bumpRestore(handle,lat,lon,heading,observations,misses)
     /** Learned bumps, 5 values each: lat, lon, heading, times felt, times missed. */

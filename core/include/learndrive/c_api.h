@@ -164,6 +164,10 @@ void ld_route_maneuvers(ld_engine*,double time,const double* ahead_m,size_t coun
 // they are coached). Restore saved ones at start; read them back (5 values each: lat, lon,
 // heading, times felt, times driven over without a jolt) to save between drives.
 int ld_bump_restore(ld_engine*,double lat,double lon,double heading,int observations,int misses);
+// Detail of the provider step last sent with ld_navigation_turn_update (same received_at):
+// side for keep/fork (-1 left, +1 right, 0 none), roundabout exit (0 unknown), and the step
+// after it (LD_MANEUVER_* and metres after this one; NaN/inf unknown). Memory only.
+void ld_navigation_step_detail(ld_engine*,double received_at,int side,int roundabout_exit,int next_maneuver,double next_gap_m);
 int ld_bumps_learned(ld_engine*,double* out,size_t capacity);
 // Oldest bump-detector event not yet read, for diagnostics (no position). Returns 0 when none.
 // out (capacity >= 12): time, accepted, reason, peak vertical m/s^2, rear-wheel vertical,

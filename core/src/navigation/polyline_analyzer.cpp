@@ -228,18 +228,19 @@ MacroContext ProviderTurnCoach::context(double now) const noexcept {
     if(!active_)return out;
     out.match=Match::noFix;
     if(!available_)return out;
-    if(!std::isfinite(now)||now<input_.receivedAt||now-input_.receivedAt>3||
-       now<fix_.time||now-fix_.time>2.5){out.match=Match::stale;return out;}
+    // Google's distance comes from its own positioning (GPS fused with its map), so our own
+    // fix quality does not gate it; only a stale feed does (the distance is dead-reckoned
+    // by the measured speed between updates, up to 5 s).
+    if(!std::isfinite(now)||now<input_.receivedAt||now-input_.receivedAt>5){out.match=Match::stale;return out;}
     if(input_.state==TurnState::arrived){out.match=Match::arrived;return out;}
     if(input_.state!=TurnState::navigating||input_.step<0)return out;
-    if(consistent_<2||fix_.time-acquiringSince_<.5){out.match=consistent_?Match::acquiring:Match::poorFix;return out;}
     out.match=Match::ready;out.valid=true;
     if(input_.kind==TurnKind::left)out.feature=Feature::leftTurn;
     else if(input_.kind==TurnKind::right)out.feature=Feature::rightTurn;
     // A fork, roundabout, U-turn, merge or ramp is still a junction to prepare for (look,
     // ease off, then clutch and look both ways), without a left/right signal instruction.
     else if(input_.kind==TurnKind::fork||input_.kind==TurnKind::roundabout||input_.kind==TurnKind::uTurn||
-            input_.kind==TurnKind::merge||input_.kind==TurnKind::ramp)out.feature=Feature::junction;
+            input_.kind==TurnKind::merge||input_.kind==TurnKind::ramp||input_.kind==TurnKind::destination)out.feature=Feature::junction;
     // Provider estimates may be displayed as estimates. No shape index, bend,
     // exact-distance phrase, posted speed limit or gear can be derived here.
     out.distanceM=out.maneuverDistanceM=input_.remainingM;
@@ -249,7 +250,8 @@ Prompt ProviderTurnCoach::evaluate(double now,bool braking,bool shock) const noe
     pending_=0;const auto c=context(now);
     const bool spoken=input_.session==acceptedSession_&&input_.routeEpoch==acceptedEpoch_&&
         input_.step==acceptedStep_&&input_.kind==acceptedKind_;
-    if(!c.valid||spoken||braking||shock||now-lastAccepted_<8||fix_.speedKmh<=3||
+    // The legacy one-shot prompt keeps its own GPS quality requirement (the junction lesson does not).
+    if(!c.valid||consistent_<2||spoken||braking||shock||now-lastAccepted_<8||fix_.speedKmh<=3||
        !std::isfinite(input_.remainingM)||!std::isfinite(input_.remainingSeconds))return Prompt::none;
     // Provisional preparation budget: roughly three seconds of speech plus
     // learner response and estimation margin. Require both independent speed

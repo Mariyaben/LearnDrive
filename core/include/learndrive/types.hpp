@@ -71,9 +71,14 @@ enum class Fragment : int { none=0,
     downSecond,downThird,clutchDown,holdBrake,checkMirrors,signalLeft,signalRight,lookBothWays,
     steadyAccelerator,laneCentre,letThemPass,lookAgainMoveOff,
     // Indian road practice: sound the horn at blind bends, junctions and when passing.
-    soundHorn=43,bumpAheadContext=44 };
-constexpr int fragmentCount=44;
-inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext;}
+    soundHorn=43,bumpAheadContext=44,
+    // Navigation (Google route): the distance and the maneuver, as an instructor says them.
+    in200m=45,in150m,in100m,in50m,turnLeft,turnRight,keepLeftRoute,keepRightRoute,uTurn,
+    roundaboutFirst,roundaboutSecond,roundaboutThird,roundaboutFourth,roundaboutEnter,destinationAhead,
+    leftTurnHere,rightTurnHere,thenLeft,thenRight,giveWayRight,pullOver,mergeCarefully=66 };
+constexpr int fragmentCount=66;
+inline bool isNavigationFragment(Fragment f){return int(f)>=45&&int(f)<=66;}
+inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext||isNavigationFragment(f);}
 inline const char* fragmentText(Fragment f) {
     switch(f) {
     case Fragment::downhill:return "Downhill.";case Fragment::steepDownhill:return "Steep downhill.";case Fragment::uphill:return "Uphill.";
@@ -97,6 +102,21 @@ inline const char* fragmentText(Fragment f) {
     case Fragment::laneCentre:return "Move back to the centre of your lane.";case Fragment::letThemPass:return "Let them pass.";
     case Fragment::lookAgainMoveOff:return "Look again before you move off.";
     case Fragment::soundHorn:return "Sound the horn.";case Fragment::bumpAheadContext:return "Speed bump ahead.";
+    case Fragment::in200m:return "In 200 metres,";case Fragment::in150m:return "In 150 metres,";
+    case Fragment::in100m:return "In 100 metres,";case Fragment::in50m:return "In 50 metres,";
+    case Fragment::turnLeft:return "turn left.";case Fragment::turnRight:return "turn right.";
+    case Fragment::keepLeftRoute:return "keep left.";case Fragment::keepRightRoute:return "keep right.";
+    case Fragment::uTurn:return "make a U-turn.";
+    case Fragment::roundaboutFirst:return "at the roundabout, take the first exit.";
+    case Fragment::roundaboutSecond:return "at the roundabout, take the second exit.";
+    case Fragment::roundaboutThird:return "at the roundabout, take the third exit.";
+    case Fragment::roundaboutFourth:return "at the roundabout, take the fourth exit.";
+    case Fragment::roundaboutEnter:return "enter the roundabout.";
+    case Fragment::destinationAhead:return "your destination is ahead.";
+    case Fragment::leftTurnHere:return "Left turn here.";case Fragment::rightTurnHere:return "Right turn here.";
+    case Fragment::thenLeft:return "Then turn left straight after.";case Fragment::thenRight:return "Then turn right straight after.";
+    case Fragment::giveWayRight:return "Give way to traffic from the right.";case Fragment::pullOver:return "Pull over safely.";
+    case Fragment::mergeCarefully:return "merge carefully.";
     default:return "";
     }
 }

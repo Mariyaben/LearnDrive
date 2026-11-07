@@ -84,6 +84,9 @@ public:
     void invalidateFix() noexcept;
     bool fix(const Fix&) noexcept;
     bool active() const noexcept {return active_;}
+    TurnKind kind() const noexcept {return input_.kind;}
+    double receivedAt() const noexcept {return input_.receivedAt;}
+    double remainingM() const noexcept {return input_.remainingM;}
     MacroContext context(double now) const noexcept;
     // The provider says the learner is pulling up at the destination (fresh feed only).
     bool arriving(double now) const noexcept;
