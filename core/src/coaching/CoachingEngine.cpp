@@ -143,7 +143,7 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
     if(isActorActionPrompt(c.prompt)&&c.origin!=4&&c.origin!=7)return Block::Unsupported;
     if(isControlPrompt(c.prompt)!=(c.origin==6))return Block::Unsupported;
     if(c.origin==6)return ControlCoach::evidence(c,w,now)&&fresh(now,c.captureTime,c.maxAge)&&now<c.expiresAt?
-        (w.telemetry.shock||w.telemetry.braking||w.telemetry.hardBraking?Block::DriverResponse:Block::None):Block::Unsupported;
+        (w.telemetry.shock||w.telemetry.hardBraking?Block::DriverResponse:Block::None):Block::Unsupported;
     if(!std::isfinite(c.maxAge)||c.maxAge<=0||c.maxAge>(c.origin==5?(w.route.provider?3.:2.5):maxVisionAgeSeconds)||
        !std::isfinite(c.expiresAt)||c.expiresAt<=c.captureTime||!std::isfinite(c.confidence)||c.confidence<0||c.confidence>1||std::isnan(c.tti))return Block::Unsupported;
     const auto space=c.identity.space;
@@ -165,7 +165,7 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
     if((c.critical||criticalPrompt)&&!w.allowCritical)return Block::CriticalDisabled;
     if(criticalPrompt&&(!c.critical||!c.urgent))return Block::Unsupported;
     if(c.critical!=(c.kind==EventKind::Critical))return Block::Unsupported;
-    if(w.telemetry.shock||((w.telemetry.braking||w.telemetry.hardBraking)&&!c.critical))return Block::DriverResponse;
+    if(w.telemetry.shock||(w.telemetry.hardBraking&&!c.critical)||(w.telemetry.braking&&!c.critical&&c.origin!=5))return Block::DriverResponse;
     if(c.origin==5) {
         if(!w.route.valid||c.identity.space!=IdentitySpace::Route||c.identity.id!=w.route.eventId||c.identity.scope!=w.route.routeId||
             !fresh(now,w.route.captureTime,w.route.provider?3.:2.5)||!fresh(now,w.route.gpsTime,2.5))return Block::Unsupported;
@@ -454,8 +454,40 @@ const char* CoachingEngine::continuationReason(uint64_t sequence,int prompt,cons
     const auto& t=accepted_;
     if(!t.valid||!t.onset||t.stage!=DeliveryStage::Started||t.sequence!=sequence||!samePrompt(t.candidate,prompt)||
         revision!=revision_||t.revision!=revision_||t.sourceId!=source_||w.sourceId!=source_)return "TICKET_OR_SOURCE";
-    // Onset still uses the immutable original ticket. Once speaking, require
-    // fresh evidence for the SAME event to continue, never a replacement actor.
+    if(scheduling_) {
+        // Started speech finishes its sentence, as an instructor does. Braking (often the very
+        // response asked for), a jolt, a late camera frame or reaching the junction mid-sentence
+        // never cut it off: on the Nov 6 drive those cut nearly every instruction mid-word, and
+        // the retries repeated them. It stops only when the situation changed: perception or the
+        // session stopped, the road user is gone, Google replaced the route, the junction
+        // turn began (routine speech), the car stopped, or the reading itself was lost. The
+        // player then stops non-urgent speech at its next pause, never mid-word.
+        const auto& c=t.candidate;
+        if(!w.active)return "SOURCE_INACTIVE";
+        if(c.origin==7&&c.urgent) {
+            double seen=-infinity;
+            for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i)if(w.actors[i].identity==c.identity)seen=std::max(seen,w.actors[i].captureTime);
+            for(const auto& sample:memory_.samples())for(const auto& a:sample.observations)if(a.identity==c.identity)seen=std::max(seen,a.captureTime);
+            if(c.identity.space==IdentitySpace::Optical)seen=std::max(seen,risk_.lastSeen(c.identity.id)); // Same road user under a new detector id.
+            // The warning sentence (<= 3.8 s recording) finishes about a road user seen in that time.
+            if(!std::isfinite(seen)||now-seen>3.5)return "ACTOR_NOT_OBSERVED";
+            return "OK";
+        }
+        if(c.kind==EventKind::Slope&&!w.telemetry.pitchValid)return "EVIDENCE_LOST"; // Phone knocked in its mount.
+        if(c.origin==5&&c.lessonStep) {
+            // A junction step stops if Google replaced the route or guidance ended. Planning and
+            // approach (mirrors, signal, brake, gear) end at their next pause once the turn itself
+            // is under way; the entry step is about the junction mouth and finishes.
+            if(!w.route.routeId||c.identity.scope!=w.route.routeId)return "TASK_CONTEXT";
+            const double lead=TaskCoach::leadSeconds(w,now);
+            if(c.lessonStep!=3&&lead>=0&&lead<actByEntryClose)return "TURN_UNDER_WAY";
+        } else if(!task_.continuing(c,w,now,ledger_))return "TASK_CONTEXT";
+        const bool stopped=c.lessonStep&&w.telemetry.speedValid&&w.telemetry.speedKmh<=3;
+        if(!stopped&&!drive_.valid(c,w,now,true))return "DRIVE_CONTEXT";
+        return "OK";
+    }
+    // 0.7.1 comparison mode: once speaking, require fresh evidence for the SAME event to
+    // continue, never a replacement actor.
     auto c=t.candidate;auto currentWorld=w;
     if(c.identity.space==IdentitySpace::Route)c.captureTime=w.route.captureTime;
     else if(c.kind==EventKind::Slope)c.captureTime=w.telemetry.time;

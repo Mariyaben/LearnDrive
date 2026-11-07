@@ -46,9 +46,23 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
     // After a turn: navigation moved on from the held junction while moving.
     // Navigation advances at the maneuver point (mid-turn); the instructor's
     // "straighten up" comes as the turn completes, shortly afterwards.
+    // ...only for a turn actually made: about 30 degrees of heading change measured from the
+    // junction until the cue is due (navigation advances mid-turn), or with no turn rate, Google
+    // not rerouting, which is what a missed turn looks like (Nov 6: "Straighten the wheel" after
+    // the learner went straight past the turn).
+    if(j.quietEvent||exitAt_>=0) {
+        if(w.yawKnown&&lastYawAt_>=0&&now>lastYawAt_)turned_+=w.yawRate*std::min(.2,now-lastYawAt_);
+        turnMeasured_|=w.yawKnown;reroutedInTurn_|=w.rerouting;
+    }
+    lastYawAt_=w.yawKnown?now:-1;
     if(lastQuietEvent_&&!j.quietEvent&&w.route.valid&&w.route.eventId!=lastQuietEvent_&&support>=1)exitAt_=now+2.5;
     lastQuietEvent_=j.quietEvent;
-    if(exitAt_>=0&&now>=exitAt_){exitAt_=-1;if(v>3&&v<30)propose(int(Prompt::turnExit),now,5);}
+    if(exitAt_>=0&&now>=exitAt_) {
+        exitAt_=-1;
+        const bool turnMade=turnMeasured_?std::abs(turned_)>=.5:!reroutedInTurn_&&!w.rerouting;
+        if(turnMade&&v>3&&v<30)propose(int(Prompt::turnExit),now,5);
+        turned_=0;turnMeasured_=reroutedInTurn_=false;
+    } else if(!j.quietEvent&&exitAt_<0){turned_=0;turnMeasured_=reroutedInTurn_=false;}
     // Google found a new route while driving: say so once, calmly (the next turn comes as usual).
     if(!w.rerouting)routeChangeCued_=false;
     else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,5);}

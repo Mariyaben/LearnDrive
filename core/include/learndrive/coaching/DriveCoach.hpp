@@ -14,7 +14,7 @@ public:
     void sourceChanged() noexcept;
     void observe(const WorldState&,const TaskCoach&,const Ticket&) noexcept;
     PolicyChoice choose(const PolicyContext&) const noexcept;
-    bool valid(const Candidate&,const WorldState&,double now) const noexcept;
+    bool valid(const Candidate&,const WorldState&,double now,bool started=false) const noexcept;
     void selected(const Candidate&,double now) noexcept;
     void delivered(const Candidate&,double now) noexcept;
     std::string json(const TaskCoach&) const;

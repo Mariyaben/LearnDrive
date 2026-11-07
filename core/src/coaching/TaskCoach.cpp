@@ -54,6 +54,7 @@ void TaskCoach::sourceChanged() noexcept {
     if(state_.event){++state_.unassessedOutcomes;state_.event=0;}
     state_.phase=enabled_?TaskPhase::Waiting:TaskPhase::Off;state_.planningDelivered=state_.approachDelivered=state_.speedReductionObserved=state_.entryDelivered=false;
 }
+double TaskCoach::leadSeconds(const WorldState& w,double now) noexcept {return lead(w,now);}
 bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool started) noexcept {
     double seconds=lead(w,now);
     // Started speech: slowing to a stop at this junction is the expected response,
@@ -64,7 +65,8 @@ bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool 
        cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&
        std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>=0&&w.telemetry.speedKmh<=3&&!w.telemetry.shock&&
        c.origin==5&&c.kind==EventKind::Route&&c.lessonEpoch==w.route.epoch&&(c.lessonStep==2||c.lessonStep==3))return true;
-    if(seconds<0||w.telemetry.braking||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
+    // Braking to approach the junction is the expected response, not missing evidence.
+    if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
     if(w.route.provider) {
         // Google route steps by distance (see observe()); the timed windows below still apply.
         const double v=w.telemetry.speedKmh,d=w.route.distanceM,entry=routeEntryDistance(v);
@@ -107,7 +109,7 @@ void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const Even
             state_.quietUntil=w.now+executionQuietHold;state_.quietEvent=w.route.eventId;}
         else {state_.quietUntil=-1;state_.quietEvent=0;} // Measured lead is clear of the execution window again.
     }
-    if(seconds<0||w.telemetry.braking||w.telemetry.hardBraking||w.telemetry.shock){state_.phase=TaskPhase::Uncertain;return;}
+    if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock){state_.phase=TaskPhase::Uncertain;return;}
     if(different){
         if(state_.event)++state_.unassessedOutcomes;
         state_.source=w.sourceId;state_.route=w.route.routeId;state_.event=w.route.eventId;state_.epoch=w.route.epoch;

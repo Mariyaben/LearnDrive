@@ -22,6 +22,8 @@ static std::array<ld::coaching::Utterance,100> utteranceRegistry{};
 static std::array<std::string,100> utteranceText{};
 static void registerUtterance(const ld::coaching::Utterance& u) {
     std::string text;for(size_t i=0;i<u.count;++i){if(i)text+=' ';text+=ld::fragmentText(static_cast<ld::Fragment>(u.fragments[i]));}
+    // A sentence may open with a mid-sentence phrase ("merge carefully."): capitalise its caption.
+    if(!text.empty()&&text[0]>='a'&&text[0]<='z')text[0]=char(text[0]-'a'+'A');
     std::lock_guard<std::mutex> lock(utteranceMutex);const size_t slot=size_t(u.id)%utteranceRegistry.size();
     utteranceRegistry[slot]=u;utteranceText[slot]=std::move(text);
 }
@@ -67,6 +69,7 @@ struct ld_engine {
     double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
     bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
     double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
+    double yawOverride=std::numeric_limits<double>::quiet_NaN(),yawOverrideTime=-1;
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
     // Google step detail for the latest turn update (side, roundabout exit, the step after it).
@@ -291,6 +294,11 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
         const auto up=e.fusion.cameraUp(now);
         if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));
             w.horizon=std::clamp(.5+.96*std::tan(pitch),.25,.85);w.horizonMeasured=true;}
+    }
+    if(std::isfinite(e.yawOverride)&&now>=e.yawOverrideTime&&now-e.yawOverrideTime<.5){w.yawRate=e.yawOverride;w.yawKnown=true;}
+    else if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto m=e.fusion.motion();
+        if(m.valid&&!m.handled&&now>=m.time&&now-m.time<.25&&std::isfinite(m.yawRate)){w.yawRate=m.yawRate;w.yawKnown=true;}
     }
     if(e.sourceKind==LD_SOURCE_CAMERA) {
         const auto ahead=e.scout.current(now);
@@ -986,6 +994,7 @@ int ld_road_knowledge(ld_engine* e,double now,double* out,size_t capacity) {
     return 1;
 }
 void ld_coaching_horn_rules(ld_engine* e,int enabled){if(e)e->hornRules=enabled!=0;}
+void ld_camera_yaw(ld_engine* e,double time,double rate){if(e&&std::isfinite(time)&&std::isfinite(rate)&&std::abs(rate)<3){e->yawOverride=rate;e->yawOverrideTime=time;}}
 void ld_camera_horizon(ld_engine* e,double fraction){if(e)e->horizonOverride=std::isfinite(fraction)&&fraction>.2&&fraction<.9?fraction:std::numeric_limits<double>::quiet_NaN();}
 int ld_lane_map(ld_engine* e,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height) {
     if(!e||!source||source!=e->sourceId||!drivable||!lanes||e->transform.size<=0||!std::isfinite(time))return 0;

@@ -8,7 +8,10 @@ using namespace ld::coaching;
 namespace {
 int passed=0;
 void check(bool b,const char* why){if(!b)throw std::runtime_error(why);}
-template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
+int failed=0;
+// Every group runs: one failure no longer hides the rest of the suite.
+template<class F>void test(const char* name,F f){try{f();++passed;std::cout<<"PASS "<<name<<'\n';}
+    catch(const std::exception& e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}}
 // Act-by schedule at 30 km/h: preparation 6.5-14.5 s before the junction, "brake, change
 // down" 6.5-10.5 s, entry 2-6 s (only at or below 25 km/h); routine cues quiet below 8 s.
 WorldState scene(double time,double seconds=13,double speed=30,int feature=4,uint64_t event=9){
@@ -100,8 +103,9 @@ int main(){try {
             case 6:w.route.etaSeconds=infinity;break;case 7:w.telemetry.speedKmh=0;break;case 8:w.active=false;break;case 9:w.route.distanceM=-1;break;}
             check(!f.decide(w).eligible,"missing/stale evidence produced teaching");}
     });
-    test("braking and shock suppress extra teaching",[]{
-        for(int fault=0;fault<3;++fault){Fixture f;auto w=scene(1);w.telemetry.braking=fault==0;w.telemetry.hardBraking=fault==1;w.telemetry.shock=fault==2;check(!f.decide(w).eligible,"instruction during existing response/workload");}
+    test("hard braking and a jolt suppress extra teaching; braking to approach the junction does not",[]{
+        for(int fault=0;fault<3;++fault){Fixture f;auto w=scene(1);w.telemetry.braking=fault==0;w.telemetry.hardBraking=fault==1;w.telemetry.shock=fault==2;
+            const bool eligible=f.decide(w).eligible;check(fault==0?eligible:!eligible,fault==0?"braking to approach suppressed the lesson":"instruction during hard braking or a jolt");}
     });
     test("final approach is quiet for routine coaching while urgent evidence wins",[]{
         Fixture f;auto w=scene(1,5.5);actor(w,false);check(!f.decide(w).eligible,"routine cue during final approach");
@@ -154,5 +158,5 @@ int main(){try {
         check(!ld_coaching_task_speech_allowed(e.get()),"off speech");ld_coaching_junction_lesson(e.get(),1);
         const std::string s=ld_coaching_task_json(e.get());check(s.find("WAITING_FOR_ROUTE")!=std::string::npos&&s.find("routeId")==std::string::npos,"task status leaked route");
     });
-    std::cout<<passed<<" task-coach groups passed\n";return 0;
+    std::cout<<passed<<" task-coach groups passed\n";if(failed)std::cerr<<failed<<" groups failed\n";return failed?1:0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import kotlin.math.roundToInt
 
@@ -37,7 +38,9 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
     val quickStartButton=CoachStyle.button(context,"Get ready",true).apply {tag="quick-start"}
     val coachContext=CoachStyle.eyebrow(context,"YOUR NEXT STEP",CoachStyle.amber).apply {tag="coach-evidence-context";maxLines=1;ellipsize=TextUtils.TruncateAt.END}
     val coachText=label("Set up while parked",23f).apply {tag="coach-instruction";maxLines=2;ellipsize=TextUtils.TruncateAt.END;gravity=Gravity.CENTER_VERTICAL
-        typeface=CoachStyle.display;setLineSpacing(0f,1.02f);accessibilityLiveRegion=ACCESSIBILITY_LIVE_REGION_POLITE}
+        typeface=CoachStyle.display;setLineSpacing(0f,1.02f);accessibilityLiveRegion=ACCESSIBILITY_LIVE_REGION_POLITE
+        // A long instruction shrinks to fit two lines of the narrower card instead of being cut off.
+        setAutoSizeTextTypeUniformWithConfiguration(15,23,1,android.util.TypedValue.COMPLEX_UNIT_SP)}
     val maneuverText=label("Free practice",18f).apply {tag="next-maneuver";maxLines=2;ellipsize=TextUtils.TruncateAt.END;typeface=CoachStyle.display}
     val maneuverDistance=label("",26f,CoachStyle.accent).apply {visibility=GONE;maxLines=1;typeface=CoachStyle.display}
     val maneuverProvider=label("",11f,CoachStyle.muted).apply {maxLines=1}
@@ -54,6 +57,11 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         addView(LinearLayout(context).apply {gravity=Gravity.BOTTOM;addView(speedValue);addView(label("km/h",10f,CoachStyle.muted),LinearLayout.LayoutParams(-2,-2).apply {marginStart=dp(4);bottomMargin=dp(4)})});addView(speedSource)}
     private val header=LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL}
     private val body=LinearLayout(context)
+    // Landscape: the map with the coach card under it on the left, and the road camera on the right
+    // at the full height under the header, as wide as its 4:3 picture (it was a third of the width and
+    // only as tall as the map strip). Portrait: the map, a full-width camera, then the coach card.
+    private val leftColumn=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL}
+    private val content=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(10))}
     private val coachStrip=LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;background=CoachStyle.voiceCard(context)}
     private val mapColumn=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;background=CoachStyle.panel(context,CoachStyle.surface,18);clipToOutline=true}
     private val roadHost=FrameLayout(context).apply {tag="road-camera-host";background=CoachStyle.panel(context,CoachStyle.surface,18);clipToOutline=true}
@@ -76,7 +84,7 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
     private val checks=mutableListOf<Check>()
     init {
         setBackgroundColor(CoachStyle.ink)
-        val content=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(10))};addView(content,LayoutParams(-1,-1))
+        addView(content,LayoutParams(-1,-1))
         header.addView(icon("brand"),LinearLayout.LayoutParams(dp(34),dp(34)))
         header.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL
             addView(label("LearnDrive",21f).apply {typeface=CoachStyle.display;letterSpacing=.01f})
@@ -85,11 +93,11 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         header.addView(sessionActionHost,LinearLayout.LayoutParams(-2,dp(52)).apply {marginStart=dp(8)})
         header.addView(settingsButton,LinearLayout.LayoutParams(-2,dp(52)).apply {marginStart=dp(8)})
         content.addView(header,LinearLayout.LayoutParams(-1,dp(60)))
-        content.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply {topMargin=dp(10);bottomMargin=dp(10)})
+        content.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply {topMargin=dp(10)})
         // The coach's voice: amber-edged card, the instruction in big condensed type.
         coachStrip.setPadding(dp(20),dp(10),dp(12),dp(10));coachStrip.addView(icon("coach",CoachStyle.amber),LinearLayout.LayoutParams(dp(30),dp(30)).apply {marginEnd=dp(14)})
-        coachStrip.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_VERTICAL;addView(coachContext,LinearLayout.LayoutParams(-1,-2));addView(coachText,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(5)})},LinearLayout.LayoutParams(0,-1,1f))
-        coachStrip.addView(quickStartButton,LinearLayout.LayoutParams(-2,dp(56)).apply {marginStart=dp(12)});content.addView(coachStrip,LinearLayout.LayoutParams(-1,dp(96)))
+        coachStrip.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_VERTICAL;addView(coachContext,LinearLayout.LayoutParams(-1,-2));addView(coachText,LinearLayout.LayoutParams(-1,0,1f).apply {topMargin=dp(5)})},LinearLayout.LayoutParams(0,-1,1f))
+        coachStrip.addView(quickStartButton,LinearLayout.LayoutParams(-2,dp(56)).apply {marginStart=dp(12)})
         mapColumn.addView(mapHost,LinearLayout.LayoutParams(-1,0,1f))
         routeCard.addView(directionTile,LinearLayout.LayoutParams(dp(46),dp(46)).apply {marginEnd=dp(12)})
         routeCard.addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;addView(maneuverText);addView(navigationStatus,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(4)})},LinearLayout.LayoutParams(0,-2,1f))
@@ -97,7 +105,9 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         mapColumn.addView(routeCard,LinearLayout.LayoutParams(-1,dp(70)))
         roadHost.addView(roadView,LayoutParams(-1,-1))
         roadHost.addView(CoachStyle.eyebrow(context,"ROAD CAMERA",CoachStyle.text).apply {setPadding(dp(10),dp(6),dp(10),dp(6));background=CoachStyle.panel(context,Color.argb(210,11,15,14),10,Color.TRANSPARENT)},LayoutParams(-2,-2,Gravity.TOP or Gravity.START).apply {topMargin=dp(10);marginStart=dp(10)})
-        roadHost.addView(roadStatus,LayoutParams(-1,-2,Gravity.BOTTOM));body.addView(mapColumn);body.addView(roadHost)
+        roadHost.addView(roadStatus,LayoutParams(-1,-2,Gravity.BOTTOM))
+        leftColumn.addView(mapColumn,LinearLayout.LayoutParams(-1,0,1f));leftColumn.addView(coachStrip,LinearLayout.LayoutParams(-1,dp(88)).apply {topMargin=dp(10)})
+        body.addView(leftColumn);body.addView(roadHost)
         val sheet=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(16),dp(20),dp(16))}
         sheetHeader.addView(sheetHeading,LinearLayout.LayoutParams(0,-2,1f));sheetHeader.addView(closeSetupButton,LinearLayout.LayoutParams(dp(48),dp(48)));sheet.addView(sheetHeader,LinearLayout.LayoutParams(-1,dp(48)))
         tabs.addView(prepareTab,LinearLayout.LayoutParams(0,dp(46),1f));tabs.addView(destinationTab,LinearLayout.LayoutParams(0,dp(46),1f).apply {marginStart=dp(4)})
@@ -158,15 +168,32 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         val availableW=(w-paddingLeft-paddingRight).coerceAtLeast(0);val availableH=(h-paddingTop-paddingBottom).coerceAtLeast(0);val open=setupHost.visibility==VISIBLE;val landscape=w>=h
         val key="$availableW:$availableH:$open:$keyboardVisible:$landscape";if(key==layoutKey)return;layoutKey=key
         val sheetWidth=if(landscape)minOf(dp(480),(availableW*.52f).roundToInt()) else availableW;val leftWidth=if(open&&landscape)(availableW-sheetWidth-dp(10)).coerceAtLeast(0) else -1
-        (header.layoutParams as? LinearLayout.LayoutParams)?.let {it.width=leftWidth;header.layoutParams=it};(coachStrip.layoutParams as? LinearLayout.LayoutParams)?.let {it.width=leftWidth;coachStrip.layoutParams=it}
+        (header.layoutParams as? LinearLayout.LayoutParams)?.let {it.width=leftWidth;header.layoutParams=it}
         header.visibility=if(keyboardVisible)GONE else VISIBLE;coachStrip.visibility=if(keyboardVisible)GONE else VISIBLE;speedTile.visibility=if(open)GONE else VISIBLE;settingsButton.visibility=if(open)GONE else VISIBLE
         quickStartButton.visibility=if(running||open)GONE else VISIBLE;sheetHeader.visibility=if(keyboardVisible)GONE else VISIBLE;tabs.visibility=if(keyboardVisible)GONE else VISIBLE
         setupActionHost.visibility=if(destinationPage||keyboardVisible)GONE else VISIBLE
         setupHost.layoutParams=(setupHost.layoutParams as LayoutParams).apply {width=sheetWidth;height=-1;gravity=Gravity.END}
         body.orientation=if(landscape)LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        mapColumn.layoutParams=if(landscape)LinearLayout.LayoutParams(0,-1,.64f) else LinearLayout.LayoutParams(-1,0,.56f)
-        roadHost.layoutParams=if(landscape)LinearLayout.LayoutParams(0,-1,.36f).apply {marginStart=dp(10)} else LinearLayout.LayoutParams(-1,0,.44f).apply {topMargin=dp(10)}
-        (coachStrip.layoutParams as? LinearLayout.LayoutParams)?.let {it.height=dp(if(landscape)88 else 104);coachStrip.layoutParams=it}
+        // The coach card sits under the map in landscape, across the bottom in portrait.
+        val coachHost=if(landscape)leftColumn else content
+        if(coachStrip.parent!==coachHost){(coachStrip.parent as? ViewGroup)?.removeView(coachStrip);coachHost.addView(coachStrip)}
+        coachStrip.layoutParams=LinearLayout.LayoutParams(if(landscape)-1 else leftWidth,dp(if(landscape)96 else 104)).apply {topMargin=dp(10)}
+        mapColumn.layoutParams=LinearLayout.LayoutParams(-1,0,1f)
+        val contentW=(availableW-dp(20)).coerceAtLeast(0);val headerH=if(keyboardVisible)0 else dp(60)
+        if(landscape) {
+            // As tall as the space under the header and at least half the width (wider than its 4:3
+            // picture on a phone: the picture fills it and loses some sky), up to 60 %, leaving the
+            // map and coach card at least 320 dp.
+            val bodyH=(availableH-dp(18)-headerH-dp(10)).coerceAtLeast(0)
+            val cameraW=minOf(maxOf(bodyH*4/3,contentW/2),(contentW*.6f).roundToInt(),(contentW-dp(330)).coerceAtLeast(dp(200)))
+            leftColumn.layoutParams=if(open)LinearLayout.LayoutParams(leftWidth.coerceAtLeast(0),-1) else LinearLayout.LayoutParams(0,-1,1f)
+            roadHost.layoutParams=LinearLayout.LayoutParams(cameraW,-1).apply {marginStart=dp(10)}
+        } else {
+            // Full width at the 4:3 picture's height (up to 62 % of the space); the map gets the rest.
+            val bodyH=(availableH-dp(18)-headerH-dp(10)-(if(keyboardVisible)0 else dp(114))).coerceAtLeast(0)
+            leftColumn.layoutParams=LinearLayout.LayoutParams(-1,0,1f)
+            roadHost.layoutParams=LinearLayout.LayoutParams(-1,minOf(contentW*3/4,(bodyH*.62f).roundToInt())).apply {topMargin=dp(10)}
+        }
     }
     private fun TextView.setTextIfChanged(value:CharSequence){if(!TextUtils.equals(text,value))text=value}
 }

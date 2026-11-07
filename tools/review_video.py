@@ -53,6 +53,7 @@ class Native:
             "prepare_zoom": ([P, P, P, C.c_float], C.c_int),
             "prepare_mosaic": ([P, P, P, C.c_double], C.c_int),
             "camera_horizon": ([P, C.c_double], None),
+            "camera_yaw": ([P, C.c_double, C.c_double], None),
             "zoom_merge": ([P, P, P, C.c_int, P, C.c_size_t], C.c_int),
             "labels": ([P, C.c_double, P, C.c_size_t, C.c_int], C.c_int),
             "boxes": ([P, P, C.c_size_t], C.c_size_t), "road": ([P, P], C.c_int),
@@ -136,6 +137,29 @@ def probe(video):
         "ffprobe", "-v", "error", "-show_entries",
         "format=duration:stream=index,codec_type,width,height,avg_frame_rate,color_range:stream_tags=rotate:stream_side_data=rotation",
         "-of", "json", str(video)], text=True))
+
+
+def video_yaw(video, fps=10.0, width=160, height=120):
+    """Camera turn rate (rad/s, left positive) from the video itself, standing in for the phone's
+    gyroscope: phase correlation of consecutive frames over the band above the road and left of
+    the phone mount (rows 15-60 %, columns 5-70 %; on-screen overlays sit outside it). Turning
+    left slides the scene right, about 0.72 image widths per radian (focal ~0.96 image heights).
+    Returns (times, rates)."""
+    command = ["ffmpeg", "-v", "error", "-i", str(video), "-an", "-vf", f"fps={fps},scale={width}:{height},format=gray",
+               "-f", "rawvideo", "pipe:1"]
+    raw = subprocess.run(command, capture_output=True, check=True).stdout
+    stack = np.frombuffer(raw, np.uint8).reshape(-1, height, width).astype(np.float32)
+    band = stack[:, int(.15 * height):int(.6 * height), int(.05 * width):int(.70 * width)]
+    window = cv2.createHanningWindow((band.shape[2], band.shape[1]), cv2.CV_32F)
+    times, rates = [], []
+    for i in range(1, len(band)):
+        (dx, _), response = cv2.phaseCorrelate(band[i - 1], band[i], window)
+        rates.append(dx / width * fps / .72 if response > .05 else 0.0)
+        times.append((i - .5) / fps)
+    rates = np.asarray(rates)
+    if len(rates) >= 3:  # 3-tap median: one bad correlation is not a turn
+        rates = np.median(np.stack([np.r_[rates[:1], rates[:-1]], rates, np.r_[rates[1:], rates[-1:]]]), axis=0)
+    return np.asarray(times), rates
 
 
 def frames(video, width, height, fps):
@@ -284,6 +308,8 @@ def main():
                         help="Task-aware scheduling of automatic coaching; off reproduces 0.7.1")
     parser.add_argument("--navigation", type=Path, help="SYNTHETIC navigation overlay JSON: "
                         '{"turns":[{"at":s,"maneuver":"left|right","appear_lead_s":45}],"unavailable":[[a,b]]}')
+    parser.add_argument("--video-yaw", choices=["on", "off"], default="on",
+                        help="Feed the camera's turn rate measured from the video (the phone uses its gyroscope)")
     parser.add_argument("--research-emergencies", action="store_true",
                         help="Enable unvalidated emergency phrases for explicit lab review")
     args = parser.parse_args()
@@ -407,6 +433,7 @@ def main():
         raise RuntimeError("Native policy initialization failed")
     if args.camera_horizon is not None:
         native.camera_horizon(handle, args.camera_horizon)
+    yaw_times, yaw_rates = video_yaw(args.video) if args.video_yaw == "on" else (np.zeros(0), np.zeros(0))
     if overlay is not None or args.speeds_as_live:
         if args.speeds_as_live and not args.speeds:raise ValueError("--speeds-as-live needs --speeds from the same drive")
         native.bind_navigation()
@@ -469,7 +496,10 @@ def main():
                         native.navigation(handle, now, nav_sequence, step, 8, 900.0, 120.0,
                                           speed_now if speed_now is not None else math.nan)
             if playing and args.coaching_profile != 'legacy' and now < playing_until and (cause := native.coaching_continue_reason(handle, playing, now).decode()) != "OK":
-                native.coaching_continue(handle, playing, now)  # records the interrupted delivery stage
+                if 1 - (playing_until - now) / durations[playing] >= .85:
+                    native.coaching_completed(handle, playing, now)  # as on the phone: 85 % heard is delivered
+                else:
+                    native.coaching_continue(handle, playing, now)  # records the interrupted delivery stage
                 interruptions.append({"time": round(now - args.pre_roll_seconds, 4), "prompt": playing,
                                       "text": native.prompt(playing).decode(), "reason": cause,
                                       "spoken_fraction": round(1 - (playing_until - now) / durations[playing], 3)})
@@ -479,6 +509,8 @@ def main():
                 playing = 0
             speed_observation = speed_timeline.at(now - args.pre_roll_seconds)
             speed = speed_observation.speed_kmh
+            if len(yaw_times):
+                native.camera_yaw(handle, now, float(np.interp(now - args.pre_roll_seconds, yaw_times, yaw_rates)))
             native.tick(handle, now, speed if speed is not None else math.nan,
                         int(speed is not None and now >= args.pre_roll_seconds), playing, ptr(decision))
             native.trace(handle, ptr(trace))
@@ -512,6 +544,8 @@ def main():
             if selected and decision[6] and decision[7]:
                 is_dual = int(trace[3]) == 1
                 if args.coaching_profile != "legacy":
+                    if playing and now < playing_until and 1 - (playing_until - now) / durations[playing] >= .85:
+                        native.coaching_completed(handle, playing, now)  # as on the phone: 85 % heard is delivered
                     if not native.coaching_accepted(handle,selected,now):
                         raise RuntimeError("Selected coaching event failed current-evidence logical acceptance; no speech event recorded")
                     onset_valid=bool(native.coaching_onset(handle,selected,now))

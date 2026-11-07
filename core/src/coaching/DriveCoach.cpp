@@ -95,9 +95,11 @@ PolicyChoice DriveCoach::choose(const PolicyContext& context) const noexcept {
     if(!deferred)best.reason=best.mode==Mode::WARN?"SUPPORTED_WARNING_PRIORITY":"AUTOMATIC_DRIVING_TASK";
     return best;
 }
-bool DriveCoach::valid(const Candidate& c,const WorldState& w,double now) const noexcept {
+bool DriveCoach::valid(const Candidate& c,const WorldState& w,double now,bool started) const noexcept {
     if(!enabled_||c.urgent)return true;
-    if(!w.active||!cognition::fresh(now,w.captureTime))return false;
+    // Routine speech starts only while the camera is live; started speech finishes its
+    // sentence through a late frame (a warm phone's camera lagged on the Nov 6 drive).
+    if(!w.active||(!started&&!cognition::fresh(now,w.captureTime)))return false;
     if(c.prompt==Prompt::moveOffPrep)return w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh<=3;
     if(c.origin==7)return true; // Risk instructions also apply while stopped (waiting at a junction).
     const auto d=domain(c);
