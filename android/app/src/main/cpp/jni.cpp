@@ -177,6 +177,9 @@ JNIEXPORT void JNICALL JNI(routeManeuvers)(JNIEnv* e,jobject,jlong h,jdouble tim
     std::vector<double> v(static_cast<size_t>(n));if(n)e->GetDoubleArrayRegion(ahead,0,n,v.data());
     ld_route_maneuvers(engine(h),time,v.data(),v.size());
 }
+JNIEXPORT void JNICALL JNI(navigationStepDetail)(JNIEnv*,jobject,jlong h,jdouble receivedAt,jint side,jint exit,jint next,jdouble gap) {
+    ld_navigation_step_detail(engine(h),receivedAt,side,exit,next,gap);
+}
 JNIEXPORT jboolean JNICALL JNI(bumpRestore)(JNIEnv*,jobject,jlong h,jdouble lat,jdouble lon,jdouble heading,jint observations,jint misses) {
     return ld_bump_restore(engine(h),lat,lon,heading,observations,misses)!=0;
 }

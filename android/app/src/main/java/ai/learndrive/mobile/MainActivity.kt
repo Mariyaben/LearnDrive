@@ -31,6 +31,7 @@ import ai.learndrive.mobile.navigation.google.GoogleNavigationUpdate
 import ai.learndrive.mobile.navigation.google.GoogleNavigationPhase
 import ai.learndrive.mobile.navigation.google.GoogleManeuverKind
 import ai.learndrive.mobile.navigation.google.GoogleJourneyMemory
+import ai.learndrive.mobile.navigation.google.nativeCode
 import androidx.lifecycle.ViewModelProvider
 import ai.learndrive.mobile.ui.CoachStyle
 
@@ -624,6 +625,10 @@ class MainActivity : ComponentActivity() {
                 phase,update.stepNumber?:-1,maneuver,update.distanceMeters?:Double.POSITIVE_INFINITY,
                 update.timeSeconds?:Double.POSITIVE_INFINITY)
             update.maneuversAheadMeters?.let {core.routeManeuvers(update.receivedAtSeconds,it)}
+            // Side, roundabout exit and the step after this one: "In 100 metres, keep left",
+            // "take the second exit", "Then turn left straight after".
+            core.navigationStepDetail(update.receivedAtSeconds,update.side,update.roundaboutExit?:0,
+                update.nextManeuver.nativeCode(),update.nextGapMeters?:Double.POSITIVE_INFINITY)
         }
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.

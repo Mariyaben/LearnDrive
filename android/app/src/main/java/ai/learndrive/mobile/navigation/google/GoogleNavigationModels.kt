@@ -26,8 +26,34 @@ data class GoogleNavigationUpdate(
     val timeSeconds:Double?=null,
     val roundaboutExit:Int?=null,
     /** Metres from the car to each remaining maneuver, nearest first (memory only). */
-    val maneuversAheadMeters:DoubleArray?=null
+    val maneuversAheadMeters:DoubleArray?=null,
+    /** Keep/fork/ramp side: -1 left, +1 right, 0 none. */
+    val side:Int=0,
+    /** The step after this one and how far after it (memory only). */
+    val nextManeuver:GoogleManeuverKind=GoogleManeuverKind.UNKNOWN,
+    val nextGapMeters:Double?=null
 )
+
+/** LearnDrive's own maneuver codes (LD_MANEUVER_*), never Google's integers. */
+fun GoogleManeuverKind.nativeCode():Int=when(this) {
+    GoogleManeuverKind.LEFT_TURN,GoogleManeuverKind.SLIGHT_LEFT,GoogleManeuverKind.SHARP_LEFT->1
+    GoogleManeuverKind.RIGHT_TURN,GoogleManeuverKind.SLIGHT_RIGHT,GoogleManeuverKind.SHARP_RIGHT->2
+    GoogleManeuverKind.KEEP_LEFT,GoogleManeuverKind.KEEP_RIGHT,GoogleManeuverKind.FORK_LEFT,GoogleManeuverKind.FORK_RIGHT->3
+    GoogleManeuverKind.ON_RAMP,GoogleManeuverKind.OFF_RAMP->4
+    GoogleManeuverKind.MERGE->5;GoogleManeuverKind.U_TURN->6;GoogleManeuverKind.ROUNDABOUT->7
+    GoogleManeuverKind.STRAIGHT->8;GoogleManeuverKind.ARRIVAL->9;else->0
+}
+
+/** Which side a keep/fork/ramp/merge maneuver goes: -1 left, +1 right, 0 not stated. */
+internal fun googleManeuverSide(value:Int):Int=when(value) {
+    Maneuver.TURN_KEEP_LEFT,Maneuver.FORK_LEFT,Maneuver.MERGE_LEFT,Maneuver.ON_RAMP_LEFT,Maneuver.ON_RAMP_SLIGHT_LEFT,
+    Maneuver.ON_RAMP_SHARP_LEFT,Maneuver.ON_RAMP_KEEP_LEFT,Maneuver.OFF_RAMP_LEFT,Maneuver.OFF_RAMP_SLIGHT_LEFT,
+    Maneuver.OFF_RAMP_SHARP_LEFT,Maneuver.OFF_RAMP_KEEP_LEFT,Maneuver.DESTINATION_LEFT->-1
+    Maneuver.TURN_KEEP_RIGHT,Maneuver.FORK_RIGHT,Maneuver.MERGE_RIGHT,Maneuver.ON_RAMP_RIGHT,Maneuver.ON_RAMP_SLIGHT_RIGHT,
+    Maneuver.ON_RAMP_SHARP_RIGHT,Maneuver.ON_RAMP_KEEP_RIGHT,Maneuver.OFF_RAMP_RIGHT,Maneuver.OFF_RAMP_SLIGHT_RIGHT,
+    Maneuver.OFF_RAMP_SHARP_RIGHT,Maneuver.OFF_RAMP_KEEP_RIGHT,Maneuver.DESTINATION_RIGHT->1
+    else->0
+}
 
 data class GoogleNavigationState(
     val status:String="Choose Google to enable its search and map",

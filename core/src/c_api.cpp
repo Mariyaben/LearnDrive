@@ -67,6 +67,8 @@ struct ld_engine {
     double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
+    // Google step detail for the latest turn update (side, roundabout exit, the step after it).
+    int navSide{},navExit{},navNextKind{};double navNextGap=ld::infinity,navDetailReceipt=-ld::infinity;
     std::string coachingDiagnostics;
     std::string intelligenceContext;
     std::string replayWorld;
@@ -249,6 +251,15 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.route.captureTime=provider?e.coachingRouteReceipt:route.fixTime;w.route.gpsTime=route.fixTime;
     w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
     w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
+    if(provider&&w.route.valid) {
+        // Google's distance at the moment of its update, carried forward by the measured
+        // speed (updates arrive every second or two; the learner keeps moving between them).
+        const auto t=e.fusion.snapshot(now);
+        const double age=std::clamp(now-e.coachingRouteReceipt,0.,5.);
+        if(t.speedValid&&std::isfinite(t.speedKmh)&&std::isfinite(w.route.distanceM))w.route.distanceM=std::max(0.,w.route.distanceM-t.speedKmh/3.6*age);
+        w.route.maneuver=int(e.providerNavigation.kind());
+        if(e.navDetailReceipt==e.coachingRouteReceipt){w.route.side=e.navSide;w.route.roundaboutExit=e.navExit;w.route.nextManeuver=e.navNextKind;w.route.nextGapM=e.navNextGap;}
+    }
     w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
     w.hornRules=e.hornRules;
     w.arriving=provider&&e.providerNavigation.arriving(now);
@@ -918,6 +929,11 @@ int ld_route_line(ld_engine* e,const double* lat_lon,size_t count) {
     try {return e&&e->routeLine.load(lat_lon,count);}catch(const std::exception& ex){if(e){e->error=ex.what();e->routeLine.clear();}return 0;}
 }
 void ld_route_maneuvers(ld_engine* e,double time,const double* ahead_m,size_t count){if(e)e->routeLine.maneuvers(time,ahead_m,count);}
+void ld_navigation_step_detail(ld_engine* e,double received_at,int side,int roundabout_exit,int next_maneuver,double next_gap_m) {
+    if(!e)return;
+    e->navDetailReceipt=received_at;e->navSide=std::clamp(side,-1,1);e->navExit=std::clamp(roundabout_exit,0,8);
+    e->navNextKind=std::clamp(next_maneuver,0,9);e->navNextGap=std::isfinite(next_gap_m)&&next_gap_m>=0?next_gap_m:ld::infinity;
+}
 int ld_bump_restore(ld_engine* e,double lat,double lon,double heading,int observations,int misses) {
     try {return e&&e->bumps.restore(lat,lon,heading,observations,misses);}catch(const std::exception& ex){if(e)e->error=ex.what();return 0;}
 }

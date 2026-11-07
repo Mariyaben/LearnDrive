@@ -14,7 +14,53 @@ struct Plan {
     void act(F f) noexcept {if(f==F::none||(f==F::soundHorn&&!horn))return;for(size_t i=0;i<actionCount;++i)if(actions[i]==f)return;if(actionCount<actions.size())actions[actionCount++]=f;}
     bool has(F f) const noexcept {for(size_t i=0;i<actionCount;++i)if(actions[i]==f)return true;return false;}
     void drop(F f) noexcept {size_t k=0;for(size_t i=0;i<actionCount;++i)if(actions[i]!=f)actions[k++]=actions[i];actionCount=k;}
+    void dropCtx(F f) noexcept {size_t k=0;for(size_t i=0;i<contexts;++i)if(context[i]!=f)context[k++]=context[i];contexts=k;}
+    bool hasCtx(F f) const noexcept {for(size_t i=0;i<contexts;++i)if(context[i]==f)return true;return false;}
+    bool navigation() const noexcept {for(size_t i=0;i<contexts;++i)if(isNavigationFragment(context[i]))return true;return false;}
 };
+// The spoken distance for Google's distance: the largest round distance not beyond it (never
+// more room than there is), and only when close enough to be honest; otherwise none.
+F distanceFragment(double d) noexcept {
+    if(!std::isfinite(d))return F::none;
+    const std::pair<double,F> bands[]={{200,F::in200m},{150,F::in150m},{100,F::in100m},{50,F::in50m}};
+    for(const auto& [b,f]:bands)if(b<=d+8)return d-b<=std::max(15.,.3*b)?f:F::none;
+    return F::none;
+}
+// What Google says is there, in an instructor's words. Replaces the generic "junction/turn ahead".
+// step 1-2: "In 100 metres, turn right." (+ "Then turn left straight after."); step 3: at the turn.
+void navigation(const WorldState& w,int step,double v,Plan& plan) noexcept {
+    if(!w.route.provider||!w.route.valid)return;
+    const int m=w.route.maneuver;const double d=w.route.distanceM;
+    if(step==3) {
+        if(m==1||m==2){plan.ctx(m==1?F::leftTurnHere:F::rightTurnHere);}
+        else if(m==7){plan.ctx(F::giveWayRight);}
+        else if(m==9){plan.ctx(F::pullOver);plan.drop(F::lookBothWays);plan.drop(F::soundHorn);plan.act(F::checkMirrors);}
+        return;
+    }
+    F what=F::none;
+    switch(m) {
+    case 1:what=F::turnLeft;break;case 2:what=F::turnRight;break;
+    case 3:what=w.route.side<0?F::keepLeftRoute:w.route.side>0?F::keepRightRoute:F::none;break;
+    case 5:what=F::mergeCarefully;break;case 6:what=F::uTurn;break;
+    case 7:what=w.route.roundaboutExit==1?F::roundaboutFirst:w.route.roundaboutExit==2?F::roundaboutSecond:
+        w.route.roundaboutExit==3?F::roundaboutThird:w.route.roundaboutExit==4?F::roundaboutFourth:F::roundaboutEnter;break;
+    case 9:what=F::destinationAhead;break;
+    default:break;
+    }
+    if(what==F::none)return; // Keep the generic "Junction ahead."
+    const F dist=distanceFragment(d);
+    if(dist==F::none&&(m==1||m==2))return; // "Left turn ahead." already says it.
+    plan.dropCtx(F::junctionAhead);plan.dropCtx(F::leftTurnAhead);plan.dropCtx(F::rightTurnAhead);
+    if(dist!=F::none)plan.ctx(dist); else plan.ctx(F::junctionAhead);
+    plan.ctx(what);
+    // Two turns close together: say the second with the first.
+    if(w.route.nextGapM<=80&&(w.route.nextManeuver==1||w.route.nextManeuver==2))plan.ctx(w.route.nextManeuver==1?F::thenLeft:F::thenRight);
+    // The signal goes with the direction (keep left/right; a U-turn is to the right here).
+    if(step==1&&m==3)plan.act(w.route.side<0?F::signalLeft:F::signalRight);
+    if(step==1&&m==6){plan.act(F::signalRight);plan.drop(F::easeOff);}
+    // Preparation said late (the learner is already close): slow down with it.
+    if(step==1&&d<=routeApproachDistance(v)&&v>routeApproachSpeed)plan.act(F::brakeGently);
+}
 // Most urgent first; an instructor says what to do NOW before what to do next.
 int order(F f) noexcept {
     switch(f){case F::brakeNow:return 0;case F::brakeGently:return 1;case F::stopAndWait:return 2;case F::readyToStop:return 3;
@@ -79,6 +125,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     if(primaryActor)plan.ctx(actorContext(*primaryActor));
     if(!actions(primary.prompt,v,plan))return false;
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
+    if(primary.lessonStep)navigation(w,primary.lessonStep,v,plan);
     // Indian road practice the recorded sentence does not say: sound the horn when entering
     // a junction and before passing a person or two-wheeler at the road edge.
     if(primary.prompt==Prompt::junctionEntry)plan.act(F::soundHorn);
@@ -129,6 +176,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
             Plan probe;probe.horn=plan.horn;
             if(due.lessonStep&&actions(due.prompt,v,probe)) {
                 if(due.prompt==Prompt::junctionEntry)probe.act(F::soundHorn);
+                navigation(w,due.lessonStep,v,probe);
                 for(size_t k=0;k<probe.contexts;++k)plan.ctx(probe.context[k]);
                 for(size_t k=0;k<probe.actionCount;++k)plan.act(probe.actions[k]);
                 absorb(due.identity,due.prompt,due.kind,due.lessonStep,due.lessonEpoch);
@@ -139,7 +187,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         // Only once its preparation is due or given: naming the turn earlier and again at
         // its own instruction is repetition, not information.
         const double named=j.prepareLead>0?j.prepareLead+1:25;
-        if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=named&&primary.origin!=5)
+        if(j.event&&j.leadSeconds>=0&&j.leadSeconds<=named&&primary.origin!=5&&!plan.navigation())
             plan.ctx(w.route.feature==4?F::leftTurnAhead:w.route.feature==5?F::rightTurnAhead:F::junctionAhead);
     }
     // An urgent moment sounds different from routine advice: "Brake now", not "Brake gently".
@@ -151,12 +199,15 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     if(plan.has(F::stopAndWait)||plan.has(F::holdBrake))plan.drop(F::coverBrake);
     std::sort(plan.actions.begin(),plan.actions.begin()+plan.actionCount,[](F a,F b){return order(a)<order(b);});
     // Set the scene like an instructor: slope, then junction/bend, then road users (most important first).
-    const auto scene=[](F f){const int i=int(f);return i<=3?0:(i<=7||f==F::bumpAheadContext)?1:2;};
+    const auto scene=[](F f){const int i=int(f);return i<=3?0:(i<=7||f==F::bumpAheadContext||isNavigationFragment(f))?1:2;};
     std::stable_sort(plan.context.begin(),plan.context.begin()+plan.contexts,[&](F a,F b){return scene(a)<scene(b);});
+    // Google's distance and maneuver come before anything else that would not fit.
+    const bool navigating=plan.navigation();
+    if(navigating&&plan.contexts>3){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);}
     // Composition must add something the primary recording does not already say.
     if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor)return false;
     // 7. Keep it speakable: urgent = what + 2 actions; otherwise <= 3 + 3 (< ~6 s).
-    const size_t maxContext=urgent?1:3,maxActions=urgent?2:3;
+    const size_t maxContext=urgent?1:navigating?4:3,maxActions=urgent?2:3;
     out={};
     for(size_t i=0;i<std::min(plan.contexts,maxContext);++i)out.fragments[out.count++]=int(plan.context[i]);
     for(size_t i=0;i<std::min(plan.actionCount,maxActions)&&out.count<out.fragments.size();++i)out.fragments[out.count++]=int(plan.actions[i]);

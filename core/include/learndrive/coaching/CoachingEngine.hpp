@@ -37,6 +37,10 @@ struct RouteContext {
     double captureTime=-infinity,distanceM=infinity,etaSeconds=infinity,gpsTime=-infinity;
     int feature{};
     bool valid{},provider{};
+    // Provider (Google) step detail: maneuver (TurnKind 1-9), side for keep/fork (-1 left,
+    // +1 right), roundabout exit, and the step after this one (kind, metres after it).
+    int maneuver{},side{},roundaboutExit{},nextManeuver{};
+    double nextGapM=infinity;
 };
 // Candidates are bounded outputs of existing measured-scene producers. Their
 // evidence clock never becomes the rules tick clock. No generated text enters.
