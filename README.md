@@ -1,6 +1,16 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.7 (experimental, host-tested only).** 0.7.7 was tested by driving
+**Current Android candidate: 0.8.0 (experimental, host-tested only).** 0.8.0 lets the road-user
+detector see about twice as far ahead at no extra cost: its image becomes a mosaic of the road
+plus a 2x zoom of the far road, filling space letterboxing wasted, with every box mapped back to
+true frame geometry so distances are unchanged ([detector mosaic](docs/coach/DETECTOR_MOSAIC.md)).
+The risk coach acts on that earlier sight (about 6 s ahead instead of a fixed 25 m), ignores
+"road users" that cannot be standing on the road and the phone mount at the frame edge, and an
+urgent instruction now always says why ("Person ahead. Brake now."). Slope advice no longer
+mistakes a sagging phone mount for a hill; the coach says when Google changes the route; the
+coach card shows the next maneuver instead of filler text. 0.7.9 coaches every Google turn by
+distance ("In 100 metres, turn right..."). 0.7.8 adds route-line bends and learned speed bumps.
+**Previously, 0.7.7 (experimental, host-tested only).** 0.7.7 was tested by driving
 the brain over real Kerala roads it had never seen, with and without a destination
 ([route-drive simulation](docs/coach/ROUTE_SIMULATION.md)). The map scout now follows roads that
 bend where two map segments meet, treats a main road that bends away at a junction as a junction,

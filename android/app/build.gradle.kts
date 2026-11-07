@@ -17,8 +17,8 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 40
-        versionName = "0.7.9"
+        versionCode = 41
+        versionName = "0.8.0"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
         buildConfigField("boolean", "PRETRAINED_RUNTIME_AVAILABLE", (rootProject.file("../.tools/intelligence/android/llama-b11932/libllama.so").isFile && rootProject.file("../.tools/intelligence/include/llama.h").isFile).toString())

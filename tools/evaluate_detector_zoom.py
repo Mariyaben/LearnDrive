@@ -101,6 +101,46 @@ def grown(box, factor: float):
     return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
 
 
+def mosaic(image: np.ndarray, horizon: float, size: int = 320):
+    """The app's detector mosaic (native preprocessMosaic): the road band (full width, from 22% of
+    the height above the horizon down) and a 2x zoom of the far road in the rows left over.
+    Returns the tensor and a decoder mapping both bands back to frame pixels."""
+    h, w = image.shape[:2]
+    s = size / w
+    crop_y = float(np.clip((horizon - .50) * h, 0, max(0.0, h - size * .5 / s)))
+    band = int(np.ceil((h - crop_y) * s))
+    strip_top = band + 4
+    strip = size - strip_top
+    if w < h or band <= 0 or strip < 48:
+        tensor, sc, px, py = letterbox(image, size)
+        return tensor, lambda raw: decode(raw, sc, px, py)
+    zs = 2 * s
+    src_w, src_h = size / zs, strip / zs
+    src_x = max(0.0, (w - src_w) / 2)
+    src_y = float(np.clip(horizon * h - .4 * src_h, 0, max(0.0, h - src_h)))
+    canvas = np.full((size, size, 3), 114, np.uint8)
+    xs = np.clip(((np.arange(size) + .5) / s).astype(int), 0, w - 1)
+    fy = (np.arange(band) + .5) / s + crop_y
+    rows = np.flatnonzero(fy < h)
+    canvas[rows] = image[fy[rows].astype(int)][:, xs]
+    zx = (src_x + (np.arange(size) + .5) / zs)
+    zy = (src_y + (np.arange(strip) + .5) / zs)
+    cols, zrows = np.flatnonzero(zx < w), np.flatnonzero(zy < h)
+    canvas[strip_top + zrows[:, None], cols[None, :]] = image[zy[zrows].astype(int)][:, zx[cols].astype(int)]
+    tensor = np.ascontiguousarray(canvas.transpose(2, 0, 1)[None].astype(np.float32) / 255)
+
+    def decode_mosaic(raw):
+        out = []
+        for x1, y1, x2, y2, score, cls in decode(raw, 1.0, 0.0, 0.0):  # model pixels
+            if y2 <= band + 1 or ((y1 + y2) / 2 < band and y2 <= band + max(8, .12 * (y2 - y1))):  # road band (touching the bottom edge)
+                y2 = min(y2, band)
+                out.append((x1 / s, y1 / s + crop_y, x2 / s, y2 / s + crop_y, score, cls))
+            elif y1 >= strip_top - 1 and x1 > 2 and x2 < size - 2 and y1 > strip_top + 2 and y2 < size - 2:
+                out.append((src_x + x1 / zs, src_y + (y1 - strip_top) / zs, src_x + x2 / zs, src_y + (y2 - strip_top) / zs, score, cls))
+        return out
+    return tensor, decode_mosaic
+
+
 def crop_rect(width: int, height: int, horizon: float) -> tuple[int, int, int]:
     """Square crop: half the long side (at most the short side), centred horizontally and on the horizon."""
     side = int(min(max(width, height) * 0.5, min(width, height)))
@@ -116,6 +156,8 @@ def main(argv=None):
     parser.add_argument("--horizon", type=float, default=0.5, help="horizon height as a fraction of the frame (crop centre)")
     parser.add_argument("--review-times", type=float, nargs="*", default=[], help="seconds to save annotated frames for")
     parser.add_argument("--output", type=Path, default=ROOT / "build/detector-eval")
+    parser.add_argument("--mosaic", action="store_true",
+                        help="compare the plain letterbox with the app's one-inference mosaic (road band + 2x zoom band)")
     parser.add_argument("--detector", type=Path, default=ROOT / "android/app/src/main/assets/detector.onnx")
     args = parser.parse_args(argv)
     width, height, duration = probe(args.video)
@@ -133,13 +175,22 @@ def main(argv=None):
         started = time.perf_counter()
         full = nms(decode(session.run(None, {"images": tensor})[0][0], s, px, py))
         timing["full_ms"].append((time.perf_counter() - started) * 1000)
-        ztensor, zs, zpx, zpy = letterbox(image[y0:y0 + side, x0:x0 + side])
-        started = time.perf_counter()
-        zoom = decode(session.run(None, {"images": ztensor})[0][0], zs, zpx, zpy, (x0, y0))
-        timing["zoom_ms"].append((time.perf_counter() - started) * 1000)
-        # Zoom boxes clipped by the crop edge are partial objects; the full frame covers them.
-        zoom = [b for b in zoom if b[0] > x0 + 2 and b[2] < x0 + side - 2 and b[1] > y0 + 2 and b[3] < y0 + side - 2]
-        merged = nms(full + zoom)
+        if args.mosaic:
+            # One inference on the mosaic replaces the plain letterbox (no second pass).
+            mtensor, decode_mosaic = mosaic(image, args.horizon)
+            started = time.perf_counter()
+            merged = nms(decode_mosaic(session.run(None, {"images": mtensor})[0][0]))
+            timing["zoom_ms"].append((time.perf_counter() - started) * 1000)
+            lost = [f for f in full if all(not (GROUPS[m[5]] == GROUPS[f[5]] and iou(m, f) > 0.3) for m in merged)]
+            timing.setdefault("lost", []).append(len(lost))
+        else:
+            ztensor, zs, zpx, zpy = letterbox(image[y0:y0 + side, x0:x0 + side])
+            started = time.perf_counter()
+            zoom = decode(session.run(None, {"images": ztensor})[0][0], zs, zpx, zpy, (x0, y0))
+            timing["zoom_ms"].append((time.perf_counter() - started) * 1000)
+            # Zoom boxes clipped by the crop edge are partial objects; the full frame covers them.
+            zoom = [b for b in zoom if b[0] > x0 + 2 and b[2] < x0 + side - 2 and b[1] > y0 + 2 and b[3] < y0 + side - 2]
+            merged = nms(full + zoom)
         zoom_only = [b for b in merged if all(not (GROUPS[f[5]] == GROUPS[b[5]] and iou(f, b) > 0.3) for f in full)]
         timeline.append({"t": t, "full": full, "merged": merged, "zoom_only": zoom_only})
         if index in review:
@@ -201,6 +252,8 @@ def main(argv=None):
         "median_lead_seconds_when_earlier": float(np.median([l for l in leads if l > 0])) if any(l > 0 for l in leads) else 0.0,
         "lead_ge_1s": sum(lead >= 1 for lead in leads),
         "full_ms_median": float(np.median(timing["full_ms"])), "zoom_ms_median": float(np.median(timing["zoom_ms"])),
+        "mode": "mosaic: one inference (road band + 2x zoom band) vs plain letterbox" if args.mosaic else "second zoom pass",
+        "full_detections_missed_by_mosaic": int(sum(timing.get("lost", []))) if args.mosaic else None,
         "meaning": "Unlabelled comparison: zoom-only detections still need visual review; host CPU timing, not phone timing",
     }
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

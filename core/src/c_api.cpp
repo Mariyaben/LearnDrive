@@ -31,6 +31,8 @@ struct ld_engine {
     ld::Transform transform;ld::Gray gray;
     // Zoomed detector pass of the current frame.
     ld::Transform zoomTransform;ld::Crop zoomCrop;bool zoomReady{};std::vector<ld::Box> boxes;ld_dual_scene scene{},semanticScene{};
+    // The detector image's layout when it was prepared as a mosaic (road band + zoom band).
+    ld::Mosaic mosaic{};std::vector<float> mosaicBuffer;
     ld::perception::SpatialOutput spatial{};double spatialTime=-ld::infinity;
     ld::perception::CameraIntrinsics spatialCamera{};
     ld::perception::Matrix3 spatialWarp{1,0,0,0,1,0,0,0,1};
@@ -75,6 +77,24 @@ struct ld_engine {
     ld::EngineSample coachingEngineSample{};
     ld_engine(){promptTimes.fill(-ld::infinity);}
 };
+// Horizon row (fraction of image height) for the camera at `time`: a replay's override, else the
+// phone's measured pitch (a camera pointing up puts the horizon low in the image), else mid-image.
+static double horizonAt(const ld_engine& e,double time) {
+    if(std::isfinite(e.horizonOverride))return e.horizonOverride;
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto up=e.fusion.cameraUp(time);
+        if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));return std::clamp(.5+.96*std::tan(pitch),.25,.85);}
+    }
+    return .5;
+}
+// Detector output as decodable road-band coordinates: a mosaic's zoom-band candidates are
+// mapped back into frame geometry first (a copy; the caller's buffer is not modified).
+static const float* decodable(ld_engine& e,const float* d,size_t count,int candidates,bool cf) {
+    if(!e.mosaic.active||!d)return d;
+    if(count!=size_t(84)*size_t(std::max(0,candidates)))throw std::invalid_argument("mosaic needs YOLOv8 [84,N] output");
+    e.mosaicBuffer.assign(d,d+count);ld::mosaicToFull(e.mosaicBuffer.data(),candidates,cf,e.transform,e.mosaic);
+    return e.mosaicBuffer.data();
+}
 // Where the car was at `time` (between GPS fixes, or just after the last one), and its heading.
 static bool positionAt(const ld_engine& e,double time,double& lat,double& lon,double& heading) {
     if(!e.fixCount||!std::isfinite(time))return false;
@@ -262,7 +282,9 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     }
     w.laneTime=e.laneTime;w.laneLeft=e.laneLeft;w.laneRight=e.laneRight;w.laneValid=e.laneValid;
     w.hornRules=e.hornRules;
+    w.visibleTop=e.mosaic.active?e.mosaic.visibleTop:0;
     w.arriving=provider&&e.providerNavigation.arriving(now);
+    w.rerouting=e.providerNavigation.rerouting(now);
     if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
         // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
@@ -374,7 +396,7 @@ int ld_spatial_geometry(ld_engine* e,const double g[9]) {
 int ld_spatial_semantics(ld_engine* e,double time,const float* detections,size_t count,int candidates,int cf,double out[3]) {
     if(!e||!out)return 0;
     try {
-        auto boxes=ld::decodeYolo(detections,count,84,candidates,cf!=0,false,e->transform);
+        auto boxes=ld::decodeYolo(decodable(*e,detections,count,candidates,cf!=0),count,84,candidates,cf!=0,false,e->transform);
         ld::LaneMap map;map.width=32;map.height=24;map.road.resize(32*24);map.lane.resize(32*24);
         if(e->spatialCamera.valid()&&time>=e->spatialTime&&time-e->spatialTime<ld::maxVisionAgeSeconds) {
             std::array<std::array<std::array<double,2>,33>,2> lines{};
@@ -1006,9 +1028,18 @@ size_t ld_boxes(ld_engine* e,float* out,size_t capacity) {
 }
 int ld_preprocess(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save) {
     if(!e) return 0;
-    e->zoomReady=false;
+    e->zoomReady=false;e->mosaic={};
     try {e->transform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save?&e->gray:nullptr);e->error.clear();return 1;}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
+}
+int ld_preprocess_mosaic(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save,double time) {
+    if(!e)return 0;
+    e->zoomReady=false;e->mosaic={};
+    try {
+        e->transform=ld::preprocessMosaic({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,
+            save?&e->gray:nullptr,float(horizonAt(*e,time)),e->mosaic);
+        e->error.clear();return e->mosaic.active?2:1;
+    }catch(const std::exception& ex){e->mosaic={};e->error=ex.what();return 0;}
 }
 int ld_preprocess_zoom(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,float horizon) {
     if(!e)return 0;
@@ -1039,7 +1070,7 @@ int ld_zoom_merge(ld_engine* e,const float* full,const float* zoom,int candidate
 }
 int ld_vision(ld_engine* e,double t,const float* d,size_t n,int c,int candidates,int cf,int normalized,const float* road,const float* lane,int w,int h,double out[3]) {
     if(!e||!out) return 0;
-    try {auto boxes=ld::decodeYolo(d,n,c,candidates,cf!=0,normalized!=0,e->transform);auto lanes=ld::decodeLanes(road,lane,w,h,e->transform);
+    try {auto boxes=ld::decodeYolo(c==84&&!normalized?decodable(*e,d,n,candidates,cf!=0):d,n,c,candidates,cf!=0,normalized!=0,e->transform);auto lanes=ld::decodeLanes(road,lane,w,h,e->transform);
         auto hazard=e->tracker.update(t,boxes,e->gray,lanes);e->semanticHazard=hazard;const auto shape=ld::roadShape(lanes);e->driving.road(t,shape);
         e->scene.capture_time=t;++e->scene.sequence;e->scene.count=std::min(boxes.size(),size_t(64));
         for(size_t i=0;i<e->scene.count;++i) {

@@ -32,6 +32,7 @@ import ai.learndrive.mobile.navigation.google.GoogleNavigationPhase
 import ai.learndrive.mobile.navigation.google.GoogleManeuverKind
 import ai.learndrive.mobile.navigation.google.GoogleJourneyMemory
 import ai.learndrive.mobile.navigation.google.nativeCode
+import kotlin.math.roundToInt
 import androidx.lifecycle.ViewModelProvider
 import ai.learndrive.mobile.ui.CoachStyle
 
@@ -644,8 +645,11 @@ class MainActivity : ComponentActivity() {
         GoogleManeuverKind.OFF_RAMP->"Take the exit";GoogleManeuverKind.U_TURN->"U-turn ahead"
         GoogleManeuverKind.ROUNDABOUT->update.roundaboutExit?.let {"Roundabout · exit $it"}?:"Roundabout ahead"
         GoogleManeuverKind.ARRIVAL->"Destination ahead";GoogleManeuverKind.STRAIGHT->"Continue ahead"
-        else->"Follow the mapped route"
+        else->"Follow the route"
     }
+    /** What the learner should know about the road ahead, for the coach card between instructions. */
+    @Volatile private var nextRoadSummary:String?=null
+    private fun distanceText(m:Double)=when {m>=1000->"%.1f km".format(m/1000);m>=20->"${(m/10).roundToInt()*10} m";else->"here"}
     private fun startEvidence() {
         if(evidenceBusy||evidenceSaved||journal?.isFinished==false||knownMoving()||evidenceMetadata==null)return
         android.app.AlertDialog.Builder(this).setTitle("Record local diagnostic evidence?")
@@ -1416,6 +1420,18 @@ class MainActivity : ComponentActivity() {
                 dashboard.navigationStatus.setUiText(if(!roadSource())"Navigation coaching paused for test input" else
                     if(freePractice)roadMapStatus.substringBefore(" (©")+learnedBumpNote() else google?.state?.status?:"Google navigation unavailable")
                 val valid=roadSource()&&fix!=null&&update?.state==GoogleNavigationPhase.ENROUTE
+                // A known maneuver with Google's distance; "continue"/unknown steps show no distance.
+                val known=valid&&update?.maneuver!=GoogleManeuverKind.UNKNOWN&&update?.maneuver!=GoogleManeuverKind.STRAIGHT
+                nextRoadSummary=when {
+                    known&&update?.distanceMeters!=null->"Next: ${googleManeuverText(requireNotNull(update))} · ${distanceText(update.distanceMeters)}"
+                    update?.state==GoogleNavigationPhase.REROUTING->"Google is finding a new route"
+                    ahead!=null&&ahead.size>=9&&ahead[5]<=150->"Speed bump ahead · ${distanceText(ahead[5])}"
+                    ahead!=null&&ahead.size>=9&&ahead[6]<=150->(if(ahead[7]!=0.0)"Sharp bend right" else "Sharp bend left")+" · ${distanceText(ahead[6])}"
+                    ahead!=null&&ahead[0]!=0.0->"Junction ahead · ${distanceText(ahead[1])}"
+                    else->null
+                }
+                // Google's own banner shows the maneuver and distance while guiding.
+                dashboard.setRouteCardVisible(!(google?.state?.guiding==true&&google.isRendered))
                 dashboard.setManeuver(if(valid)googleManeuverText(requireNotNull(update)) else when {
                     !roadSource()->"Test input"
                     google?.state?.routeReady==true&&!google.state.guiding->"Route ready · start session"
@@ -1425,7 +1441,7 @@ class MainActivity : ComponentActivity() {
                     ahead!=null&&ahead.size>=9&&ahead[6]<=80->if(ahead[7]!=0.0)"Sharp bend right ahead" else "Sharp bend left ahead"
                     ahead!=null&&ahead[0]!=0.0->"Junction ahead"
                     else->null
-                },if(valid)update?.distanceMeters else ahead?.let {a->when {a.size>=9&&a[5]<=80->a[5];a.size>=9&&a[6]<=80->a[6];a[0]!=0.0->a[1];else->null}})
+                },if(valid)(if(known)update?.distanceMeters else null) else ahead?.let {a->when {a.size>=9&&a[5]<=80->a[5];a.size>=9&&a[6]<=80->a[6];a[0]!=0.0->a[1];else->null}})
             } else if(loadedRoute) {
                 val navigation=core.navigationContext(visionNow)
                 dashboard.navigationStatus.setUiText(if(roadSource())core.navigationStatus(visionNow) else "Map coaching paused for test input")
@@ -1449,11 +1465,11 @@ class MainActivity : ComponentActivity() {
             dashboard.setCoachPresentation(caption?.text?:when {
                     roadSource()&&!setup.isMonitoring()->"Your next session starts here."
                     roadSource()->when(lessonUiPhase){
-                        "WATCHING_ROAD"->"Coaching adapts as the drive develops."
-                        "EVIDENCE_UNAVAILABLE"->"Waiting for reliable road and location data."
-                        "EXECUTION_QUIET"->"Focus on driving. Your instructor leads."
+                        // Between instructions: what is coming up, never an "all clear".
+                        "WATCHING_ROAD","OBSERVING_RESPONSE"->nextRoadSummary?:if(useGoogle&&googleNavigation?.state?.guiding==true)"Following Google's route" else "Free practice"
+                        "EVIDENCE_UNAVAILABLE"->nextRoadSummary?.let {"$it · waiting for GPS speed"}?:"Waiting for GPS speed"
+                        "EXECUTION_QUIET"->"Eyes on the road through the turn"
                         "DELIVERING"->"Driving guidance"
-                        "OBSERVING_RESPONSE"->"Continue preparing with your instructor."
                         else->when(drivingTask){
                             "BEND"->"Preparing for the bend."
                             "HILL"->"Adapting to the hill."

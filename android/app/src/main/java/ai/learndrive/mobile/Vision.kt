@@ -22,6 +22,12 @@ private const val ZOOM_HORIZON=.58f
  * distance-aware urgency for small boxes first. Evaluate with tools/review_video.py --detector-zoom.
  */
 private const val ZOOM_IN_COACHING=false
+/**
+ * The detector sees a mosaic (road band + 2x zoom band of the far road) in ONE inference: the
+ * zoom costs nothing extra, so it is on in coaching. Box geometry is mapped back to the frame
+ * before decoding, so distances are unchanged. Measured with tools/evaluate_detector_zoom.py --mosaic.
+ */
+private const val DETECTOR_MOSAIC=true
 data class Detection(val x:Float,val y:Float,val width:Float,val height:Float,val score:Float,val category:Int)
 data class RoadShape(val valid:Boolean,val bend:Int,val points:List<PointF>) {
     val status get()=if(!valid)"road shape unclear" else when(bend){-1->"left curve";1->"right curve";else->"straight road"}
@@ -262,7 +268,9 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             val p=planes[i];val x=if(i==0)crop.left else crop.left/2;val y=if(i==0)crop.top else crop.top/2
             return p.buffer.duplicate().apply {position(position()+y*p.rowStride+x*p.pixelStride)}.slice()
         }
-        core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+        if(DETECTOR_MOSAIC)core.prepareMosaic(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
+            plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,true,1,time)
+        else core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
             plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,true,1)
         val detectorStarted=now();performanceDetectorCalls++
         try {
@@ -274,7 +282,7 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             performanceDetectorTotalMs+=duration;performanceLastDetectorMs=duration
         }
         var found=detector.values[0];var candidates=count
-        if(ZOOM_IN_COACHING&&channelFirst&&CameraVisionHealth.zoomAllowed(thermalStatus,performanceLastDetectorMs)) {
+        if(ZOOM_IN_COACHING&&!DETECTOR_MOSAIC&&channelFirst&&CameraVisionHealth.zoomAllowed(thermalStatus,performanceLastDetectorMs)) {
             val full=zoomFull?:FloatArray(found.size).also {zoomFull=it}
             val merged=zoomMerged?:FloatArray(found.size*2).also {zoomMerged=it}
             found.copyInto(full)

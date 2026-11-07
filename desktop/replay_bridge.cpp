@@ -74,6 +74,12 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
         f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1);
 }
 EXPORT void replay_camera_horizon(Replay* r,double fraction){ld_camera_horizon(r->engine,fraction);}
+// The app's detector mosaic for the frame (same YUV layout as replay_prepare); 2 = zoom band.
+EXPORT int replay_prepare_mosaic(Replay* r,const uint8_t* yuv,float* tensor,double time) {
+    const auto f=r->frame(yuv);
+    return ld_preprocess_mosaic(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
+        f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1,time);
+}
 EXPORT int replay_prepare_zoom(Replay* r,const uint8_t* yuv,float* tensor,float horizon) {
     const auto f=r->frame(yuv);
     return ld_preprocess_zoom(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
@@ -179,6 +185,8 @@ EXPORT int replay_road_way(Replay* r,int64_t way,int roadClass,const int64_t* no
     return r?ld_road_way(r->engine,way,roadClass,nodes,latLon,count):0;
 }
 EXPORT void replay_road_bump(Replay* r,int64_t node){if(r)ld_road_bump(r->engine,node);}
+// Google step detail for the turn update sent at `time` (side, roundabout exit, next step).
+EXPORT void replay_navigation_detail(Replay* r,double time,int side,int exit,int next,double gap){if(r)ld_navigation_step_detail(r->engine,time,side,exit,next,gap);}
 EXPORT int replay_road_ahead(Replay* r,double now,double* out){return r?ld_road_junction(r->engine,now,out,9):0;}
 EXPORT void replay_coaching_automatic(Replay* r,int automatic,int scheduling) {
     if(!r)return;ld_coaching_automatic(r->engine,automatic);ld_coaching_task_scheduling(r->engine,scheduling);

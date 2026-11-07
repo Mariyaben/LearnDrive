@@ -42,6 +42,8 @@ private:
     const char* calibrationReason_="Hold still on level ground; rear camera forward";
     double velocity_{},bias_{},pvv_=25,pvb_{},pbb_=1;
     double acceleration_{},pitch_{},brakeUntil_=-1,hardUntil_=-1,shockUntil_=-1;
+    // Long-term mean pitch while driving: the mount's offset, not the road (roads average level).
+    double pitchBias_{};
     CarMotion motion_{};
     // Mount disturbance: a sustained step in pitch (phone knocked or re-seated in
     // its mount) invalidates the level reference; roads change grade gradually.

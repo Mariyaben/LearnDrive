@@ -49,6 +49,9 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
     if(lastQuietEvent_&&!j.quietEvent&&w.route.valid&&w.route.eventId!=lastQuietEvent_&&support>=1)exitAt_=now+2.5;
     lastQuietEvent_=j.quietEvent;
     if(exitAt_>=0&&now>=exitAt_){exitAt_=-1;if(v>3&&v<30)propose(int(Prompt::turnExit),now,5);}
+    // Google found a new route while driving: say so once, calmly (the next turn comes as usual).
+    if(!w.rerouting)routeChangeCued_=false;
+    else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,5);}
     // Stopping and moving off.
     if(v<=2){if(stoppedSince_<0)stoppedSince_=now;}
     else stoppedSince_=-1;
@@ -138,6 +141,7 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
     case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
+    case Prompt::routeChanged:return w.rerouting;
     case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80&&w.bendAheadM>=5;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::downhillSecond:case Prompt::downhillThird:case Prompt::uphillSecond:case Prompt::uphillThird: {

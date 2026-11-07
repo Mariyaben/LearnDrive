@@ -85,6 +85,8 @@ public:
     bool fix(const Fix&) noexcept;
     bool active() const noexcept {return active_;}
     TurnKind kind() const noexcept {return input_.kind;}
+    // Google is finding a new route (fresh feed only).
+    bool rerouting(double now) const noexcept {return active_&&available_&&std::isfinite(now)&&now>=input_.receivedAt&&now-input_.receivedAt<=5&&input_.state==TurnState::rerouting;}
     double receivedAt() const noexcept {return input_.receivedAt;}
     double remainingM() const noexcept {return input_.remainingM;}
     MacroContext context(double now) const noexcept;
