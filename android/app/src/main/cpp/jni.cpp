@@ -157,6 +157,7 @@ JNIEXPORT jintArray JNICALL JNI(promptFragments)(JNIEnv* e,jobject,jint id) {
     if(out&&n>0)e->SetIntArrayRegion(out,0,n,fragments);return out;
 }
 JNIEXPORT jint JNICALL JNI(fragmentCount)(JNIEnv*,jobject) {return ld_fragment_count();}
+JNIEXPORT jstring JNICALL JNI(fragmentText)(JNIEnv* e,jobject,jint id) {return e->NewStringUTF(ld_fragment_text(id));}
 JNIEXPORT jboolean JNICALL JNI(roadWay)(JNIEnv* e,jobject,jlong h,jlong way,jint roadClass,jlongArray nodes,jdoubleArray latLon) {
     const jsize n=e->GetArrayLength(nodes);if(n<2||e->GetArrayLength(latLon)!=2*n)return JNI_FALSE;
     std::vector<int64_t> ids(static_cast<size_t>(n));std::vector<double> ll(static_cast<size_t>(2*n));
@@ -176,6 +177,9 @@ JNIEXPORT void JNICALL JNI(routeManeuvers)(JNIEnv* e,jobject,jlong h,jdouble tim
     const jsize n=ahead?e->GetArrayLength(ahead):0;
     std::vector<double> v(static_cast<size_t>(n));if(n)e->GetDoubleArrayRegion(ahead,0,n,v.data());
     ld_route_maneuvers(engine(h),time,v.data(),v.size());
+}
+JNIEXPORT void JNICALL JNI(navigationStepDetail)(JNIEnv*,jobject,jlong h,jdouble receivedAt,jint side,jint exit,jint next,jdouble gap) {
+    ld_navigation_step_detail(engine(h),receivedAt,side,exit,next,gap);
 }
 JNIEXPORT jboolean JNICALL JNI(bumpRestore)(JNIEnv*,jobject,jlong h,jdouble lat,jdouble lon,jdouble heading,jint observations,jint misses) {
     return ld_bump_restore(engine(h),lat,lon,heading,observations,misses)!=0;
@@ -227,6 +231,11 @@ JNIEXPORT jboolean JNICALL JNI(prepare)(JNIEnv* e,jobject,jlong h,jobject y,jint
     auto ptr=[&](jobject b){return static_cast<uint8_t*>(e->GetDirectBufferAddress(b));};
     auto bytes=[&](jobject b){auto n=e->GetDirectBufferCapacity(b);return n<0?size_t(0):size_t(n);};
     return ld_preprocess(engine(h),ptr(y),bytes(y),yr,yp,ptr(u),bytes(u),ur,up,ptr(v),bytes(v),vr,vp,w,height,rot,size,ptr(tensor),bytes(tensor),dtype,layout,scale,zp,full,gray);
+}
+JNIEXPORT jint JNICALL JNI(mosaicPrepare)(JNIEnv* e,jobject,jlong h,jobject y,jint yr,jint yp,jobject u,jint ur,jint up,jobject v,jint vr,jint vp,jint w,jint height,jint rot,jint size,jobject tensor,jint dtype,jfloat scale,jint zp,jboolean full,jboolean gray,jint layout,jdouble time) {
+    auto ptr=[&](jobject b){return static_cast<uint8_t*>(e->GetDirectBufferAddress(b));};
+    auto bytes=[&](jobject b){auto n=e->GetDirectBufferCapacity(b);return n<0?size_t(0):size_t(n);};
+    return ld_preprocess_mosaic(engine(h),ptr(y),bytes(y),yr,yp,ptr(u),bytes(u),ur,up,ptr(v),bytes(v),vr,vp,w,height,rot,size,ptr(tensor),bytes(tensor),dtype,layout,scale,zp,full,gray,time);
 }
 JNIEXPORT jboolean JNICALL JNI(zoomPrepare)(JNIEnv* e,jobject,jlong h,jobject y,jint yr,jint yp,jobject u,jint ur,jint up,jobject v,jint vr,jint vp,jint w,jint height,jint rot,jint size,jobject tensor,jboolean full,jfloat horizon) {
     auto ptr=[&](jobject b){return static_cast<uint8_t*>(e->GetDirectBufferAddress(b));};

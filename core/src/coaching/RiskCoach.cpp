@@ -108,7 +108,12 @@ void RiskCoach::learnMask(const WorldState& w,double v) noexcept {
     // Forget slowly so a remounted phone re-learns (half-life ~ 2 minutes of driving).
     if(maskFrames_>=2000){maskFrames_/=2;for(auto& h:maskHits_)h/=2;}
 }
-void RiskCoach::reset() noexcept {maskHits_={};maskFrames_=0;maskCapture_=-1;motions_={};nextMotion_=1;risks_={};count_=0;top_={};episodes_={};proposal_=0;proposalLevel_=0;urgent_=proposalClosing_=false;proposalId_=0;proposalCapture_=-1;lastGapCue_=-1;}
+double RiskCoach::meanYaw(double from,double to) const noexcept {
+    double sum=0;int n=0;
+    for(size_t i=0;i<yawCount_;++i)if(yawT_[i]>=from-.02&&yawT_[i]<=to+.02){sum+=yawV_[i];++n;}
+    return n?sum/n:0;
+}
+void RiskCoach::reset() noexcept {lastOncomingCue_=-1;yawT_={};yawV_={};yawCursor_=yawCount_=0;maskHits_={};maskFrames_=0;maskCapture_=-1;motions_={};nextMotion_=1;risks_={};count_=0;top_={};episodes_={};proposal_=0;proposalLevel_=0;urgent_=proposalClosing_=false;proposalId_=0;proposalCapture_=-1;lastGapCue_=-1;}
 RiskCoach::Episode* RiskCoach::episode(uint64_t id,double now) noexcept {
     for(auto& e:episodes_)if(e.id==id)return &e;
     Episode* slot=nullptr;
@@ -131,6 +136,8 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         if(sm.speedValid&&now-sm.time>=.6&&now-sm.time<=1.5&&(!old||std::abs(now-sm.time-1)<std::abs(now-old->time-1)))old=&sm;
         if(old)decel=(old->speedKmh-v)/3.6/(now-old->time);}
     learnMask(w,v);
+    if(w.yawKnown&&std::isfinite(w.yawRate)&&(yawCount_==0||now>=yawT_[(yawCursor_+yawT_.size()-1)%yawT_.size()]+.02)){
+        yawT_[yawCursor_]=now;yawV_[yawCursor_]=w.yawRate;yawCursor_=(yawCursor_+1)%yawT_.size();yawCount_=std::min(yawCount_+1,yawT_.size());}
     // Image geometry is relative to the measured horizon (a level camera puts it mid-image).
     const double shift=std::isfinite(w.horizon)?std::clamp(w.horizon,.25,.85)-.5:0;
     const double stopM=stoppingDistance(speedKnown?v:15);
@@ -142,6 +149,15 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         (void)tracks;
         const Motion* motion=associate(a.identity.id,a.category,a.x,a.y,a.w,a.h,a.captureTime);
         ActorRisk r;r.id=motion?motion->id:a.identity.id;r.category=a.category;
+        // A "person" sitting on a bicycle or motorcycle is its rider: judge it as a two-wheeler
+        // (an oncoming rider needs "keep left, ease off", not "person ahead, brake now").
+        if(a.category==0)for(size_t k=0;k<std::min(w.actorCount,w.actors.size());++k) {
+            const auto& b=w.actors[k];
+            if(k==i||b.identity.space!=IdentitySpace::Optical||(b.category!=1&&b.category!=3)||!cognition::fresh(now,b.captureTime))continue;
+            const double overlap=std::min(a.x+a.w,b.x+b.w)-std::max(a.x,b.x);
+            // The rider's body stands on the bike: wide horizontal overlap, the bike under the person's middle.
+            if(overlap>.5*std::min(a.w,b.w)&&b.y<a.y+a.h&&b.y+b.h>a.y+a.h*.5){r.category=b.category;break;}
+        }
         r.center=a.x+a.w*.5;r.foot=a.y+a.h;r.left=r.center<.5;
         if(masked(r.center,r.foot))continue; // Part of the learner's own car.
         // Clipped at the left/right image edge near the bottom: alongside, being passed.
@@ -153,8 +169,18 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         bool attached=false;
         if(old>=0) {++withHistory_;const size_t k=size_t(old);
             const double dt=a.captureTime-motion->t[k];
-            r.expansion=std::log(std::sqrt(double(a.w)*a.h/(double(motion->w[k])*motion->h[k])))/dt;
-            const double lateral=((a.x+a.w*.5)-(motion->x[k]+motion->w[k]*.5))/dt;
+            // Cut off at the side edge (a vehicle passing beside), the width stops growing: use the
+            // height; cut off at the bottom, the width.
+            const bool sideCut=a.x<.01f||a.x+a.w>.99f||motion->x[k]<.01f||motion->x[k]+motion->w[k]>.99f;
+            const bool bottomCut=a.y+a.h>.99f||motion->y[k]+motion->h[k]>.99f;
+            r.expansion=(sideCut&&!bottomCut?std::log(double(a.h)/motion->h[k]):bottomCut&&!sideCut?std::log(double(a.w)/motion->w[k]):
+                std::log(std::sqrt(double(a.w)*a.h/(double(motion->w[k])*motion->h[k]))))/dt;
+            const double imageLateral=((a.x+a.w*.5)-(motion->x[k]+motion->w[k]*.5))/dt;
+            // Turning slides every static object across the image (about 0.72 image widths per
+            // radian; left turn -> rightward): remove it before judging the road user's own
+            // movement (Nov 4 and 6: parked vehicles, a billboard and people walking along the
+            // road "crossing" on bends).
+            const double lateral=imageLateral-.72*meanYaw(motion->t[k],a.captureTime);
             // A static object drifts OUTWARD as it is approached (x' = x*expansion);
             // only motion beyond that is the actor's own lateral movement.
             const double own=lateral-(r.center-.5)*std::max(0.,r.expansion);
@@ -164,47 +190,148 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             if(a.x<.01f||a.x+a.w>.99f)r.inwardRate=r.rawInward=0;
             // Fixed in the frame while the car moves, low in the image: part of the
             // learner's own car (dashboard ornament, mount, bonnet), not a road user.
-            attached=v>5&&r.foot>.8&&dt>=.5&&std::abs(lateral)<.015&&std::abs(r.expansion)<.05;
+            // (Fixed in the IMAGE: it turns with the car, so its raw image motion is used.)
+            attached=v>5&&r.foot>.8&&dt>=.5&&std::abs(imageLateral)<.015&&std::abs(r.expansion)<.05;
+            // ...or at the side edge of the frame at any height: a phone mount arm or a pillar.
+            if(v>5&&dt>=.5&&(a.x<.02f||a.x+a.w>.98f)&&std::abs(imageLateral)<.012&&std::abs(r.expansion)<.04)attached=true;
         }
         if(attached)continue;
+        // Moving toward the path must be sustained over both halves of the window, not one jump
+        // (Nov 4: the detector alternating between two figures side by side read as crossing).
+        bool steady=false;
+        if(old>=0) {
+            const size_t k=size_t(old);const double span=a.captureTime-motion->t[k];int mid=-1;
+            for(size_t q=0;q<motion->count;++q){const double age=a.captureTime-motion->t[q];
+                if(age>.1&&age<span-.1&&(mid<0||std::abs(age-span*.5)<std::abs(a.captureTime-motion->t[size_t(mid)]-span*.5)))mid=int(q);}
+            auto inward=[&](double t0,double x0,double w0,double h0,double t1,double x1,double w1,double h1){
+                const double dt=t1-t0;if(dt<=.05||w0<=0||h0<=0)return 0.;
+                const double grow=std::log(std::sqrt(w1*h1/(w0*h0)))/dt,c1=x1+w1*.5;
+                const double lat=(c1-(x0+w0*.5))/dt-.72*meanYaw(t0,t1);
+                return (lat-(c1-.5)*std::max(0.,grow))*(c1<.5?1:-1);};
+            if(mid>=0){const size_t m=size_t(mid);
+                steady=inward(motion->t[k],motion->x[k],motion->w[k],motion->h[k],motion->t[m],motion->x[m],motion->w[m],motion->h[m])>.03&&
+                       inward(motion->t[m],motion->x[m],motion->w[m],motion->h[m],a.captureTime,a.x,a.w,a.h)>.03;}
+        }
+        // Feet hidden: by the learner's own bonnet (bottom of the image) or behind a vehicle whose box
+        // top meets this box's bottom. Then the box bottom is not where it stands, so the two
+        // "standing on the road" tests below do not apply: a pedestrian about to step out from
+        // behind a parked car must never be dropped as a billboard.
+        bool footHidden=r.foot>.8;double behindFoot=-1;
+        for(size_t k=0;k<std::min(w.actorCount,w.actors.size())&&!footHidden;++k) {
+            const auto& b=w.actors[k];
+            if(k==i||b.identity.space!=IdentitySpace::Optical||(b.category!=2&&b.category!=3&&b.category!=5&&b.category!=7)||!cognition::fresh(now,b.captureTime))continue;
+            const double overlap=std::min(a.x+a.w,b.x+b.w)-std::max(a.x,b.x);
+            if(overlap>.3*a.w&&std::abs(double(b.y)-(a.y+a.h))<.04&&b.y>a.y){footHidden=true;behindFoot=b.y+b.h;}
+        }
+        // Standing on the road? As a road user's box grows (it or the learner approaching), its
+        // bottom edge moves down the image by about camera height / its height for each unit of
+        // growth. A person printed on a billboard or a figure on a wall keeps its bottom row while
+        // it grows (Nov 4: "Person crossing. Stop and wait" for a roadside billboard). Needs no horizon.
+        if(motion&&!footHidden) {
+            int base=-1;double grow=1;
+            for(size_t k=0;k<motion->count;++k)if(motion->h[k]>0&&a.captureTime-motion->t[k]<=2&&a.h/motion->h[k]>grow){grow=a.h/motion->h[k];base=int(k);}
+            if(base>=0&&grow>=1.25) {
+                const size_t k=size_t(base);
+                const double slope=((a.y+a.h)-(motion->y[k]+motion->h[k]))/(a.h-motion->h[k]);
+                const double tall=a.category==0?1.7:(a.category==1||a.category==3)?1.6:(a.category==5||a.category==7)?3.0:1.5;
+                if(slope<.3*1.25/tall)continue;
+            }
+        }
         // Below-horizon position as if the camera were level, and the ground distance it implies.
         const double foot=r.foot-shift;r.distanceM=groundDistance(foot);
+        // Behind a vehicle: about a metre beyond where that vehicle stands.
+        if(behindFoot>0)r.distanceM=groundDistance(behindFoot-shift)+1;
+        // The detector has no class for autorickshaws and calls them "truck": a "truck" whose box is
+        // too short for its ground distance (under ~2.3 m tall) is a small vehicle (Nov 6: "Oncoming
+        // truck" and "Truck ahead" for auto-rickshaws), with a light vehicle's margins and words.
+        if(a.category==7&&w.horizonMeasured&&std::isfinite(r.distanceM)&&a.y>.01f&&a.y+a.h<.99f&&r.distanceM*a.h/.96<2.3)r.category=2;
+        // Cut off at the top (image edge, or the sky the detector mosaic left out) or bottom:
+        // the apparent height says nothing about distance.
+        const bool clippedTop=a.y<.01f||a.y<=w.visibleTop+.01;
+        const double sizeM=clippedTop||a.y+a.h>.99f?std::numeric_limits<double>::infinity():sizeDistance(r.category,a.h);
+        // A road user must stand on the road where its size says it is: a person printed on a
+        // billboard, or anything raised above the road, has its "feet" far too high for its size.
+        // Any unclipped box (Nov 4: the billboard figures were 15-49 % of the image tall); children
+        // or people sitting differ from the size prior by well under the 2.2x allowed.
+        if(w.horizonMeasured&&!footHidden&&std::isfinite(sizeM)&&(!std::isfinite(r.distanceM)||r.distanceM>2.2*sizeM||r.distanceM<sizeM/2.2))continue;
+        // A "person" coming toward us faster than anyone walks or jogs (its own approach, after
+        // removing ours, > 3.5 m/s) is a rider whose bike the detector missed (head-on riders
+        // often show only the body): oncoming traffic, not a pedestrian to brake for.
+        if(r.category==0&&r.expansion>0&&std::isfinite(sizeM)&&speedKnown&&sizeM*r.expansion-std::max(0.,v)/3.6>3.5)r.category=3;
+        // Far away the ground cue is fragile (a fraction of a degree of horizon error); where
+        // both cues agree, their geometric mean is the distance.
+        if(std::isfinite(sizeM)&&std::isfinite(r.distanceM)&&r.distanceM>15)r.distanceM=std::sqrt(r.distanceM*sizeM);
         // Flow-based TTC only for road users close enough for it to be plausible.
         if(std::isfinite(a.tti)&&a.tti>0&&(a.h>.15f||r.foot>.85))r.ttc=a.tti;
-        if(r.expansion>.08)r.ttc=std::min(r.ttc,1/r.expansion);
+        // A small, distant box's growth is too noisy to time a collision for "Brake now" (Nov 4
+        // and 6: far vehicles, a person 24 m ahead); it may still ask the learner to slow down.
+        const double looming=r.expansion>.08?1/r.expansion:std::numeric_limits<double>::infinity();
+        if(a.h>.12f||foot>.75)r.ttc=std::min(r.ttc,looming);
+        const double slowTtc=a.h>.05f?std::min(r.ttc,looming):r.ttc;
         const double edge=std::max(0.,std::abs(r.center-.5)-a.w*.5),half=corridor(foot);
-        r.inPath=edge<half&&foot>.45;
-        if(!r.inPath&&r.inwardRate>.03)r.enterSeconds=(edge-half)/r.inwardRate;
-        // Near enough to matter now: within ~25 m, or 2.5 stopping distances when faster.
-        const bool near=r.distanceM<=std::max(25.,2.5*stopM);
+        // The learner's path in metres where the distance is known: the car's half-width (~0.85 m)
+        // plus a margin, widening slowly for a road that bends. The image-fraction corridor was
+        // ~1.8 m wide at 16 m, so people walking along the road edge were "in the path" (Nov 6).
+        const bool metric=std::isfinite(r.distanceM)&&r.distanceM<60;
+        const double edgeM=edge/.72*r.distanceM,lateralM=std::abs(r.center-.5)/.72*r.distanceM,pathM=1.1+.03*r.distanceM;
+        r.inPath=metric?edgeM<pathM&&foot>.45:edge<half&&foot>.45;
+        // Braking advice needs the road user itself in the path, not one edge of its box, and not
+        // drifting out of it as the learner passes (Nov 4: a car parked at the roadside).
+        const bool squarely=r.inPath&&(!metric||lateralM<pathM)&&!(r.rawInward<-.05&&std::abs(r.center-.5)>.12);
+        if(!r.inPath&&r.inwardRate>.03)r.enterSeconds=metric?(edgeM-pathM)/(r.inwardRate/.72*r.distanceM):(edge-half)/r.inwardRate;
+        // On a collision course: within about the car's own width of the path centre (a person's
+        // centre within ~1 m, a vehicle's near edge within ~0.95 m). "Brake now" needs this (Nov 6:
+        // a man walking toward us 1.4 m right of the centre line got "Brake now").
+        const bool collision=squarely&&(!metric||(r.category==0?lateralM<1.:edgeM<.95));
+        // Near enough to matter now: within ~6 s at this speed (an instructor names a road user
+        // in the path well before braking is needed), at least ~25 m or 2.5 stopping distances.
+        const double mps=(speedKnown?std::max(0.,v):15)/3.6,reach=std::max({25.,2.5*stopM,6*mps});
+        const bool near=r.distanceM<=reach;
         // "Brake now" is for road users inside stopping distance plus a margin; a distant
         // box's noisy growth must not read as an imminent collision.
         // Two independent cues must agree before braking advice: ground contact below the
         // horizon (fragile near the horizon) and apparent size (unusable when clipped).
-        const bool clipped=a.y<.01f||a.y+a.h>.99f;
-        const double confirmM=clipped?r.distanceM:std::max(r.distanceM,sizeDistance(a.category,a.h));
+        const double confirmM=std::isfinite(sizeM)?std::max(r.distanceM,sizeM):r.distanceM;
         const bool brakeRange=confirmM<=1.5*stopM+6,slowRange=confirmM<=3*stopM+12;
         // 2. Classify the conflict.
         // Keep-left traffic: a vehicle right of the path centre that is closing fast
         // is oncoming traffic passing on the right, not a lead vehicle to brake for.
         const bool rightSide=r.center>.52&&!r.left;
-        const bool oncoming=rightSide&&r.category!=0&&r.expansion>.25&&edge<half+.12&&near&&v>5&&r.inwardRate<.20;
+        // Oncoming: the road user itself approaches (its closing speed from size and growth, beyond
+        // the learner's own), ahead or on the right in keep-left traffic. A parked or slower car
+        // being caught up is not oncoming (Nov 4); a rider head-on in the middle of a narrow road
+        // is (Nov 6: it got "Brake now"). Without a measurable size: the image rule.
+        const double ownApproach=speedKnown&&std::isfinite(sizeM)&&a.h>.045f?sizeM*r.expansion-std::max(0.,v)/3.6:std::numeric_limits<double>::quiet_NaN();
+        // Only a clear approach speed decides (above +1.5 m/s oncoming, below -1.5 m/s being caught
+        // up): up close the size cue is noisy, and then the image rule decides. Its own lane counts,
+        // up to 3 m beyond the path (Nov 6: a scooter 3.9 m right lost its "keep left").
+        const bool clear=std::isfinite(ownApproach)&&std::abs(ownApproach)>1.5;
+        const bool oncoming=r.category!=0&&near&&v>5&&r.inwardRate<.20&&(clear?
+            ownApproach>1.5&&r.center>.45&&(metric?edgeM<pathM+3.:edge<half+.12):rightSide&&r.expansion>.25&&edge<half+.12);
         // Crossing: the actor's own lateral motion is TOWARD/through the path (not
         // the outward drift of something being passed).
         // ...and it must actually move toward the path in the image (compensation alone
         // must not turn a pedestrian walking along the edge into a "crossing").
-        if(near&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=r.distanceM<=2*stopM+10?3:2;}
-        else if(oncoming) {r.kind=RiskKind::Oncoming;r.level=2;}
+        // ...and its box must grow as something on the road does while the learner approaches (at
+        // least ~15 % of speed / distance above 12 km/h): a box that barely grows 12 m ahead at
+        // 28 km/h is the detector switching between figures, not a road user (Nov 4: a billboard
+        // "crossing").
+        const bool growing=!(speedKnown&&v>12&&std::isfinite(r.distanceM)&&r.expansion<.15*(v/3.6)/r.distanceM);
+        if(near&&steady&&growing&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=r.distanceM<=2*stopM+10?3:2;}
+        // Head-on and closing within stopping time: urgent "keep left, ease off" (Nov 6: a rider in
+        // the middle of a narrow road).
+        else if(oncoming) {r.kind=RiskKind::Oncoming;r.level=collision&&r.ttc<stopping+.5?3:2;}
         // Heavy vehicles stop and swerve slowly: give them extra margin.
         // ...unless the learner is already braking hard enough to stop short of it
         // (needed deceleration for a stationary hazard at this TTC: v / (2*TTC)).
-        else if(r.inPath&&near&&brakeRange&&r.ttc<stopping+(r.category==5||r.category==7?.5:0)&&v>5&&!(decel>.5&&decel>=.9*(v/3.6)/(2*r.ttc)))
+        else if(collision&&near&&brakeRange&&r.ttc<stopping+(r.category==5||r.category==7?.5:0)&&v>5&&!(decel>.5&&decel>=.9*(v/3.6)/(2*r.ttc)))
             {r.kind=RiskKind::InPath;r.level=3;}
-        else if(r.inPath&&near&&slowRange&&r.ttc<stopping+2.5+(r.category==5||r.category==7?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
+        else if(squarely&&near&&slowRange&&slowTtc<stopping+2.5+(r.category==5||r.category==7?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
         // Crawling up to a vulnerable road user right in front: be ready to stop.
-        else if(r.inPath&&foot>.62&&vulnerable(r.category)&&v>3&&v<15) {r.kind=RiskKind::InPath;r.level=2;}
-        else if(r.category==0&&!r.inPath&&edge<half+.15&&foot>.55&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
-        else if(r.inPath&&foot>.58&&v>5) {r.kind=RiskKind::InPath;r.level=1;}
+        else if(squarely&&foot>.62&&vulnerable(r.category)&&v>3&&v<15) {r.kind=RiskKind::InPath;r.level=2;}
+        // A person at the edge of the path or beside it: give them space.
+        else if(r.category==0&&!squarely&&(metric?edgeM<pathM+1.5:edge<half+.15)&&r.distanceM<=std::max(24.,5*mps)&&foot>.52&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
+        else if(r.inPath&&r.distanceM<=std::max(15.,.8*reach)&&foot>.52&&v>5) {r.kind=RiskKind::InPath;r.level=1;}
         else if(r.inPath&&foot>.58&&!speedKnown) {r.kind=RiskKind::InPath;r.level=1;} // Awareness only (see actionFor).
         // Temporal confirmation: a road user must be seen consistently before it can
         // drive an instruction (single-frame flickers of the mount or reflections cannot).
@@ -237,12 +364,20 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     // "Vehicle ahead, keep a gap" for non-closing traffic at most every 15 s.
     const bool gapCue=top_.kind==RiskKind::InPath&&top_.level==1&&!vulnerable(top_.category)&&!(std::isfinite(top_.ttc)&&top_.ttc<10);
     const bool gapRecent=gapCue&&lastGapCue_>=0&&now-lastGapCue_<15;
-    if(!settling&&!gapRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category))) {
+    // "Keep left" for passing traffic is for the occasional close car, not every car on a busy road
+    // (Nov 4: seven in 75 s): a routine one waits 20 s; a bus, a truck or an urgent one still speaks.
+    const bool oncomingCue=top_.kind==RiskKind::Oncoming&&top_.level<3&&top_.category!=5&&top_.category!=7;
+    const bool oncomingRecent=oncomingCue&&lastOncomingCue_>=0&&now-lastOncomingCue_<20;
+    if(!settling&&!gapRecent&&!oncomingRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category))) {
         auto* e=episode(top_.id,now);
         // Give the learner time to respond to what was just said about this road
         // user before escalating, unless contact is truly imminent.
         const bool reacting=e->spokenAt>=0&&now-e->spokenAt<2&&!(std::isfinite(top_.ttc)&&top_.ttc<1.5);
-        const bool rising=top_.level>e->spokenLevel&&!reacting;
+        // Rising to the very same words about the same road user within 3 s adds nothing: it would
+        // only cut off the sentence just started (Nov 5: "Left turn ahead. Oncoming vehicle..." then
+        // "Oncoming vehicle. Keep left..." 0.1 s later).
+        const bool sameWords=e->spokenAt>=0&&now-e->spokenAt<3&&e->spokenPrompt==int(actionFor(top_,v,speedKnown,top_.level>=3));
+        const bool rising=top_.level>e->spokenLevel&&!reacting&&!sameWords;
         // Spoken already at this level: escalate once if the learner is not slowing.
         const bool unanswered=e->spokenLevel>=2&&top_.level>=2&&e->spokenAt>=0&&now-e->spokenAt>=2.5&&now-e->spokenAt<=8&&
             speedKnown&&v>5&&memory.speedTrend(now,e->spokenAt)!=SpeedTrend::Decreasing&&e->spokenLevel<3;
@@ -255,6 +390,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             proposal_=int(actionFor(speak,v,speedKnown,urgent_));proposalId_=optical;proposalCapture_=w.captureTime;
             proposalLevel_=speak.level;proposalClosing_=std::isfinite(speak.ttc)&&speak.ttc<10;
             if(gapCue)lastGapCue_=now;
+            if(speak.kind==RiskKind::Oncoming)lastOncomingCue_=now;
             ++counts_[size_t(speak.kind)];
         }
     }

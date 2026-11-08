@@ -1,4 +1,4 @@
-param([int[]]$PromptIds = @(), [switch]$Fragments)
+param([int[]]$PromptIds = @(), [switch]$Fragments, [int[]]$FragmentIds = @())
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $assetDirectory = Join-Path (Split-Path $PSScriptRoot -Parent) 'android/app/src/main/assets/audio'
@@ -60,9 +60,11 @@ try {
         'You are drifting left. Move back to the centre of your lane',
         'You are drifting right. Keep left',
         'Speed bump ahead. Slow down, clutch down and change down',
-        'Sharp bend ahead. Sound the horn and keep left')
+        'Sharp bend ahead. Sound the horn and keep left',
+        'The route has changed. Keep going and follow the new route')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
+        if ($PromptIds.Count -eq 0 -and $FragmentIds.Count -gt 0) { continue } # Fragments only.
         $outputPath = Join-Path $assetDirectory ('prompt-{0}.wav' -f ($index + 1))
         $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
         $speech.SetOutputToWaveFile($outputPath, $format)
@@ -120,9 +122,32 @@ try {
         'Let them pass.',
         'Look again before you move off.',
         'Sound the horn.',
-        'Speed bump ahead.')
-    if ($Fragments -or $PromptIds.Count -eq 0) {
+        'Speed bump ahead.',
+        'In 200 metres,',
+        'In 150 metres,',
+        'In 100 metres,',
+        'In 50 metres,',
+        'turn left.',
+        'turn right.',
+        'keep left.',
+        'keep right.',
+        'make a U-turn.',
+        'at the roundabout, take the first exit.',
+        'at the roundabout, take the second exit.',
+        'at the roundabout, take the third exit.',
+        'at the roundabout, take the fourth exit.',
+        'enter the roundabout.',
+        'your destination is ahead.',
+        'Left turn here.',
+        'Right turn here.',
+        'Then turn left straight after.',
+        'Then turn right straight after.',
+        'Give way to traffic from the right.',
+        'Pull over safely.',
+        'merge carefully.')
+    if ($Fragments -or $FragmentIds.Count -gt 0 -or $PromptIds.Count -eq 0) {
         for ($index = 0; $index -lt $fragmentTexts.Length; $index++) {
+            if ($FragmentIds.Count -gt 0 -and ($index + 1) -notin $FragmentIds) { continue }
             $outputPath = Join-Path $assetDirectory ('fragment-{0}.wav' -f ($index + 1))
             $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
             $speech.SetOutputToWaveFile($outputPath, $format)

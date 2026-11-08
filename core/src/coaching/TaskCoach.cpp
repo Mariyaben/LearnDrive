@@ -6,6 +6,15 @@
 namespace ld::coaching {
 namespace {
 double lead(const WorldState& w,double now) noexcept {
+    if(w.route.provider) {
+        // Google's own distance (dead-reckoned) and the measured speed. Neither the camera nor
+        // our GPS fix quality decides whether a Google turn is coached.
+        if(!w.active||!w.route.valid||!w.route.routeId||!w.route.eventId||w.route.feature<3||w.route.feature>5||
+           !cognition::fresh(now,w.route.captureTime,routeProviderAge)||!cognition::fresh(now,w.telemetry.time,.15)||
+           !w.telemetry.speedValid||!std::isfinite(w.telemetry.speedKmh)||w.telemetry.speedKmh<0||w.telemetry.speedKmh>300||
+           !std::isfinite(w.route.distanceM)||w.route.distanceM<0)return -1;
+        return w.route.distanceM/std::max(w.telemetry.speedKmh/3.6,1.);
+    }
     if(!w.active||!w.route.valid||!w.route.routeId||!w.route.eventId||w.route.feature<3||w.route.feature>5||
        !cognition::fresh(now,w.route.captureTime,w.route.provider?3.:2.5)||!cognition::fresh(now,w.route.gpsTime,2.5)||
        !cognition::fresh(now,w.captureTime)||!cognition::fresh(now,w.telemetry.time,.15)||!w.telemetry.speedValid||!std::isfinite(w.telemetry.speedKmh)||w.telemetry.speedKmh<=3||w.telemetry.speedKmh>300||
@@ -25,6 +34,13 @@ const char* phase(TaskPhase p) {
 void TaskCoach::enable(bool value) noexcept {if(value==enabled_)return;enabled_=value;state_={};state_.phase=value?TaskPhase::Waiting:TaskPhase::Off;}
 bool TaskCoach::reserves(double block) const noexcept {
     if(!scheduling_||!enabled_||!std::isfinite(block)||block<=0||state_.leadSeconds<0||!state_.event)return false;
+    if(state_.byDistance) {
+        // Metres covered while the other speech plays: keep room for a step still to come.
+        const double mps=std::max(state_.speedMps,1.),d=state_.distanceM,after=d-block*mps;
+        if(!state_.planningDelivered&&d>state_.entryM)return after<state_.entryM+mps*minimumUsefulWindow;
+        if(!state_.entryDelivered&&d>state_.entryM)return after<state_.entryM*.5;
+        return false;
+    }
     const double lead=state_.leadSeconds,after=lead-block;
     // Preparation not yet given and its act-by window still ahead.
     if(!state_.planningDelivered&&state_.phase==TaskPhase::WaitingWindow)return after<actByLateLimit+minimumUsefulWindow;
@@ -38,16 +54,28 @@ void TaskCoach::sourceChanged() noexcept {
     if(state_.event){++state_.unassessedOutcomes;state_.event=0;}
     state_.phase=enabled_?TaskPhase::Waiting:TaskPhase::Off;state_.planningDelivered=state_.approachDelivered=state_.speedReductionObserved=state_.entryDelivered=false;
 }
+double TaskCoach::leadSeconds(const WorldState& w,double now) noexcept {return lead(w,now);}
 bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool started) noexcept {
     double seconds=lead(w,now);
     // Started speech: slowing to a stop at this junction is the expected response,
     // not lost evidence. Same fresh route/GPS/camera, measured speed at or below 3 km/h.
     if(started&&seconds<0&&w.active&&w.route.valid&&w.route.feature>=3&&w.route.feature<=5&&
-       cognition::fresh(now,w.route.captureTime,w.route.provider?3.:2.5)&&cognition::fresh(now,w.route.gpsTime,2.5)&&
-       cognition::fresh(now,w.captureTime)&&cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&
+       cognition::fresh(now,w.route.captureTime,w.route.provider?routeProviderAge:2.5)&&
+       (w.route.provider||(cognition::fresh(now,w.route.gpsTime,2.5)&&cognition::fresh(now,w.captureTime)))&&
+       cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&
        std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>=0&&w.telemetry.speedKmh<=3&&!w.telemetry.shock&&
        c.origin==5&&c.kind==EventKind::Route&&c.lessonEpoch==w.route.epoch&&(c.lessonStep==2||c.lessonStep==3))return true;
-    if(seconds<0||w.telemetry.braking||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
+    // Braking to approach the junction is the expected response, not missing evidence.
+    if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
+    if(w.route.provider) {
+        // Google route steps by distance (see observe()); the timed windows below still apply.
+        const double v=w.telemetry.speedKmh,d=w.route.distanceM,entry=routeEntryDistance(v);
+        const Prompt expected=w.route.feature==4?Prompt::junctionPlanLeft:w.route.feature==5?Prompt::junctionPlanRight:Prompt::junctionPlan;
+        const bool approachPrompt=c.prompt==Prompt::junctionApproach||c.prompt==Prompt::junctionGearDown||c.prompt==Prompt::junctionBrakeGearDown;
+        if(c.lessonStep==1&&c.prompt==expected&&(started||(d<=routePrepareBand(v)+20&&d>entry*.7)))return true;
+        if(c.lessonStep==3&&c.prompt==Prompt::junctionEntry&&(started||(d<=entry+6&&d>=1.5&&v<=routeEntrySpeed)))return true;
+        if(c.lessonStep==2&&approachPrompt&&(started||(d<=routeApproachDistance(v)+10&&d>entry*.7)))return true;
+    }
     // Either schedule's window (the fixed 0.7.1 windows or act-by timing) admits a step;
     // which one proposes it is decided by the scheduling mode in observe().
     const double v=w.telemetry.speedKmh,prepare=actByPrepareLead(v);
@@ -81,7 +109,7 @@ void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const Even
             state_.quietUntil=w.now+executionQuietHold;state_.quietEvent=w.route.eventId;}
         else {state_.quietUntil=-1;state_.quietEvent=0;} // Measured lead is clear of the execution window again.
     }
-    if(seconds<0||w.telemetry.braking||w.telemetry.hardBraking||w.telemetry.shock){state_.phase=TaskPhase::Uncertain;return;}
+    if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock){state_.phase=TaskPhase::Uncertain;return;}
     if(different){
         if(state_.event)++state_.unassessedOutcomes;
         state_.source=w.sourceId;state_.route=w.route.routeId;state_.event=w.route.eventId;state_.epoch=w.route.epoch;
@@ -97,6 +125,21 @@ void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const Even
         entrySubmitted|=e.lessonStep==3&&(e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started);
     }
     if(state_.planningDelivered&&memory.speedTrend(w.now,state_.responseSince)==SpeedTrend::Decreasing&&!state_.speedReductionObserved){state_.speedReductionObserved=true;++state_.observedReductions;}
+    state_.byDistance=false;
+    if(scheduling_&&w.route.provider) {
+        // Google route: steps by Google's distance. The preparation stays due from its spoken
+        // distance until the turn (said late rather than lost); "brake, change down" at about
+        // 50 m at speed; the turn itself about 3 s before it.
+        const double v=std::max(0.,w.telemetry.speedKmh),d=w.route.distanceM,mps=std::max(v/3.6,1.);
+        const double band=routePrepareBand(v),entry=routeEntryDistance(v),approach=routeApproachDistance(v);
+        state_.byDistance=true;state_.distanceM=d;state_.speedMps=mps;state_.bandM=band;state_.entryM=entry;
+        state_.prepareLead=(band+12)/mps;state_.fast=v>routeApproachSpeed;
+        if(submitted){state_.phase=TaskPhase::AwaitingDelivery;return;}
+        if(d<=entry){state_.phase=!state_.entryDelivered&&d>=2&&v<=routeEntrySpeed?TaskPhase::Entry:TaskPhase::ExecutionQuiet;return;}
+        if(!state_.planningDelivered){state_.phase=d>band+12?TaskPhase::WaitingWindow:TaskPhase::Preparing;return;}
+        state_.phase=!state_.approachDelivered&&state_.fast&&d<=approach?TaskPhase::Approach:TaskPhase::ObservingResponse;
+        return;
+    }
     if(scheduling_) {
         // Act-by schedule: each step when the learner must act at THIS speed, and
         // a later step still comes if an earlier one was missed.

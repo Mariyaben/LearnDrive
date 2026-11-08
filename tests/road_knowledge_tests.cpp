@@ -15,7 +15,10 @@ using namespace ld::navigation;
 namespace {
 int passed=0;
 void check(bool b,const char* why){if(!b)throw std::runtime_error(why);}
-template<class F>void test(const char* name,F f){f();++passed;std::cout<<"PASS "<<name<<'\n';}
+int failed=0;
+// Every group runs: one failure no longer hides the rest of the suite.
+template<class F>void test(const char* name,F f){try{f();++passed;std::cout<<"PASS "<<name<<'\n';}
+    catch(const std::exception& e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}}
 constexpr double pi=3.14159265358979323846,lat0=10.52,lon0=76.21,wheelbase=2.6;
 double lat(double y){return lat0+y/110540;}
 double lon(double x){return lon0+x/(111320*std::cos(lat0*pi/180));}
@@ -154,5 +157,5 @@ int main(){try{
         size_t n=0;const auto* path=s.path(n);check(n>=2&&std::abs(path[0].lat-lat(20))<1e-9,"path not recorded");
         BumpMap m;m.felt(1,lat(120),lon(1),0);m.felt(100,lat(120),lon(-1),0);
         const auto hit=m.along(path,n,400);check(hit.learned&&std::abs(hit.distanceM-100)<2,"learned bump along the scout path");});
-    std::cout<<passed<<" road knowledge groups passed\n";return 0;
+    std::cout<<passed<<" road knowledge groups passed\n";if(failed)std::cerr<<failed<<" groups failed\n";return failed?1:0;
 }catch(const std::exception& ex){std::cerr<<"FAIL "<<ex.what()<<'\n';return 1;}}

@@ -7,6 +7,8 @@ namespace ld {
 struct CarMotion {
     double time=-1,vertical{},pitchRate{},rollRate{}; // m/s^2 (gravity removed), rad/s
     bool handled{},valid{};
+    // Turn rate about gravity "up" (rad/s, left turn positive), low-passed ~0.15 s.
+    double yawRate{};
 };
 struct Inclination {
     bool valid=false;
@@ -42,6 +44,10 @@ private:
     const char* calibrationReason_="Hold still on level ground; rear camera forward";
     double velocity_{},bias_{},pvv_=25,pvb_{},pbb_=1;
     double acceleration_{},pitch_{},brakeUntil_=-1,hardUntil_=-1,shockUntil_=-1;
+    // Longitudinal acceleration low-passed (~0.3 s: what the driver is doing; ~0.12 s: hard braking).
+    double longitudinalFiltered_{},hardFiltered_{},yawFiltered_{};bool braking_{};
+    // Long-term mean pitch while driving: the mount's offset, not the road (roads average level).
+    double pitchBias_{};
     CarMotion motion_{};
     // Mount disturbance: a sustained step in pitch (phone knocked or re-seated in
     // its mount) invalidates the level reference; roads change grade gradually.

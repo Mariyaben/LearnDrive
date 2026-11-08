@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher background: asphalt with the road ahead. A slightly lighter carriageway narrows to the
+     horizon behind the learner plate, with faint road-paint edge lines and the amber centre line,
+     its dashes larger as they come closer. Colours are CoachStyle's ink, road paint and amber. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="0"
+                android:endX="54"
+                android:endY="108"
+                android:startColor="#FF1B2421"
+                android:endColor="#FF070A09" />
+        </aapt:attr>
+    </path>
+    <!-- Carriageway -->
+    <path
+        android:fillColor="#FF222C29"
+        android:pathData="M51,48 L57,48 L94,108 L14,108 Z" />
+    <!-- Edge lines -->
+    <path
+        android:fillColor="#5CF2EFE6"
+        android:pathData="M51,48 L52,48 L17.5,108 L14,108 Z" />
+    <path
+        android:fillColor="#5CF2EFE6"
+        android:pathData="M56,48 L57,48 L94,108 L90.5,108 Z" />
+    <!-- Centre line -->
+    <path
+        android:fillColor="#FFFFB627"
+        android:pathData="M53,68 L55,68 L55.4,73 L52.6,73 Z" />
+    <path
+        android:fillColor="#FFFFB627"
+        android:pathData="M52.3,77 L55.7,77 L56.4,85 L51.6,85 Z" />
+    <path
+        android:fillColor="#FFFFB627"
+        android:pathData="M51.2,89 L56.8,89 L58,101 L50,101 Z" />
+</vector>

@@ -59,9 +59,23 @@ int main() {
     test("suspend requires new calibration",[]{auto f=calibrated();f.imu({10,{0,gravity,0},{},{},true});check(!f.snapshot(10).calibrated,"old mount calibration survived suspension");});
     test("vertical camera rejects ambiguous heading",[]{SensorFusion f;for(int i=0;i<600;++i)f.imu({i*.01,{0,0,gravity},{},{},true});check(!f.snapshot(5.99).calibrated,"vertical camera accepted");});
     test("tilted mount calibrates to zero",[]{SensorFusion f;Vec3 up{0,std::cos(.3)*gravity,std::sin(.3)*gravity};for(int i=0;i<600;++i)f.imu({i*.01,up,{},{},true});near(f.snapshot(5.99).pitchDegrees,0);check(f.snapshot(5.99).calibrated,"tilted mount failed");});
-    test("braking has correct forward sign",[]{auto f=calibrated();f.gps(5.01,15,.5);f.imu({5.02,{0,gravity,4},{},{0,0,4},true});auto t=f.snapshot(5.02);check(t.braking&&t.hardBraking,"deceleration missed");check(t.longitudinalAcceleration<0,"wrong sign");});
+    test("braking has correct forward sign",[]{auto f=calibrated();f.gps(5.01,15,.5);for(int i=502;i<=560;++i)f.imu({i*.01,{0,gravity,4},{},{0,0,4},true});auto t=f.snapshot(560*.01);check(t.braking&&t.hardBraking,"deceleration missed");check(t.longitudinalAcceleration<0,"wrong sign");});
     test("positive acceleration does not mean braking",[]{auto f=calibrated();f.imu({5.02,{0,gravity,-4},{},{0,0,-4},true});check(!f.snapshot(5.02).braking,"acceleration called braking");});
-    test("braking hysteresis releases",[]{auto f=calibrated();f.imu({5.02,{0,gravity,4},{},{0,0,4},true});for(int i=503;i<580;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(5.79).braking&&!f.snapshot(5.79).hardBraking,"braking stuck");});
+    test("road vibration, a pothole jolt and gentle slowing are not braking; firm braking is",[]{
+        // Nov 6: one 100 Hz sample below -0.8 m/s^2 meant braking, so mount vibration cut speech off all drive.
+        auto f=calibrated();int braking=0,hard=0;
+        for(int i=502;i<=1502;++i){const double t=i*.01;
+            const double a=2.5*std::sin(2*pi*9*t)+1.5*std::sin(2*pi*14*t+1)+.8*std::sin(2*pi*23*t+2); // Peaks near 4.8 m/s^2.
+            f.imu({t,{0,gravity,a},{},{0,0,a},true});const auto s=f.snapshot(t);braking+=s.braking;hard+=s.hardBraking;}
+        check(braking==0&&hard==0,"road vibration taken for braking");
+        for(int i=1503;i<=1510;++i){const double t=i*.01,a=i<1507?8.:-6.;f.imu({t,{0,gravity,a},{},{0,0,a},true});braking+=f.snapshot(t).braking;hard+=f.snapshot(t).hardBraking;}
+        check(braking==0&&hard==0,"pothole jolt taken for braking");
+        for(int i=1511;i<=1800;++i){const double t=i*.01;f.imu({t,{0,gravity,.8},{},{0,0,.8},true});braking+=f.snapshot(t).braking;}
+        check(braking==0,"gentle slowing taken for braking");
+        for(int i=1801;i<=1860;++i)f.imu({i*.01,{0,gravity,2.5},{},{0,0,2.5},true});
+        check(f.snapshot(1860*.01).braking&&!f.snapshot(1860*.01).hardBraking,"firm braking missed or called hard");});
+    test("braking hysteresis releases",[]{auto f=calibrated();for(int i=502;i<=560;++i)f.imu({i*.01,{0,gravity,4},{},{0,0,4},true});check(f.snapshot(560*.01).braking,"braking missed");
+        for(int i=561;i<=760;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(760*.01).braking&&!f.snapshot(760*.01).hardBraking,"braking stuck");});
     test("stale GPS invalidates speed",[]{auto f=calibrated();check(f.gps(5.01,10,.5),"GPS rejected");for(int i=502;i<=850;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(8.5).speedValid,"stale speed valid");});
     test("GPS speed converges and coasts",[]{auto f=calibrated();for(int i=502;i<=800;++i){f.imu({i*.01,{0,gravity,0},{},{},true});if(i%100==0)f.gps(i*.01,20,.5);}near(f.snapshot(8).speedKmh,72,.5);});
     test("out of order GPS and IMU ignored",[]{auto f=calibrated();check(f.gps(5.01,10,.5),"first GPS failed");check(!f.gps(5,50,.5),"old GPS accepted");f.imu({4,{0,gravity,20},{},{0,0,20},true});check(!f.snapshot(5.01).braking,"old IMU changed state");});
@@ -678,7 +692,7 @@ int main() {
         float boxes[84]{};boxes[0]=160;boxes[1]=210;boxes[2]=120;boxes[3]=180;boxes[6]=.8f;float road[2]={2,-2};double hazard[3];int prompt=0;
         for(int i=0;i<=10;++i){double t=10.1+i*.125;check(ld_vision(e,t,boxes,84,84,1,1,0,road,road,1,1,hazard),"vision failed");ld_telemetry measured{};measured.time=t+.02;
             auto selected=ld_video_telemetry(measured,3,0);check(selected.speed_valid&&selected.speed==3,"video speed lost");prompt=ld_camera_decide_telemetry(e,selected,1,1);}
-        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==90,"prompt count mismatch");ld_destroy(e);
+        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==91,"prompt count mismatch");ld_destroy(e);
     });
     test("slope bands agree through the native ABI at each boundary",[]{
         const std::array<std::pair<double,int>,10> boundaries{{{0,0},{1.999,0},{2,1},{4.999,1},{5,2},{7.999,2},{8,3},{11.999,3},{12,4},{30,4}}};

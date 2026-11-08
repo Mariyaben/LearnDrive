@@ -164,6 +164,10 @@ void ld_route_maneuvers(ld_engine*,double time,const double* ahead_m,size_t coun
 // they are coached). Restore saved ones at start; read them back (5 values each: lat, lon,
 // heading, times felt, times driven over without a jolt) to save between drives.
 int ld_bump_restore(ld_engine*,double lat,double lon,double heading,int observations,int misses);
+// Detail of the provider step last sent with ld_navigation_turn_update (same received_at):
+// side for keep/fork (-1 left, +1 right, 0 none), roundabout exit (0 unknown), and the step
+// after it (LD_MANEUVER_* and metres after this one; NaN/inf unknown). Memory only.
+void ld_navigation_step_detail(ld_engine*,double received_at,int side,int roundabout_exit,int next_maneuver,double next_gap_m);
 int ld_bumps_learned(ld_engine*,double* out,size_t capacity);
 // Oldest bump-detector event not yet read, for diagnostics (no position). Returns 0 when none.
 // out (capacity >= 12): time, accepted, reason, peak vertical m/s^2, rear-wheel vertical,
@@ -178,6 +182,9 @@ void ld_coaching_horn_rules(ld_engine*,int enabled);
 // Horizon row (fraction of image height) for filmed/replayed video, where the phone's own
 // pitch does not describe the camera; NaN restores the measured camera pitch.
 void ld_camera_horizon(ld_engine*,double fraction);
+// Replays of filmed video: the camera's turn rate (rad/s, left positive) measured at `time`
+// from the video itself; the phone uses its gyroscope.
+void ld_camera_yaw(ld_engine*,double time,double radiansPerSecond);
 // Lane model output (two-channel logits, drivable + lanes, model image size) for
 // the frame most recently prepared; lane keeping on marked roads only.
 int ld_lane_map(ld_engine*,uint64_t source,double time,const float* drivable,const float* lanes,int width,int height);
@@ -194,6 +201,13 @@ int ld_preprocess(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint
 // Optional zoomed detector pass (distant road users ahead): letterboxes a square crop
 // of the SAME frame just prepared with ld_preprocess, centred on `horizon` (fraction of
 // the upright height). Keeps the full-frame transform.
+// The detector image as a mosaic: the road band (full width, from just above the horizon down)
+// plus a 2x zoom of the far road around the horizon in the space letterboxing would waste; one
+// inference sees road users about twice as far ahead. The horizon follows the camera's measured
+// pitch at `time`. Detections are decoded as usual: zoom-band boxes are mapped back to frame
+// geometry first, so distances are unchanged. Returns 2 with a zoom band, 1 for a plain
+// letterbox (no room), 0 on error.
+int ld_preprocess_mosaic(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,int save_gray,double time);
 int ld_preprocess_zoom(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,float horizon);
 // Merges YOLO raw output of the full frame and of the zoom (both [84,N] channel-first)
 // into [84,2N] full-frame model pixels for the usual decoding and NMS. Returns 2N or 0.

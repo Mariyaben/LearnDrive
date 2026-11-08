@@ -2,7 +2,7 @@
 namespace ld {
 void SensorFusion::reset() {const auto id=calibrationId_;*this=SensorFusion{};calibrationId_=id;}
 void SensorFusion::restartCalibration(const char* reason) {
-    calibrated_=false;start_=-1;count_=linearCount_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
+    calibrated_=false;start_=-1;count_=linearCount_=0;pitchBias_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
     sum_=squares_=gyroSum_=linearSum_={};calibrationProgress_=0;
     calibrationReason_=reason;
     poseCursor_=poseCount_=0;
@@ -33,7 +33,7 @@ void SensorFusion::calibrate(const ImuSample& s) {
     referenceUp_=up;up_=up;forward_=forward.unit();right_=forward_.cross(referenceUp_).unit();
     gyroOffset_=gyroSum_*(1.0/count_);
     linearOffset_=linearCount_>0?linearSum_*(1.0/linearCount_):Vec3{};
-    pitch_=0;filteredPitch_=0;acceleration_=0;calibrated_=true;calibrationProgress_=1;
+    pitch_=0;filteredPitch_=0;acceleration_=0;longitudinalFiltered_=hardFiltered_=0;braking_=false;calibrated_=true;calibrationProgress_=1;
     ++calibrationId_;
     calibrationReason_="Phone plane normalized";
 }
@@ -62,6 +62,10 @@ void SensorFusion::imu(const ImuSample& s) {
         up_=(up_*(1-alpha)+measured.unit()*alpha).unit();
     }
     pitch_=std::asin(std::clamp(up_.dot(forward_),-1.0,1.0))*180/pi;
+    // A phone that sags or tilts in its mount reads as a hill that never ends. Over a minute of
+    // driving roads average level, so that long-term mean is the mount's offset; real hills come
+    // and go well within it. Only while moving on fresh GPS speed (not parked on a slope).
+    if(velocity_>4&&lastGps_>=0&&s.time-lastGps_<3)pitchBias_+=(pitch_-pitchBias_)*std::min(1.,dt/60.);
     filteredPitch_+=(pitch_-filteredPitch_)*(1-std::exp(-dt/.4));
     if(pitchTrailTime_<0||s.time-pitchTrailTime_>=.25) {
         pitchTrail_[pitchCursor_]=filteredPitch_;pitchCursor_=(pitchCursor_+1)%pitchTrail_.size();
@@ -78,9 +82,21 @@ void SensorFusion::imu(const ImuSample& s) {
     double longitudinal=linear.dot(forward_);
     // Vertical jolt along the current "up", pitch about the car's right axis, roll about its forward axis.
     motion_={s.time,linear.dot(up_),rotation.dot(right_),rotation.dot(forward_),s.time<=handledUntil_,true};
-    acceleration_=longitudinal; // Driver-action suppression sees the current 100 Hz sample.
-    if(longitudinal<-.8) brakeUntil_=s.time+.45;
-    if(longitudinal<=-3.5) hardUntil_=s.time+.6;
+    // Turning (left positive, right-hand rule about "up") slides every static object across the
+    // camera image; the risk coach removes it before judging whether a road user is crossing.
+    yawFiltered_+=(rotation.dot(up_)-yawFiltered_)*(1-std::exp(-dt/.15));
+    motion_.yawRate=yawFiltered_;
+    acceleration_=longitudinal; // Velocity integration uses every 100 Hz sample.
+    // Braking is a sustained deceleration, not one 100 Hz sample. A phone in a car mount reads
+    // vibration of 1-3 m/s^2 on rough roads (engine, road texture, mount resonance, bumps), which a
+    // single-sample -0.8 m/s^2 test took for braking several times a second: on the Nov 6 drive
+    // speech was cut off and held back all drive long. Vibration is >= 2 Hz; braking lasts seconds.
+    longitudinalFiltered_+=(longitudinal-longitudinalFiltered_)*(1-std::exp(-dt/.3));
+    hardFiltered_+=(longitudinal-hardFiltered_)*(1-std::exp(-dt/.12));
+    // Firm braking (about 0.15 g, with hysteresis): gentle slowing is not a driver response.
+    braking_=longitudinalFiltered_<=-1.5||(braking_&&longitudinalFiltered_<-.9);
+    if(braking_) brakeUntil_=s.time+.3;
+    if(hardFiltered_<=-3.5) hardUntil_=s.time+.6;
     if(linear.norm()>12) shockUntil_=s.time+.5;
     // State [velocity, accelerometer bias]; GPS corrects both through covariance.
     velocity_=std::max(0.0,velocity_+(acceleration_-bias_)*dt);
@@ -103,8 +119,8 @@ bool SensorFusion::gps(double t,double v,double accuracy) {
 }
 Telemetry SensorFusion::snapshot(double t) const {
     Telemetry out;
-    out.time=t; out.speedKmh=velocity_*3.6; out.pitchDegrees=pitch_;
-    out.longitudinalAcceleration=acceleration_; out.calibrationProgress=calibrationProgress_;
+    out.time=t; out.speedKmh=velocity_*3.6; out.pitchDegrees=pitch_-pitchBias_;
+    out.longitudinalAcceleration=longitudinalFiltered_; out.calibrationProgress=calibrationProgress_;
     out.calibrated=calibrated_;
     bool fresh=std::isfinite(t)&&lastImu_>=0&&t>=lastImu_&&t-lastImu_<.25;
     out.speedValid=fresh&&lastGps_>=0&&t>=lastGps_&&t-lastGps_<3;
@@ -142,9 +158,9 @@ Inclination SensorFusion::inclination(double time) const {
     Inclination result;result.progress=telemetry.calibrationProgress;
     // Beyond this range the mounted-vehicle interpretation is unreliable.
     if(!telemetry.pitchValid||telemetry.shock||std::abs(pitch_)>30||up_.dot(referenceUp_)<.5)return result;
-    result.valid=true;result.pitchDegrees=pitch_;
+    result.valid=true;result.pitchDegrees=pitch_-pitchBias_;
     result.rollDegrees=std::atan2(up_.dot(right_),up_.dot(referenceUp_))*180/pi;
-    result.gradePercent=100*std::tan(pitch_*pi/180);
+    result.gradePercent=100*std::tan(result.pitchDegrees*pi/180);
     return result;
 }
 }

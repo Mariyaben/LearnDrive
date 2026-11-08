@@ -57,8 +57,10 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     // Lane keeping on marked roads (lane lines seen consistently), origin 6.
     driftLeftCentre=87,driftRightKeepLeft=88,
     // Road knowledge ahead from the map (origin 6): speed bump, sharp (blind) bend.
-    bumpAhead=89,bendHorn=90 };
-constexpr int promptCount=90;
+    bumpAhead=89,bendHorn=90,
+    // Google found a new route (a missed turn, or a better way): calm, no blame, no promise.
+    routeChanged=91 };
+constexpr int promptCount=91;
 inline bool isRiskPrompt(Prompt p){const int i=int(p);return i>=81&&i<=86;}
 // Instructor phrase fragments. The situation planner composes one utterance per
 // moment from these (context clauses, then actions), e.g. "Uphill. Oncoming truck.
@@ -71,9 +73,14 @@ enum class Fragment : int { none=0,
     downSecond,downThird,clutchDown,holdBrake,checkMirrors,signalLeft,signalRight,lookBothWays,
     steadyAccelerator,laneCentre,letThemPass,lookAgainMoveOff,
     // Indian road practice: sound the horn at blind bends, junctions and when passing.
-    soundHorn=43,bumpAheadContext=44 };
-constexpr int fragmentCount=44;
-inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext;}
+    soundHorn=43,bumpAheadContext=44,
+    // Navigation (Google route): the distance and the maneuver, as an instructor says them.
+    in200m=45,in150m,in100m,in50m,turnLeft,turnRight,keepLeftRoute,keepRightRoute,uTurn,
+    roundaboutFirst,roundaboutSecond,roundaboutThird,roundaboutFourth,roundaboutEnter,destinationAhead,
+    leftTurnHere,rightTurnHere,thenLeft,thenRight,giveWayRight,pullOver,mergeCarefully=66 };
+constexpr int fragmentCount=66;
+inline bool isNavigationFragment(Fragment f){return int(f)>=45&&int(f)<=66;}
+inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext||isNavigationFragment(f);}
 inline const char* fragmentText(Fragment f) {
     switch(f) {
     case Fragment::downhill:return "Downhill.";case Fragment::steepDownhill:return "Steep downhill.";case Fragment::uphill:return "Uphill.";
@@ -97,6 +104,21 @@ inline const char* fragmentText(Fragment f) {
     case Fragment::laneCentre:return "Move back to the centre of your lane.";case Fragment::letThemPass:return "Let them pass.";
     case Fragment::lookAgainMoveOff:return "Look again before you move off.";
     case Fragment::soundHorn:return "Sound the horn.";case Fragment::bumpAheadContext:return "Speed bump ahead.";
+    case Fragment::in200m:return "In 200 metres,";case Fragment::in150m:return "In 150 metres,";
+    case Fragment::in100m:return "In 100 metres,";case Fragment::in50m:return "In 50 metres,";
+    case Fragment::turnLeft:return "turn left.";case Fragment::turnRight:return "turn right.";
+    case Fragment::keepLeftRoute:return "keep left.";case Fragment::keepRightRoute:return "keep right.";
+    case Fragment::uTurn:return "make a U-turn.";
+    case Fragment::roundaboutFirst:return "at the roundabout, take the first exit.";
+    case Fragment::roundaboutSecond:return "at the roundabout, take the second exit.";
+    case Fragment::roundaboutThird:return "at the roundabout, take the third exit.";
+    case Fragment::roundaboutFourth:return "at the roundabout, take the fourth exit.";
+    case Fragment::roundaboutEnter:return "enter the roundabout.";
+    case Fragment::destinationAhead:return "your destination is ahead.";
+    case Fragment::leftTurnHere:return "Left turn here.";case Fragment::rightTurnHere:return "Right turn here.";
+    case Fragment::thenLeft:return "Then turn left straight after.";case Fragment::thenRight:return "Then turn right straight after.";
+    case Fragment::giveWayRight:return "Give way to traffic from the right.";case Fragment::pullOver:return "Pull over safely.";
+    case Fragment::mergeCarefully:return "merge carefully.";
     default:return "";
     }
 }
@@ -112,7 +134,7 @@ inline bool isActorActionPrompt(Prompt p){const int i=int(p);return i>=64&&i<=68
 // Prompts the risk coach (origin 7) may use.
 inline bool riskMayUse(Prompt p){return isRiskPrompt(p)||isActorActionPrompt(p)||p==Prompt::pedestrianSpace||p==Prompt::riderSpace||p==Prompt::vehicleSpace;}
 // Vehicle-control coaching from measured speed/slope/route (origin 6).
-inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=90);}
+inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=91);}
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -156,7 +178,7 @@ inline int priority(Prompt p) {
     case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::oncomingKeepLeft:return 4;
     case Prompt::vehicleCrossingWait:case Prompt::personCrossingStop:return 5;
     case Prompt::personLeftSpace:case Prompt::personRightSpace:case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return 3;
-    case Prompt::bumpAhead:return 3;case Prompt::bendHorn:return 2;
+    case Prompt::bumpAhead:return 3;case Prompt::bendHorn:return 2;case Prompt::routeChanged:return 2;
     case Prompt::crossedLookAgain:return 2;
     case Prompt::ease:case Prompt::close:case Prompt::closeGear:case Prompt::holdLaneDistance:case Prompt::keepSafeGap:
     case Prompt::slowSmoothly:case Prompt::watchPedestrians:return 3;
@@ -202,6 +224,7 @@ inline const char* promptText(Prompt p) {
     case Prompt::driftRightKeepLeft:return "You are drifting right. Keep left";
     case Prompt::bumpAhead:return "Speed bump ahead. Slow down, clutch down and change down";
     case Prompt::bendHorn:return "Sharp bend ahead. Sound the horn and keep left";
+    case Prompt::routeChanged:return "The route has changed. Keep going and follow the new route";
     case Prompt::junctionApproach:return "Set a suitable approach speed. Prepare to give way";
     case Prompt::hill: return "Uphill. Lower gear if needed";
     case Prompt::ease: return "Ease off accelerator";

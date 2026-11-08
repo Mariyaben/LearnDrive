@@ -145,6 +145,10 @@ class NativeCore : AutoCloseable {
     @Synchronized fun routeLine(latLon:DoubleArray?):Boolean=routeLine(handle,latLon)
     /** Metres from the car to each remaining maneuver, nearest first, at [time] (elapsedRealtime s). */
     @Synchronized fun routeManeuvers(time:Double,ahead:DoubleArray)=routeManeuvers(handle,time,ahead)
+    /** Detail of the Google step last sent with [navigationTurn] (same receipt time). Memory only. */
+    @Synchronized fun navigationStepDetail(receivedAt:Double,side:Int,roundaboutExit:Int,nextManeuver:Int,nextGapMeters:Double)=
+        navigationStepDetail(handle,receivedAt,side,roundaboutExit,nextManeuver,nextGapMeters)
+    private external fun navigationStepDetail(h:Long,receivedAt:Double,side:Int,roundaboutExit:Int,nextManeuver:Int,nextGapMeters:Double)
     /** A speed bump learned on this phone in an earlier drive. */
     @Synchronized fun bumpRestore(lat:Double,lon:Double,heading:Double,observations:Int,misses:Int):Boolean=bumpRestore(handle,lat,lon,heading,observations,misses)
     /** Learned bumps, 5 values each: lat, lon, heading, times felt, times missed. */
@@ -194,6 +198,7 @@ class NativeCore : AutoCloseable {
     /** Fragment ids of a composed utterance (id >= 1000), in speaking order. */
     external fun promptFragments(id:Int):IntArray
     external fun fragmentCount():Int
+    external fun fragmentText(id:Int):String
     @Synchronized fun drivingReset()=drivingReset(handle)
     @Synchronized fun engineSample(t:Double,gear:Int,maxGear:Int,rpm:Double,lower:Double,upper:Double,load:Boolean)=engineSample(handle,t,gear,maxGear,rpm,lower,upper,load)
     @Synchronized fun drivingAdvice(t:Telemetry,ready:Boolean,manual:Boolean,slope:Boolean)=drivingAdvice(handle,t.values(),ready,manual,slope)
@@ -277,6 +282,20 @@ class NativeCore : AutoCloseable {
     private external fun dualPolicyAccepted(h:Long,prompt:Int,time:Double)
     private external fun dualPolicyReset(h:Long)
     private external fun dualPolicyReason(h:Long):String
+    /**
+     * The detector image as a mosaic: the road (full width, from well above the horizon down) plus
+     * a 2x zoom of the far road around the horizon, in rows letterboxing would leave grey. One
+     * inference sees road users about twice as far ahead; zoom-band boxes are mapped back to frame
+     * geometry before decoding, so distances are unchanged. The horizon follows the camera's
+     * measured pitch at [time]. Returns true with a zoom band, false for a plain letterbox.
+     */
+    @Synchronized fun prepareMosaic(id:Long,y:ByteBuffer,yr:Int,yp:Int,u:ByteBuffer,ur:Int,up:Int,v:ByteBuffer,vr:Int,vp:Int,w:Int,h:Int,rot:Int,size:Int,tensor:ByteBuffer,dtype:Int,scale:Float,zp:Int,full:Boolean,gray:Boolean,layout:Int,time:Double):Boolean {
+        requireSource(id)
+        val result=mosaicPrepare(handle,y.slice(),yr,yp,u.slice(),ur,up,v.slice(),vr,vp,w,h,rot,size,tensor,dtype,scale,zp,full,gray,layout,time)
+        check(result>0) { error(handle) }
+        return result==2
+    }
+    private external fun mosaicPrepare(h:Long,y:ByteBuffer,yr:Int,yp:Int,u:ByteBuffer,ur:Int,up:Int,v:ByteBuffer,vr:Int,vp:Int,w:Int,height:Int,rot:Int,size:Int,tensor:ByteBuffer,dtype:Int,scale:Float,zp:Int,full:Boolean,gray:Boolean,layout:Int,time:Double):Int
     private external fun prepare(h:Long,y:ByteBuffer,yr:Int,yp:Int,u:ByteBuffer,ur:Int,up:Int,v:ByteBuffer,vr:Int,vp:Int,w:Int,height:Int,rot:Int,size:Int,tensor:ByteBuffer,dtype:Int,scale:Float,zp:Int,full:Boolean,gray:Boolean,layout:Int):Boolean
     private external fun boxes(h:Long):FloatArray
     private external fun reason(h:Long):String

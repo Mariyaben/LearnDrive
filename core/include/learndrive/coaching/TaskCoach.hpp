@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 namespace ld::coaching {
@@ -14,6 +15,8 @@ struct TaskProgress {
     // Execution quiet survives a route/GPS dropout for a bounded time. Missing
     // evidence near a junction is a reason for routine silence, not for speech.
     double quietUntil=-1;
+    // Google route steps are placed by Google's distance (dead-reckoned between updates).
+    bool byDistance{};double distanceM=-1,speedMps{},bandM{},entryM{};
     uint64_t quietEvent{};
     unsigned quietHolds{};
     // Act-by schedule at the current speed: preparation lead (s) and whether a
@@ -34,6 +37,19 @@ inline constexpr double executionQuietLead=8,executionQuietHold=10,minimumUseful
 inline constexpr double actByLateLimit=6.5,actByEntryOpen=6,actByEntryClose=2,actByApproachOpen=10.5,actByApproachClose=6.5,
     actByApproachSpeed=25,actByStepSpacing=4.5;
 inline double actByPrepareLead(double kmh) noexcept {return std::clamp(10+std::max(0.,(kmh-15)/3.6)/1.2,10.,25.);}
+// Google route steps by distance, as an instructor (and Google) says them: the preparation at
+// a spoken distance about 12 s ahead (50, 100, 150 or 200 m), "brake, change down" at about
+// 60 m (7 s, at least 28 m, when slow) when faster than 12 km/h, and the turn itself about 4 s
+// (at least 14 m) before it. At 15 km/h the old 5 s / 3 s left the turn instruction crowded out
+// until 0.5 s before the turn (Nov 5); the instructor says it 5-9 s before.
+inline double routePrepareBand(double kmh) noexcept {
+    const double want=std::max(50.,std::max(0.,kmh)/3.6*12);double best=50;
+    for(double b:{100.,150.,200.})if(std::abs(b-want)<std::abs(best-want))best=b;
+    return best;
+}
+inline double routeEntryDistance(double kmh) noexcept {return std::max(14.,std::max(0.,kmh)/3.6*4);}
+inline double routeApproachDistance(double kmh) noexcept {return routePrepareBand(kmh)>50?62:std::max(28.,std::max(0.,kmh)/3.6*7);}
+inline constexpr double routeApproachSpeed=12,routeEntrySpeed=30,routeProviderAge=5;
 // A bounded teaching episode. No inference of mirror, indicator, control use or
 // manoeuvre correctness. Evidence and sequence are rechecked at delivery onset.
 class TaskCoach {
@@ -49,6 +65,8 @@ public:
     // cue started near the end of its window is truncated mid-sentence.
     bool continuing(const Candidate&,const WorldState&,double,const EventLedger&) const noexcept;
     static bool evidence(const Candidate&,const WorldState&,double,bool started=false) noexcept;
+    /** Seconds to the current junction from fresh route evidence; -1 when unknown. */
+    static double leadSeconds(const WorldState&,double now) noexcept;
     const TaskProgress& progress() const noexcept {return state_;}
     std::string json() const;
     // Task-aware scheduling. Disabled reproduces the 0.7.1 behavior exactly.

@@ -31,6 +31,8 @@ import ai.learndrive.mobile.navigation.google.GoogleNavigationUpdate
 import ai.learndrive.mobile.navigation.google.GoogleNavigationPhase
 import ai.learndrive.mobile.navigation.google.GoogleManeuverKind
 import ai.learndrive.mobile.navigation.google.GoogleJourneyMemory
+import ai.learndrive.mobile.navigation.google.nativeCode
+import kotlin.math.roundToInt
 import androidx.lifecycle.ViewModelProvider
 import ai.learndrive.mobile.ui.CoachStyle
 
@@ -214,6 +216,9 @@ class MainActivity : ComponentActivity() {
     private var scriptStart=0.0
     private var lastRender=0.0
     @Volatile private var audioStatus="Loading bundled voice"
+    // The phone's own natural voice (offline), rendered once per phrase; see PhoneVoice.
+    private lateinit var phoneVoice:ai.learndrive.mobile.audio.PhoneVoice
+    @Volatile private var voiceStatus="Natural voice: starting"
     private var visionStatus="Starting camera and bundled models"
     @Volatile private var warningStatus="Hold the phone still for calibration"
     private val pickVideo=registerForActivityResult(ActivityResultContracts.OpenDocument()) {uri->if(uri!=null)startVideo(uri)}
@@ -281,7 +286,9 @@ class MainActivity : ComponentActivity() {
         coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
-        preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FIT_CENTER;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
+        // Fill the road camera panel, aligned to the bottom: a wide panel crops sky, never the road
+        // (DetectionOverlay draws boxes with the same mapping).
+        preview=PreviewView(this).apply {scaleType=PreviewView.ScaleType.FILL_END;implementationMode=PreviewView.ImplementationMode.COMPATIBLE}
         overlay=DetectionOverlay(this)
         cameraFrame=FrameLayout(this).apply {addView(preview,FrameLayout.LayoutParams(-1,-1));addView(this@MainActivity.overlay,FrameLayout.LayoutParams(-1,-1))}
         dashboard=ai.learndrive.mobile.ui.UnifiedDriveDashboard(this,cameraFrame)
@@ -366,6 +373,12 @@ class MainActivity : ComponentActivity() {
         moreOptions.addView(Switch(this).apply {
             tag="coaching-voice";text="Coaching voice";setTextColor(CoachStyle.text);isChecked=coachingSettings.voiceEnabled
             setOnCheckedChangeListener {_,enabled->changeCoachingSettings(coachingSettings.profile,enabled)}
+        })
+        moreOptions.addView(Switch(this).apply {
+            tag="natural-voice";text="Natural phone voice";setTextColor(CoachStyle.text)
+            isChecked=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+            setOnCheckedChangeListener {_,enabled->if(::audio.isInitialized)audio.naturalVoice=enabled
+                getSharedPreferences("driving_advice",MODE_PRIVATE).edit().putBoolean("naturalVoice",enabled).apply()}
         })
         moreOptions.addView(text("Minimal keeps essential cues. Balanced spaces routine coaching. Guided adds more reminders. Visual coaching continues with voice off.",12f))
         reasoningStatus=text("Local pretrained AI is experimental, optional and off. It never speaks or controls live guidance.",12f)
@@ -537,8 +550,13 @@ class MainActivity : ComponentActivity() {
                 showSetup->{hideKeyboard();showSetup=false;updateSetupUi()}
                 else->finish()}
         }})
+        phoneVoice=ai.learndrive.mobile.audio.PhoneVoice(this) {message->main.post {voiceStatus=message}}
         audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority,
-            fragmentCount=core.fragmentCount(),fragments=core::promptFragments) {message->main.post {audioStatus=message}}
+            fragmentCount=core.fragmentCount(),fragments=core::promptFragments,fragmentText=core::fragmentText,
+            promptText=core::promptText,phoneVoice=phoneVoice) {message->main.post {audioStatus=message}}
+        audio.naturalVoice=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+        // Every phrase the coach can say, so the phone voice takes over only when all are rendered.
+        phoneVoice.require((1..core.promptCount()).map {core.promptText(it)}+(1..core.fragmentCount()).map {core.fragmentText(it)})
         audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
         researchEmergencies=Switch(this).apply {text="Lab only: unvalidated emergency commands";isChecked=false}
@@ -624,6 +642,10 @@ class MainActivity : ComponentActivity() {
                 phase,update.stepNumber?:-1,maneuver,update.distanceMeters?:Double.POSITIVE_INFINITY,
                 update.timeSeconds?:Double.POSITIVE_INFINITY)
             update.maneuversAheadMeters?.let {core.routeManeuvers(update.receivedAtSeconds,it)}
+            // Side, roundabout exit and the step after this one: "In 100 metres, keep left",
+            // "take the second exit", "Then turn left straight after".
+            core.navigationStepDetail(update.receivedAtSeconds,update.side,update.roundaboutExit?:0,
+                update.nextManeuver.nativeCode(),update.nextGapMeters?:Double.POSITIVE_INFINITY)
         }
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.
@@ -639,8 +661,11 @@ class MainActivity : ComponentActivity() {
         GoogleManeuverKind.OFF_RAMP->"Take the exit";GoogleManeuverKind.U_TURN->"U-turn ahead"
         GoogleManeuverKind.ROUNDABOUT->update.roundaboutExit?.let {"Roundabout · exit $it"}?:"Roundabout ahead"
         GoogleManeuverKind.ARRIVAL->"Destination ahead";GoogleManeuverKind.STRAIGHT->"Continue ahead"
-        else->"Follow the mapped route"
+        else->"Follow the route"
     }
+    /** What the learner should know about the road ahead, for the coach card between instructions. */
+    @Volatile private var nextRoadSummary:String?=null
+    private fun distanceText(m:Double)=when {m>=1000->"%.1f km".format(m/1000);m>=20->"${(m/10).roundToInt()*10} m";else->"here"}
     private fun startEvidence() {
         if(evidenceBusy||evidenceSaved||journal?.isFinished==false||knownMoving()||evidenceMetadata==null)return
         android.app.AlertDialog.Builder(this).setTitle("Record local diagnostic evidence?")
@@ -923,7 +948,7 @@ class MainActivity : ComponentActivity() {
             else if(!roadSource())"Lab screen test selected. Select the road camera to set up a mounted session."
             else if(moving)"Setup paused: measured speed is above 1 km/h. Stop and park before setup."
             else "Confirm the fixed forward-facing mount before starting."
-        setupStatus.setUiText("$heading\n$alignment\nCoaching: ${coachingSettings.profile.label} · voice ${if(coachingSettings.voiceEnabled)audioStatus else "off"}\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
+        setupStatus.setUiText("$heading\n$alignment\nCoaching: ${coachingSettings.profile.label} · voice ${if(coachingSettings.voiceEnabled)"$audioStatus · $voiceStatus" else "off"}\n${setup.referenceStatus()}\nMount checks need fresh measured speed and cannot detect every movement.")
         // The entry action stays stable while frame age/capability changes. Its modal
         // explains readiness; both actual admission paths still enforce canStartRoad.
         setupStart.setUiText(if(!roadSource())"Use mounted road camera" else "Start session")
@@ -1214,9 +1239,8 @@ class MainActivity : ComponentActivity() {
             else->"measured speed unavailable"
         }
         currentAdvice=AdviceDisplay(telemetry,speedSource)
-        val mute=telemetry.braking||telemetry.hardBraking||telemetry.shock
-        if(mute&&!suppressed){audio.cancel();main.post {coachCaption.clear()}}
-        suppressed=mute
+        // Braking or a jolt never cuts an instruction off mid-word (Nov 6): the native engine
+        // decides what may start and lets started speech finish its sentence.
         val result=lastVision?.takeIf {it.frame?.sourceId==config.sourceId}
         val htime=if(desk)t else result?.time?:0.0
         val htti=if(desk)row?.tti?:config.tti else result?.tti?:Double.POSITIVE_INFINITY
@@ -1411,6 +1435,18 @@ class MainActivity : ComponentActivity() {
                 dashboard.navigationStatus.setUiText(if(!roadSource())"Navigation coaching paused for test input" else
                     if(freePractice)roadMapStatus.substringBefore(" (©")+learnedBumpNote() else google?.state?.status?:"Google navigation unavailable")
                 val valid=roadSource()&&fix!=null&&update?.state==GoogleNavigationPhase.ENROUTE
+                // A known maneuver with Google's distance; "continue"/unknown steps show no distance.
+                val known=valid&&update?.maneuver!=GoogleManeuverKind.UNKNOWN&&update?.maneuver!=GoogleManeuverKind.STRAIGHT
+                nextRoadSummary=when {
+                    known&&update?.distanceMeters!=null->"Next: ${googleManeuverText(requireNotNull(update))} · ${distanceText(update.distanceMeters)}"
+                    update?.state==GoogleNavigationPhase.REROUTING->"Google is finding a new route"
+                    ahead!=null&&ahead.size>=9&&ahead[5]<=150->"Speed bump ahead · ${distanceText(ahead[5])}"
+                    ahead!=null&&ahead.size>=9&&ahead[6]<=150->(if(ahead[7]!=0.0)"Sharp bend right" else "Sharp bend left")+" · ${distanceText(ahead[6])}"
+                    ahead!=null&&ahead[0]!=0.0->"Junction ahead · ${distanceText(ahead[1])}"
+                    else->null
+                }
+                // Google's own banner shows the maneuver and distance while guiding.
+                dashboard.setRouteCardVisible(!(google?.state?.guiding==true&&google.isRendered))
                 dashboard.setManeuver(if(valid)googleManeuverText(requireNotNull(update)) else when {
                     !roadSource()->"Test input"
                     google?.state?.routeReady==true&&!google.state.guiding->"Route ready · start session"
@@ -1420,7 +1456,7 @@ class MainActivity : ComponentActivity() {
                     ahead!=null&&ahead.size>=9&&ahead[6]<=80->if(ahead[7]!=0.0)"Sharp bend right ahead" else "Sharp bend left ahead"
                     ahead!=null&&ahead[0]!=0.0->"Junction ahead"
                     else->null
-                },if(valid)update?.distanceMeters else ahead?.let {a->when {a.size>=9&&a[5]<=80->a[5];a.size>=9&&a[6]<=80->a[6];a[0]!=0.0->a[1];else->null}})
+                },if(valid)(if(known)update?.distanceMeters else null) else ahead?.let {a->when {a.size>=9&&a[5]<=80->a[5];a.size>=9&&a[6]<=80->a[6];a[0]!=0.0->a[1];else->null}})
             } else if(loadedRoute) {
                 val navigation=core.navigationContext(visionNow)
                 dashboard.navigationStatus.setUiText(if(roadSource())core.navigationStatus(visionNow) else "Map coaching paused for test input")
@@ -1444,11 +1480,11 @@ class MainActivity : ComponentActivity() {
             dashboard.setCoachPresentation(caption?.text?:when {
                     roadSource()&&!setup.isMonitoring()->"Your next session starts here."
                     roadSource()->when(lessonUiPhase){
-                        "WATCHING_ROAD"->"Coaching adapts as the drive develops."
-                        "EVIDENCE_UNAVAILABLE"->"Waiting for reliable road and location data."
-                        "EXECUTION_QUIET"->"Focus on driving. Your instructor leads."
+                        // Between instructions: what is coming up, never an "all clear".
+                        "WATCHING_ROAD","OBSERVING_RESPONSE"->nextRoadSummary?:if(useGoogle&&googleNavigation?.state?.guiding==true)"Following Google's route" else "Free practice"
+                        "EVIDENCE_UNAVAILABLE"->nextRoadSummary?.let {"$it · waiting for GPS speed"}?:"Waiting for GPS speed"
+                        "EXECUTION_QUIET"->"Eyes on the road through the turn"
                         "DELIVERING"->"Driving guidance"
-                        "OBSERVING_RESPONSE"->"Continue preparing with your instructor."
                         else->when(drivingTask){
                             "BEND"->"Preparing for the bend."
                             "HILL"->"Adapting to the hill."
@@ -1475,5 +1511,5 @@ class MainActivity : ComponentActivity() {
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {if(::phoneVoice.isInitialized)phoneVoice.close();if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }

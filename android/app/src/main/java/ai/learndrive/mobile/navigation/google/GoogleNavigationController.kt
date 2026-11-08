@@ -323,11 +323,16 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
             }
             list.toDoubleArray()
         } else null
+        // The step after this one: back-to-back turns are said together.
+        val next=if(step!=null)info.remainingSteps.orEmpty().firstOrNull {it.stepNumber==null||it.stepNumber!=step.stepNumber} else null
         val update=GoogleNavigationUpdate(sessionId,routeEpoch,++sequence,receivedAt,phase,
             step?.stepNumber?.takeIf {it>=0},step?.let {normalizeGoogleManeuver(it.maneuver)}?:GoogleManeuverKind.UNKNOWN,
             if(step!=null)info.distanceToCurrentStepMeters?.takeIf {it>=0}?.toDouble() else null,
             if(step!=null)info.timeToCurrentStepSeconds?.takeIf {it>=0}?.toDouble() else null,
-            step?.roundaboutTurnNumber?.takeIf {it>0},ahead)
+            step?.roundaboutTurnNumber?.takeIf {it>0},ahead,
+            step?.let {googleManeuverSide(it.maneuver)}?:0,
+            next?.let {normalizeGoogleManeuver(it.maneuver)}?:GoogleManeuverKind.UNKNOWN,
+            next?.distanceFromPrevStepMeters?.takeIf {it>=0}?.toDouble())
         lastUpdate=update;onUpdate(update)
         updateState(state.copy(status=when(phase) {
             GoogleNavigationPhase.ENROUTE->if(step==null)"Google navigation active · turn information unavailable" else "Google navigation active"

@@ -1,6 +1,28 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.7.7 (experimental, host-tested only).** 0.7.7 was tested by driving
+**Current Android candidate: 0.8.1 (experimental, host-tested only).** 0.8.1 was tested by
+replaying the brain on the Nov 4, 5 and 6 drives ([drive replays](docs/coach/DRIVE_REPLAYS_081.md)).
+Instructions are no longer cut off mid-word: braking is a sustained deceleration (phone vibration
+read as braking cut speech all drive), a started sentence finishes, and a stop that is not urgent
+ends at a natural pause. The coach speaks with the phone's own natural voice once every phrase is
+rendered (built-in voice as fallback, switchable), joins phrases with natural pauses and never
+clicks or crackles. Road-user warnings remove the car's own turning (bends made parked cars "cross"),
+require a road user to stand on the road (a billboard said "Person crossing. Stop and wait"), keep
+"Brake now" for a collision course, and call head-on traffic oncoming by its own approach speed.
+Turn instructions come earlier at low speed, forks and merges get their own words, and "Straighten
+the wheel" needs a turn actually made. In landscape the road camera now takes the right half of the
+screen at full height (it fills its panel, trimming sky), with the map and the coach card on the left.
+**Previously, 0.8.0 (experimental, host-tested only).** 0.8.0 lets the road-user
+detector see about twice as far ahead at no extra cost: its image becomes a mosaic of the road
+plus a 2x zoom of the far road, filling space letterboxing wasted, with every box mapped back to
+true frame geometry so distances are unchanged ([detector mosaic](docs/coach/DETECTOR_MOSAIC.md)).
+The risk coach acts on that earlier sight (about 6 s ahead instead of a fixed 25 m), ignores
+"road users" that cannot be standing on the road and the phone mount at the frame edge, and an
+urgent instruction now always says why ("Person ahead. Brake now."). Slope advice no longer
+mistakes a sagging phone mount for a hill; the coach says when Google changes the route; the
+coach card shows the next maneuver instead of filler text. 0.7.9 coaches every Google turn by
+distance ("In 100 metres, turn right..."). 0.7.8 adds route-line bends and learned speed bumps.
+**Previously, 0.7.7 (experimental, host-tested only).** 0.7.7 was tested by driving
 the brain over real Kerala roads it had never seen, with and without a destination
 ([route-drive simulation](docs/coach/ROUTE_SIMULATION.md)). The map scout now follows roads that
 bend where two map segments meet, treats a main road that bends away at a junction as a junction,

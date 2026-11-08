@@ -37,6 +37,10 @@ struct RouteContext {
     double captureTime=-infinity,distanceM=infinity,etaSeconds=infinity,gpsTime=-infinity;
     int feature{};
     bool valid{},provider{};
+    // Provider (Google) step detail: maneuver (TurnKind 1-9), side for keep/fork (-1 left,
+    // +1 right), roundabout exit, and the step after this one (kind, metres after it).
+    int maneuver{},side{},roundaboutExit{},nextManeuver{};
+    double nextGapM=infinity;
 };
 // Candidates are bounded outputs of existing measured-scene producers. Their
 // evidence clock never becomes the rules tick clock. No generated text enters.
@@ -81,10 +85,18 @@ struct WorldState {
     // Navigation says the learner is pulling up at the destination: a stop here is the
     // end of the drive, not a pause before moving off again.
     bool arriving{};
+    // Navigation is finding a new route (a missed turn or a better way).
+    bool rerouting{};
     // Horizon row (fraction of image height) from the measured camera pitch. A camera
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;
     bool horizonMeasured{};
+    // Turn rate (rad/s, left positive) from the gyroscope, or a replay's estimate from the video.
+    double yawRate{};
+    bool yawKnown{};
+    // Top of the image the detector saw (fraction of height): above it (sky, cropped by the
+    // detector mosaic) a box is cut off, so its apparent height says nothing about distance.
+    double visibleTop{};
     int roadBend{},gradeBand{};
     bool roadValid{},engineValid{};
     // Independent vehicle input. A candidate's mechanicalMeasured flag cannot
