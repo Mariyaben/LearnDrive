@@ -52,6 +52,10 @@ class Native:
             "prepare": ([P, P, P], C.c_int),
             "prepare_zoom": ([P, P, P, C.c_float], C.c_int),
             "prepare_mosaic": ([P, P, P, C.c_double], C.c_int),
+            "mosaic_mode": ([P, C.c_int], None),
+            "mosaic_plan": ([P, C.c_double, P], C.c_int),
+            "prepare_mosaic_plan": ([P, P, P, P], C.c_int),
+            "camera_geometry": ([P, C.c_double, C.c_double, C.c_double, C.c_double], None),
             "camera_horizon": ([P, C.c_double], None),
             "camera_yaw": ([P, C.c_double, C.c_double], None),
             "zoom_merge": ([P, P, P, C.c_int, P, C.c_size_t], C.c_int),
@@ -296,6 +300,14 @@ def main():
     parser.add_argument("--mosaic", action="store_true",
                         help="The app's detector mosaic: road band + 2x zoom band of the far road in ONE inference "
                              "(horizon from --camera-horizon, else mid-image)")
+    parser.add_argument("--mosaic-mode", type=int, choices=[1, 2], default=2,
+                        help="Mosaic layout: 2 = long range (0.8.3: 2x and 4x views aimed along the road), 1 = 0.8.0 (one centred 2x view)")
+    parser.add_argument("--camera-geometry", type=str,
+                        help="Optics of the filmed image as fractions of it: fx,fy,cx,cy (focal lengths in image widths/heights, "
+                             "optical centre). The 0.8.1 S24 Ultra preview crop is 0.665,1.228,0.5,0.306; default: an uncropped 4:3 frame")
+    parser.add_argument("--camera-horizon-track", type=Path,
+                        help="CSV time,horizon: the filmed camera's horizon over the drive (a mount that tilts or "
+                             "sags moves it; the phone measures it live). Overrides --camera-horizon")
     parser.add_argument("--camera-horizon", type=float,
                         help="Horizon row of the filmed camera (fraction of height) for road-user distance; default mid-image")
     parser.add_argument("--render", action="store_true")
@@ -363,11 +375,30 @@ def main():
     if args.detector_zoom:
         runtime["detector_zoom"] = {"horizon": args.zoom_horizon, "merge": "native ld_zoom_merge",
                                     "cached_candidates": ZOOM_CACHED_CANDIDATES}
+    horizon_track = None
+    if args.camera_horizon_track:
+        with args.camera_horizon_track.open(newline="") as source:
+            rows = [(float(r["time"]), float(r["horizon"])) for r in csv.DictReader(source)]
+        if len(rows) < 2 or any(not (.05 < h < .95) for _, h in rows):
+            raise ValueError("--camera-horizon-track needs time,horizon rows with horizons in (0.05, 0.95)")
+        horizon_track = (np.array([t for t, _ in rows]), np.array([h for _, h in rows]))
+        args.camera_horizon = float(horizon_track[1][0])
+
+    def horizon_at(t):
+        return float(np.interp(t, *horizon_track)) if horizon_track else args.camera_horizon
+    camera_geometry = None
+    if args.camera_geometry:
+        camera_geometry = [float(v) for v in args.camera_geometry.split(",")]
+        if len(camera_geometry) != 4 or not all(math.isfinite(v) for v in camera_geometry):
+            raise ValueError("--camera-geometry needs four numbers: fx,fy,cx,cy")
     if args.mosaic:
         if args.detector_zoom:
             raise ValueError("--mosaic replaces --detector-zoom")
         runtime["detector_mosaic"] = {"horizon": args.camera_horizon if args.camera_horizon is not None else 0.5,
-                                      "layout": "native ld_preprocess_mosaic; zoom band mapped back before decoding",
+                                      "layout": "native ld_preprocess_mosaic_plan with the engine's per-frame plan (cached); views mapped back before decoding",
+                                      "mode": args.mosaic_mode, "camera_geometry": camera_geometry,
+                                      "horizon_track": [[float(t), float(h)] for t, h in zip(*horizon_track)] if horizon_track else None,
+                                      "aimed_by_video_yaw": args.mosaic_mode == 2 and args.video_yaw == "on",
                                       "cached_candidates": ZOOM_CACHED_CANDIDATES}
     provenance = inference_provenance(ROOT, args.video, ASSETS, args.library.resolve(), geometry.tolist(),
         args.fps, args.semantic_hz, spatial, runtime, decoder, Path(__file__), args.policy_independent_cache)
@@ -378,7 +409,10 @@ def main():
     cache_existed = cache.exists()
     cached, cache_origin = load_cache(cache, provenance) if cache_existed and not args.fresh_inference else (None, None)
     fresh_inference_performed = cached is None
-    outputs, detections, semantic_indices, inference_ms = [], [], [], []
+    outputs, detections, semantic_indices, inference_ms, plans = [], [], [], [], []
+    plan = np.empty(8, np.float32)
+    # The camera's turn rate from the video: it aims the long-range views (pass 1) and the coach (pass 2).
+    yaw_times, yaw_rates = video_yaw(args.video) if args.video_yaw == "on" else (np.zeros(0), np.zeros(0))
     if cached is None:
         options = ort.SessionOptions(); options.intra_op_num_threads = 2; options.inter_op_num_threads = 1
         detector = ort.InferenceSession(str(ASSETS / "detector.onnx"), options, providers=["CPUExecutionProvider"])
@@ -388,6 +422,10 @@ def main():
             raise RuntimeError("Native Supercombo initialization failed")
         if args.mosaic and args.camera_horizon is not None:
             native.camera_horizon(handle, args.camera_horizon)  # The mosaic's zoom band follows the horizon.
+        if args.mosaic:
+            native.mosaic_mode(handle, args.mosaic_mode)
+            if camera_geometry:
+                native.camera_geometry(handle, *camera_geometry)
         last_semantic = -math.inf
         try:
             for index, frame in enumerate(frames(args.video, width, height, args.fps)):
@@ -395,7 +433,13 @@ def main():
                 started = time.perf_counter()
                 if timestamp - last_semantic >= 1 / args.semantic_hz - 1e-9:
                     if args.mosaic:
-                        native.require(handle, native.prepare_mosaic(handle, ptr(frame), ptr(tensor), timestamp))
+                        if args.mosaic_mode == 2 and len(yaw_times):
+                            native.camera_yaw(handle, timestamp, float(np.interp(timestamp, yaw_times, yaw_rates)))
+                        if horizon_track:
+                            native.camera_horizon(handle, horizon_at(timestamp))
+                        native.require(handle, native.mosaic_plan(handle, timestamp, ptr(plan)))
+                        plans.append(plan.copy())
+                        native.require(handle, native.prepare_mosaic_plan(handle, ptr(frame), ptr(tensor), ptr(plan)))
                     else:
                         native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
                     found = np.ascontiguousarray(detector.run(None, {"images": tensor})[0][0], np.float32)
@@ -423,7 +467,8 @@ def main():
             native.destroy(handle)
         if not outputs or not detections:
             raise ValueError("Video has no decodable inference frames")
-        save_cache(cache, provenance, args.output, replace_existing=args.fresh_inference, outputs=np.stack(outputs), detections=np.stack(detections),
+        extra = {"mosaic_plans": np.stack(plans).astype(np.float32)} if args.mosaic else {}
+        save_cache(cache, provenance, args.output, replace_existing=args.fresh_inference, **extra, outputs=np.stack(outputs), detections=np.stack(detections),
                    semantic_indices=np.asarray(semantic_indices, dtype=np.int64), inference_ms=np.asarray(inference_ms))
         cached, cache_origin = load_cache(cache, provenance)
     outputs, detections = cached["outputs"], cached["detections"]
@@ -433,7 +478,10 @@ def main():
         raise RuntimeError("Native policy initialization failed")
     if args.camera_horizon is not None:
         native.camera_horizon(handle, args.camera_horizon)
-    yaw_times, yaw_rates = video_yaw(args.video) if args.video_yaw == "on" else (np.zeros(0), np.zeros(0))
+    if camera_geometry:
+        native.camera_geometry(handle, *camera_geometry)
+    if args.mosaic:
+        native.mosaic_mode(handle, args.mosaic_mode)
     if overlay is not None or args.speeds_as_live:
         if args.speeds_as_live and not args.speeds:raise ValueError("--speeds-as-live needs --speeds from the same drive")
         native.bind_navigation()
@@ -511,6 +559,8 @@ def main():
             speed = speed_observation.speed_kmh
             if len(yaw_times):
                 native.camera_yaw(handle, now, float(np.interp(now - args.pre_roll_seconds, yaw_times, yaw_rates)))
+            if horizon_track:
+                native.camera_horizon(handle, horizon_at(now - args.pre_roll_seconds))
             native.tick(handle, now, speed if speed is not None else math.nan,
                         int(speed is not None and now >= args.pre_roll_seconds), playing, ptr(decision))
             native.trace(handle, ptr(trace))
@@ -591,10 +641,13 @@ def main():
                     decoded_index += 1
                 # The same image layout as inference, so cached zoom-band boxes decode to frame geometry.
                 if args.mosaic:
-                    native.require(handle, native.prepare_mosaic(handle, ptr(frame), ptr(tensor), timestamp + args.pre_roll_seconds))
+                    stored = np.ascontiguousarray(cached["mosaic_plans"][semantic_indices[index]], np.float32)
+                    native.require(handle, native.prepare_mosaic_plan(handle, ptr(frame), ptr(tensor), ptr(stored)))
                 else:
                     native.require(handle, native.prepare(handle, ptr(frame), ptr(tensor)))
                 values = np.ascontiguousarray(detections[semantic_indices[index]])
+                if horizon_track:
+                    native.camera_horizon(handle, horizon_at(timestamp))
                 native.require(handle, native.labels(handle, timestamp + args.pre_roll_seconds, ptr(values), values.size, values.shape[1]))
                 semantic_capture_time = timestamp
             elif stage == "spatial":
@@ -671,6 +724,7 @@ def main():
         "policy_independent_cache": args.policy_independent_cache,
         "detector_zoom": {"horizon": args.zoom_horizon} if args.detector_zoom else None,
         "camera_horizon": args.camera_horizon,
+        "camera_horizon_track": str(args.camera_horizon_track) if args.camera_horizon_track else None,
         "navigation_overlay": {"synthetic": True, "turns": turns, "unavailable": nav_gaps} if overlay else None,
         "final_drive": json.loads(drive_state) if args.coaching_profile != "legacy" else None, "candidate_tick_counts": candidate_counts,
         "limitations": ["No ground-truth depth, collision labels, calibrated optics or recorded IMU",

@@ -245,6 +245,31 @@ int main(int argc,char** argv){try {
         if(!has(p,Prompt::oncomingKeepLeft)){for(int x:p)std::cerr<<x<<' ';std::cerr<<std::endl;}
         check(has(p,Prompt::oncomingKeepLeft),"head-on rider not called oncoming");
         check(!has(p,Prompt::brakeReadyStop),"head-on rider got 'Brake now'");});
+    test("a cropped, pitched-up camera (0.8.1 preview) sees a person in the lane as far as an uncropped level one",[&]{
+        // One scene, two images: the uncropped 4:3 frame from a level camera, and the 0.8.1 preview
+        // crop (the bottom 72 % of the frame: 0.665 widths and 1.228 heights per radian, optical
+        // centre 0.31 down) from a phone pitched up 17 degrees, as on the Nov 8 drive. A person
+        // stands in the lane 45 m ahead; the learner approaches at 40 km/h.
+        // `horizon` is where it really is in the image; `believed` is what the app computes.
+        struct Cam {CameraModel model;double horizon,believed;bool known;};
+        auto run=[&](const Cam& c){Fixture f(1);std::vector<int> p;double firstZ=-1;
+            for(int i=5;i<=40;++i){const double t=i/10.,z=45-11.1*(t-.5);if(z<5)break;auto w=road(t);w.telemetry.speedKmh=40;
+                w.horizon=c.believed;w.horizonMeasured=true;if(c.known)w.camera=c.model;
+                ActorObservation a;a.identity={IdentitySpace::Optical,807,0};a.captureTime=t;a.confidence=.9;a.relevant=true;a.category=0;
+                a.h=float(c.model.fy*1.7/z);a.w=float(c.model.fx*.5/z);a.x=float(c.model.cx+c.model.fx*.3/z)-a.w*.5f;
+                a.y=float(c.horizon+c.model.fy*1.25/z)-a.h;w.actors[w.actorCount++]=a;
+                const size_t before=p.size();said(f,w,p);if(p.size()>before&&firstZ<0)firstZ=z;}
+            return firstZ;};
+        const CameraModel level{},crop{.665,1.228,.5,.306,true};
+        const double up=std::tan(17*3.14159265358979/180);
+        const double truth=.306+1.228*up;
+        const double level4x3=run({level,.5,.5,true}),known=run({crop,truth,truth,true});
+        // 0.8.1: the crop read as an uncropped frame, horizon from the 4:3 formula (0.5 + 0.96 tan).
+        const double raw=run({crop,truth,.5+.96*up,false});
+        std::cout<<"    first instruction: level 4:3 at "<<level4x3<<" m, cropped with its optics at "<<known<<" m, cropped read as 4:3 (0.8.1) at "<<raw<<" m"<<std::endl;
+        check(level4x3>30&&known>30,"no early instruction for a person standing in the lane");
+        check(std::abs(level4x3-known)<3,"the cropped camera finds the person at a different distance");
+        check(raw<15,"control: 0.8.1's raw reading should only find the person close up");});
     test("downhill adds engine braking to the plan for the same pedestrian",[]{
         auto run=[](double pitch){Fixture f(2);std::string said;
             for(int i=10;i<=30;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=30;w.telemetry.pitchDegrees=pitch;w.gradeBand=slopeBand(pitch);
@@ -288,6 +313,58 @@ int main(int argc,char** argv){try {
         check(bends==1,"bend not named exactly once as its map point moved");
         const double lead=(110-(at-1)*10)/10.;check(lead>=3&&lead<=7.5,"bend named too late or too early");
         check(!upNear,"change-up advice into a sharp bend");check(upAfter,"held change-up never given after the bend");});
+    // A climb or descent from the route's elevation, `start` m ahead at t=1, approached at a
+    // steady speed; the mount has sagged so the phone's tilt reads `pitch` all the way.
+    auto hillDrive=[&](double grade,double kmh,double start=150,double pitch=0,double length=250){
+        Fixture f(1);std::vector<std::tuple<double,double,std::string>> said;
+        for(int i=10;i<=450;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=kmh;
+            w.telemetry.pitchDegrees=pitch;w.gradeBand=slopeBand(pitch);
+            const double ahead=start-(t-1)*kmh/3.6;
+            if(ahead+length>0){w.slopeId=501;w.slopeAheadM=ahead;w.slopeGrade=grade;w.slopeLengthM=std::min(length,length+ahead);}
+            w.mapTime=t;w.mapGradeKnown=true;w.mapGradePercent=ahead<=0&&ahead+length>0?grade:0;
+            w.gradeBand=slopeBand(std::atan(w.mapGradePercent/100)*180/3.14159265358979323846);
+            const auto text=speak(f,w);if(!text.empty())said.push_back({t,ahead,text});}
+        return said;};
+    test("map hills: a descent is named once about 7 s ahead with the gear, from the map; a sagging mount's tilt says nothing",[&]{
+        const auto said=hillDrive(-11,30,150,9);int hills=0;double lead=-1;std::string text;
+        for(auto& [t,ahead,s]:said){std::cout<<"    "<<t<<" ("<<ahead<<" m): "<<s<<std::endl;
+            if(s.find("ownhill")!=std::string::npos){++hills;lead=ahead/(30/3.6);text=s;}
+            check(s.find("phill")==std::string::npos,"the fallen mount's tilt became an uphill instruction");}
+        check(hills==1,"descent not named exactly once");check(lead>=4&&lead<=7.5,"descent named too late or too early");
+        check(text.rfind("Steep downhill ahead. Change down to second. Control your speed with the brake.",0)==0,"wrong words for a steep descent at 30 km/h");});
+    test("map hills: the words depend on the speed (slow down first, which gear, nothing to change)",[&]{
+        auto words=[&](double grade,double kmh){for(auto& [t,ahead,s]:hillDrive(grade,kmh,260))if(s.find("hill")!=std::string::npos)return std::make_pair(ahead/(kmh/3.6),s);
+            return std::make_pair(-1.,std::string());};
+        const std::tuple<double,double,const char*> cases[]={
+            {-11,50,"Steep downhill ahead. Brake gently. Change down to second. "},
+            {-7,45,"Downhill ahead. Change down to third. Control your speed with the brake. "},
+            {-7,20,"Downhill ahead. Do not coast in neutral. Control your speed with the brake. "},
+            {7,45,"Uphill ahead. Change down to third. Steady accelerator. "},
+            {7,60,"Uphill ahead. Change down a gear. Steady accelerator. "},
+            {12,30,"Steep uphill ahead. Change down to second. Steady accelerator. "},
+            {7,20,"Uphill ahead. Steady accelerator. "}};
+        for(const auto& [grade,kmh,want]:cases){const auto [lead,s]=words(grade,kmh);
+            std::cout<<"    "<<grade<<" % at "<<kmh<<" km/h, "<<lead<<" s ahead: "<<s<<std::endl;
+            check(s==want,"hill sentence wrong for the speed");
+            check(lead>=4&&lead<=(std::string(want).find("Brake gently")!=std::string::npos?9.5:7.5),"hill named at the wrong time");}});
+    test("map hills: first seen on the slope it is said once if enough is left; a flat map silences the tilt",[&]{
+        int n=0;for(auto& [t,ahead,s]:hillDrive(-11,30,-40,0,260))if(s.find("ownhill")!=std::string::npos){++n;
+            check(s.rfind("Steep downhill. Change down to second.",0)==0,"on the slope: not said as on it");}
+        check(n==1,"slope under the car not said once");
+        for(auto& [t,ahead,s]:hillDrive(-11,30,-200,0,240))check(s.find("ownhill")==std::string::npos,"said with 40 m of it left");
+        // No climb or descent on the map; the phone's tilt reads a steep descent (knocked mount).
+        for(auto& [t,ahead,s]:hillDrive(0,30,1e9,-9))check(s.find("ownhill")==std::string::npos&&s.find("Change down")==std::string::npos,"tilt spoke over a flat map");});
+    test("map hills: a ghat road's next stretch the same way is the same hill (named again only if steeper)",[&]{
+        // Climbs of 300 m with 80 m hairpin flats between, at 25 km/h: 7 %, 7 %, then 12 %, then a descent.
+        Fixture f(1);std::vector<std::string> said;const double v=25/3.6;
+        const double starts[]={100,480,860,1240},grades[]={7,7.5,12,-8};
+        for(int i=10;i<=2400;++i){const double t=i/10.,d=(t-1)*v;auto w=road(t);w.telemetry.speedKmh=25;w.mapTime=t;w.mapGradeKnown=true;
+            for(int k=0;k<4;++k)if(d<starts[k]+300){w.slopeId=900+k;w.slopeAheadM=starts[k]-d;w.slopeGrade=grades[k];w.slopeLengthM=std::min(300.,starts[k]+300-d);
+                w.mapGradePercent=d>=starts[k]?grades[k]:0;break;}
+            w.gradeBand=slopeBand(std::atan(w.mapGradePercent/100)*180/3.14159265358979323846);
+            const auto s=speak(f,w);if(s.find("hill")!=std::string::npos){said.push_back(s);std::cout<<"    "<<t<<" ("<<d<<" m): "<<s<<std::endl;}}
+        check(said.size()==3,"not one cue per hill (climb, steeper climb, descent)");
+        check(said[0].rfind("Uphill ahead.",0)==0&&said[1].rfind("Steep uphill ahead.",0)==0&&said[2].rfind("Downhill ahead.",0)==0,"wrong hills named");});
     test("junction entry on Indian roads adds the horn to clutch down and look both ways",[&]{
         auto entry=[&](bool horn){Fixture f(2);std::string text;
             for(int i=10;i<=400;++i){const double t=i/10.;auto w=road(t);const double lead=std::max(.5,40-t);junction(w,lead);w.telemetry.speedKmh=lead<6?8:20;w.hornRules=horn;

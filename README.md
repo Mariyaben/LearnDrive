@@ -1,6 +1,49 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.8.1 (experimental, host-tested only).** 0.8.1 was tested by
+**Current Android candidate: 0.8.4 (experimental, host-tested only).** Less phone heat, and camera
+coaching no longer stops when the phone gets very hot ([phone heat](docs/coach/PHONE_HEAT.md)).
+
+On the Nov 8 drive the phone was at Android's "moderate" heat 6 s in, and at "critical" from 15:11. From then on there was no camera coaching at all.
+
+0.8.4 sheds work in order of value per watt:
+- the costly distance model now runs only while the phone is cool;
+- the lane model, which cost about 0.6 of a CPU core and held up road-user detection by ~0.3 s each run, is off;
+- the camera drops to 15 frames a second once the phone is warm;
+- the screen asks for 60 Hz;
+- at "critical" the road-user detector keeps running at 5 a second ("Road users only · phone very hot") instead of stopping.
+
+The evidence log now records the heat level on every frame. Not yet tried on the phone.
+
+**Previously, 0.8.3 (experimental, host-tested only).** Road users are now seen,
+and warned about, far enough ahead to act ([seeing road users in time](docs/coach/LONG_RANGE.md)).
+On the Nov 8 drive, warnings came about 10 m out. There were two causes.
+- Since 0.8.1 the road camera fills its panel, which crops the frames the coach reads. The coach still assumed the whole frame. With the phone pitched up, anyone more than ~13 m away appeared to stand above the horizon and was ignored. The coach now reads every box through the camera's real optics and crop.
+- The camera gave the detector only 640×480. 0.8.3 asks for 1280×960. The single detector pass now sees the road at three scales: the whole road, a 2× view, and a 4× view of the far road at the camera's own resolution. The zoomed views are aimed along the road (Google's route line, else the turn rate).
+
+A person is now boxed at about 55–70 m instead of ~28 m, and a bus at ~100 m.
+
+Replayed on the Nov 8 drive:
+- people standing in the lane are held steadily at ~41 m instead of ~9 m;
+- the oncoming LEADER bus gets "Keep left" 3.6 s earlier than the phone gave it.
+
+Seeing further exposed two "Brake now" rules tuned on near road users only:
+- a crossing car anywhere within twice the stopping distance;
+- a distant person's noisy flow-based collision time.
+
+Both are tightened. Still too strong: "Brake now" for some people at the roadside. The likely cause is that the phone's camera is not aimed straight along the car (next fix, with phone heat). Not yet tried on the phone.
+
+**Previously, 0.8.2 (experimental, host-tested only).** With a Google route, hills
+now come from the map instead of the phone's tilt, which a sagging or fallen mount gets wrong
+([hills from the map](docs/coach/MAP_HILLS.md)). The app reads the road's height along Google's
+route from the Elevation API, in memory only. The coach names a climb or descent about 7 s before
+it starts, with what to do at that speed: "Steep downhill ahead. Brake gently. Change down to
+second." or "Uphill ahead. Change down to third. Steady accelerator." A ghat road's climb is named
+once, not at every hairpin. Bridges, trees and buildings in the terrain model are not taken for
+hills. This was tested on four Kerala roads with Google's own heights, and the app's exact request
+was accepted by Google with the development key (the Elevation API is now enabled for it,
+[setup](docs/GOOGLE_NAVIGATION_SETUP.md#6-hills-along-the-route-elevation-api)); it has not yet
+been tried on the phone or the road. Without a Google route, the phone's tilt is used as before.
+**Previously, 0.8.1 (experimental, host-tested only).** 0.8.1 was tested by
 replaying the brain on the Nov 4, 5 and 6 drives ([drive replays](docs/coach/DRIVE_REPLAYS_081.md)).
 Instructions are no longer cut off mid-word: braking is a sustained deceleration (phone vibration
 read as braking cut speech all drive), a started sentence finishes, and a stop that is not urgent

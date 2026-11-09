@@ -28,7 +28,41 @@ private const val ZOOM_IN_COACHING=false
  * before decoding, so distances are unchanged. Measured with tools/evaluate_detector_zoom.py --mosaic.
  */
 private const val DETECTOR_MOSAIC=true
+/**
+ * The lane model (TwinLiteNet) stays OFF in coaching (0.8.4). On the S24 Ultra it costs ~300 ms a
+ * run, twice a second, on the road-user detector's own thread: ~0.6 of a CPU core of heat, and a
+ * 0.3 s hold-up of road-user detection each time. It only serves lane-drift cues, which need painted
+ * lane lines (rare on Kerala roads). Re-enable once it runs off the detector's thread, cheaply.
+ */
+private const val LANE_MODEL_IN_COACHING=false
 data class Detection(val x:Float,val y:Float,val width:Float,val height:Float,val score:Float,val category:Int)
+/**
+ * The analysed crop's optics as fractions of the upright crop: fx, fy (crop widths / heights per
+ * unit tangent) and the optical centre cx, cy. From the sensor calibration (`raw`: fx, fy, cx, cy,
+ * active width, active height) through the stream's centred aspect crop and the preview's crop
+ * rect, as SpatialVision does; without calibration, a ~70 degree view centred on the frame.
+ * The 0.8.1 preview fills a wide panel with the BOTTOM of the frame (FILL_END), so a level
+ * horizon sits ~0.31 down that crop and an angle spans ~1.3x more of its height than the coach
+ * assumed: road users beyond ~13 m read as standing above the horizon and were dropped.
+ */
+internal fun cropOptics(imageWidth:Int,imageHeight:Int,cropLeft:Int,cropTop:Int,cropWidth:Int,cropHeight:Int,rotation:Int,raw:DoubleArray?):DoubleArray {
+    var fx:Double;var fy:Double;var cx:Double;var cy:Double
+    if(raw!=null&&raw.size==6&&raw.all {it.isFinite()}&&raw[0]>0&&raw[1]>0&&raw[4]>0&&raw[5]>0) {
+        val aspect=imageWidth.toDouble()/imageHeight;val sensorAspect=raw[4]/raw[5]
+        val sensorW=if(sensorAspect>aspect)raw[5]*aspect else raw[4]
+        val sensorH=if(sensorAspect>aspect)raw[5] else raw[4]/aspect
+        val sx=imageWidth/sensorW;val sy=imageHeight/sensorH
+        fx=raw[0]*sx;fy=raw[1]*sy;cx=(raw[2]-(raw[4]-sensorW)/2)*sx;cy=(raw[3]-(raw[5]-sensorH)/2)*sy
+    } else {val f=.72*maxOf(imageWidth,imageHeight);fx=f;fy=f;cx=imageWidth/2.0;cy=imageHeight/2.0}
+    cx-=cropLeft;cy-=cropTop
+    val w=cropWidth.toDouble();val h=cropHeight.toDouble()
+    return when(rotation) {
+        90->doubleArrayOf(fy/h,fx/w,(h-cy)/h,cx/w)
+        180->doubleArrayOf(fx/w,fy/h,(w-cx)/w,(h-cy)/h)
+        270->doubleArrayOf(fy/h,fx/w,cy/h,(w-cx)/w)
+        else->doubleArrayOf(fx/w,fy/h,cx/w,cy/h)
+    }
+}
 data class RoadShape(val valid:Boolean,val bend:Int,val points:List<PointF>) {
     val status get()=if(!valid)"road shape unclear" else when(bend){-1->"left curve";1->"right curve";else->"straight road"}
     companion object {
@@ -141,7 +175,7 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
     }
     private val detector=try {Model("detector.onnx",listOf("output0"))}catch(e:Exception){tensor.close();throw e}
     // Lane and drivable-area model (TwinLiteNet): optional, for lane keeping on marked roads.
-    private val lanes=try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){null}
+    private val lanes=if(LANE_MODEL_IN_COACHING)try {Model("road.onnx",listOf("drivable","lanes"))}catch(e:Exception){null} else null
     private var laneTime=Double.NEGATIVE_INFINITY
     // Zoomed second detector pass (2x, road ahead): earlier detection of distant riders,
     // pedestrians and vehicles. Only while the phone is cool and the detector is fast.
@@ -268,6 +302,8 @@ class Vision(private val context:Context,private val core:NativeCore) : AutoClos
             val p=planes[i];val x=if(i==0)crop.left else crop.left/2;val y=if(i==0)crop.top else crop.top/2
             return p.buffer.duplicate().apply {position(position()+y*p.rowStride+x*p.pixelStride)}.slice()
         }
+        // Box geometry (horizon, distance, lateral offset) through this crop's own optics.
+        cropOptics(image.width,image.height,crop.left,crop.top,crop.width(),crop.height(),rotation,frame.intrinsics).let {core.cameraGeometry(it[0],it[1],it[2],it[3])}
         if(DETECTOR_MOSAIC)core.prepareMosaic(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,
             plane(2),planes[2].rowStride,planes[2].pixelStride,crop.width(),crop.height(),rotation,320,input,0,1f,0,fullRange,true,1,time)
         else core.prepareFrame(frame.sourceId,plane(0),planes[0].rowStride,planes[0].pixelStride,plane(1),planes[1].rowStride,planes[1].pixelStride,

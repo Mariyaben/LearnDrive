@@ -288,8 +288,9 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         std::array<Candidate,4> extra{};const size_t n=control_.proposals(w,extra.data(),extra.size());
         bool slopeInstruction=false;
         for(size_t i=0;i<n;++i)slopeInstruction|=extra[i].prompt==Prompt::downhillSecond||extra[i].prompt==Prompt::downhillThird||
-            extra[i].prompt==Prompt::uphillSecond||extra[i].prompt==Prompt::uphillThird;
-        if(slopeInstruction){size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i)
+            extra[i].prompt==Prompt::uphillSecond||extra[i].prompt==Prompt::uphillThird||isMapHillPrompt(extra[i].prompt);
+        // With the route's elevation, hills come from the map: the phone's tilt cues step aside.
+        if(slopeInstruction||w.mapGradeKnown){size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i)
             if(w.candidates[i].kind!=EventKind::Slope)w.candidates[kept++]=w.candidates[i];w.candidateCount=kept;}
         for(size_t i=0;i<n&&w.candidateCount<w.candidates.size();++i)w.candidates[w.candidateCount++]=extra[i];
         // Road users: the risk coach replaces object-presence announcements. Keep
@@ -389,7 +390,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     if(scheduled) {
         // One picture of the moment -> one instruction (see SituationPlanner).
         Utterance u;
-        if(SituationPlanner::compose(ticket.candidate,safe,risk_,task_,u)) {
+        if(SituationPlanner::compose(ticket.candidate,safe,risk_,task_,control_.bands(),u)) {
             // The same sentence again within 4 s (e.g. a second similar road user) adds nothing.
             if(w.now-lastSpokenAt_<4&&u.count==lastSpoken_.count&&u.priority<=lastSpoken_.priority&&
                std::equal(u.fragments.begin(),u.fragments.begin()+u.count,lastSpoken_.fragments.begin())) {

@@ -87,6 +87,8 @@ class CoachIcon(private val context:Context,private val kind:String,color:Int):D
             "voice"->{p.moveTo(4f,10f);p.lineTo(8f,10f);p.lineTo(12f,6f);p.lineTo(12f,18f);p.lineTo(8f,14f);p.lineTo(4f,14f);p.close();canvas.drawPath(p,paint);canvas.drawArc(8f,5f,23f,19f,-50f,100f,false,paint);canvas.drawArc(11f,8f,20f,16f,-50f,100f,false,paint)}
             "left","right"->{if(kind=="left"){canvas.translate(24f,0f);canvas.scale(-1f,1f)};p.moveTo(6f,20f);p.lineTo(6f,12f);p.quadTo(6f,8f,10f,8f);p.lineTo(20f,8f);p.moveTo(15f,3f);p.lineTo(20f,8f);p.lineTo(15f,13f);canvas.drawPath(p,paint)}
             "straight"->{canvas.drawLine(12f,21f,12f,3f,paint);p.moveTo(6f,9f);p.lineTo(12f,3f);p.lineTo(18f,9f);canvas.drawPath(p,paint)}
+            // Hills: the road climbing, a crest, and the descent.
+            "hill"->{p.moveTo(2.5f,19f);p.lineTo(9.5f,8f);p.lineTo(13.5f,12.5f);p.lineTo(16.5f,9.5f);p.lineTo(21.5f,19f);canvas.drawPath(p,paint);canvas.drawLine(2.5f,19f,21.5f,19f,paint)}
             // The coach: a steering wheel.
             "coach"->{canvas.drawCircle(12f,12f,8.5f,paint);canvas.drawCircle(12f,12f,2.2f,paint);canvas.drawLine(3.8f,10.5f,9.9f,11.4f,paint);canvas.drawLine(20.2f,10.5f,14.1f,11.4f,paint);canvas.drawLine(12f,14.2f,12f,20.4f,paint)}
             "settings"->{canvas.drawLine(4f,7f,20f,7f,paint);canvas.drawLine(4f,17f,20f,17f,paint);fill.color=paint.color;canvas.drawCircle(9f,7f,2.4f,fill);canvas.drawCircle(15f,17f,2.4f,fill)}

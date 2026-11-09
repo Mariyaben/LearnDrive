@@ -105,6 +105,9 @@ class NativeCore : AutoCloseable {
     @Synchronized fun reset() = reset(handle)
     @Synchronized fun calibrationId():Long=calibrationId(handle)
     @Synchronized fun cameraIntrinsics(focalLengthYPixels:Double)=cameraIntrinsics(handle,focalLengthYPixels)
+    /** The analysed image's optics after the preview crop and rotation, as fractions of that image:
+     * focal lengths (image widths / heights per unit tangent) and the optical centre. */
+    @Synchronized fun cameraGeometry(fx:Double,fy:Double,cx:Double,cy:Double)=cameraGeometry(handle,fx,fy,cx,cy)
     @Synchronized fun cameraUp(time:Double)=cameraUp(handle,time)
     @Synchronized fun spatialPublish(id:Long,time:Double,output:ByteBuffer):Boolean {requireSource(id);return spatialPublish(handle,id,time,output)}
     @Synchronized fun spatialUnavailable(id:Long,time:Double) {requireSource(id);check(spatialUnavailable(handle,id,time)){"Spatial invalidation rejected"}}
@@ -143,6 +146,12 @@ class NativeCore : AutoCloseable {
     private external fun roadBump(h:Long,node:Long)
     /** Provider route line (lat,lon pairs) while guiding; memory only, never saved. null clears. */
     @Synchronized fun routeLine(latLon:DoubleArray?):Boolean=routeLine(handle,latLon)
+    /** Elevation along the route line (lat, lon, metres triples, Google's Elevation API); memory only. null clears. */
+    @Synchronized fun routeElevation(latLonElev:DoubleArray?):Boolean=routeElevation(handle,latLonElev)
+    /** Elevation covers [0]..[1] m along the route line; the car is at [2] m (-1 unmatched); [3] climbs and descents. */
+    @Synchronized fun routeElevationCover():DoubleArray=routeElevationCover(handle)
+    private external fun routeElevation(h:Long,latLonElev:DoubleArray?):Boolean
+    private external fun routeElevationCover(h:Long):DoubleArray
     /** Metres from the car to each remaining maneuver, nearest first, at [time] (elapsedRealtime s). */
     @Synchronized fun routeManeuvers(time:Double,ahead:DoubleArray)=routeManeuvers(handle,time,ahead)
     /** Detail of the Google step last sent with [navigationTurn] (same receipt time). Memory only. */
@@ -242,6 +251,7 @@ class NativeCore : AutoCloseable {
     private external fun reset(h:Long)
     private external fun calibrationId(h:Long):Long
     private external fun cameraIntrinsics(h:Long,fy:Double)
+    private external fun cameraGeometry(h:Long,fx:Double,fy:Double,cx:Double,cy:Double)
     private external fun cameraUp(h:Long,time:Double):DoubleArray
     private external fun spatialPublish(h:Long,id:Long,time:Double,output:ByteBuffer):Boolean
     private external fun spatialUnavailable(h:Long,id:Long,time:Double):Boolean

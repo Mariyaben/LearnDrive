@@ -17,6 +17,8 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:label="LearnDrive.AI" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/LearnDriveTheme" android:supportsRtl="true">
         <meta-data android:name="com.google.android.geo.API_KEY" android:value="${MAPS_API_KEY}" />
+        <!-- Optional key for the Elevation API (hills along the route); empty uses the Maps key. -->
+        <meta-data android:name="ai.learndrive.ELEVATION_API_KEY" android:value="${ELEVATION_API_KEY}" />
         <service android:name=".navigation.google.GoogleNavigationUpdatesService" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>

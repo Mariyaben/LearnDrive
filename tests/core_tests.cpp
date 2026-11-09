@@ -692,7 +692,7 @@ int main() {
         float boxes[84]{};boxes[0]=160;boxes[1]=210;boxes[2]=120;boxes[3]=180;boxes[6]=.8f;float road[2]={2,-2};double hazard[3];int prompt=0;
         for(int i=0;i<=10;++i){double t=10.1+i*.125;check(ld_vision(e,t,boxes,84,84,1,1,0,road,road,1,1,hazard),"vision failed");ld_telemetry measured{};measured.time=t+.02;
             auto selected=ld_video_telemetry(measured,3,0);check(selected.speed_valid&&selected.speed==3,"video speed lost");prompt=ld_camera_decide_telemetry(e,selected,1,1);}
-        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==91,"prompt count mismatch");ld_destroy(e);
+        check(prompt==int(Prompt::roadUserQuiet),"camera attention lost through ABI");check(ld_prompt_count()==95,"prompt count mismatch");ld_destroy(e);
     });
     test("slope bands agree through the native ABI at each boundary",[]{
         const std::array<std::pair<double,int>,10> boundaries{{{0,0},{1.999,0},{2,1},{4.999,1},{5,2},{7.999,2},{8,3},{11.999,3},{12,4},{30,4}}};

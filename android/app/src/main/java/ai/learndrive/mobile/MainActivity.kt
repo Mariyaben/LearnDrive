@@ -17,10 +17,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import android.hardware.camera2.CameraCharacteristics
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -31,6 +36,7 @@ import ai.learndrive.mobile.navigation.google.GoogleNavigationUpdate
 import ai.learndrive.mobile.navigation.google.GoogleNavigationPhase
 import ai.learndrive.mobile.navigation.google.GoogleManeuverKind
 import ai.learndrive.mobile.navigation.google.GoogleJourneyMemory
+import ai.learndrive.mobile.navigation.google.RouteElevation
 import ai.learndrive.mobile.navigation.google.nativeCode
 import kotlin.math.roundToInt
 import androidx.lifecycle.ViewModelProvider
@@ -72,6 +78,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var routeStatus:TextView
     private lateinit var destinationPanel:ai.learndrive.mobile.navigation.DestinationPanel
     private var googleNavigation:GoogleNavigationController?=null
+    // Hills from the map: Google's elevation along the route (memory only, with the route).
+    private var routeElevation:RouteElevation?=null
+    @Volatile private var hillsDetail="Choose a destination: hills ahead come from Google's elevation"
+    @Volatile private var hillsReady=false
     private var useGoogle=false
     private lateinit var googleProviderButton:Button
     private lateinit var offlineProviderButton:Button
@@ -161,6 +171,9 @@ class MainActivity : ComponentActivity() {
     @Volatile private var currentAdvice:AdviceDisplay?=null
     private var suppressed=false // Only accessed on the serial rules thread.
     private var camera:ProcessCameraProvider?=null
+    // The bound rear camera and the frame-rate cap applied to it (CameraVisionHealth.cameraFpsCap).
+    private var boundCamera:androidx.camera.core.Camera?=null
+    @Volatile private var appliedFpsCap=30
     private var cameraPreviewUseCase:Preview?=null
     private var cameraAnalysisUseCase:ImageAnalysis?=null
     private val displayListener=object:android.hardware.display.DisplayManager.DisplayListener {
@@ -324,8 +337,12 @@ class MainActivity : ComponentActivity() {
         destinationControls.addView(providers)
         destinationContent=FrameLayout(this);destinationControls.addView(destinationContent)
         if(BuildConfig.GOOGLE_NAVIGATION_AVAILABLE) {
-            val key=packageManager.getApplicationInfo(packageName,PackageManager.GET_META_DATA).metaData
-                ?.getString("com.google.android.geo.API_KEY").orEmpty()
+            val metadata=packageManager.getApplicationInfo(packageName,PackageManager.GET_META_DATA).metaData
+            val key=metadata?.getString("com.google.android.geo.API_KEY").orEmpty()
+            // A separate Elevation API key if one is set up, else the Maps key.
+            routeElevation=RouteElevation(this,metadata?.getString("ai.learndrive.ELEVATION_API_KEY").orEmpty().trim().ifBlank {key},routeMutationLock,
+                apply={heights->if(core.routeElevation(heights))core.routeElevationCover()[3].toInt() else -1},
+                status={state,detail->main.post {hillsDetail=detail;hillsReady=state==RouteElevation.State.READY;updateSetupUi()}})
             googleNavigation=GoogleNavigationController(this,key,
                 onState={if(useGoogle&&!isDestroyed){
                     dashboard.setDestination(it.destinationLabel.takeIf(String::isNotBlank))
@@ -335,7 +352,9 @@ class MainActivity : ComponentActivity() {
                 onUpdate={if(useGoogle&&!isDestroyed)acceptGoogleNavigation(it)},
                 journey=ViewModelProvider(this)[GoogleJourneyMemory::class.java],
                 onDestinationSelected={destinationSelectionPending=true},
-                onRouteLine={line->if(!isDestroyed)synchronized(routeMutationLock){core.routeLine(if(useGoogle)line else null)}})
+                onRouteLine={line->if(!isDestroyed)synchronized(routeMutationLock){
+                    val loaded=core.routeLine(if(useGoogle)line else null)
+                    routeElevation?.route(if(useGoogle&&loaded&&line!=null)line else null)}})
         }
         useGoogle=getSharedPreferences("navigation_provider",MODE_PRIVATE).getBoolean("google",true)&&googleNavigation!=null
         showNavigationProvider()
@@ -531,6 +550,7 @@ class MainActivity : ComponentActivity() {
         controls.addView(text("Junction coaching without a destination uses road data © OpenStreetMap contributors (ODbL), fetched online for a coarse area around you from the public Overpass API; your exact position is not sent.",13f))
         deskControls.visibility=View.GONE
         setContentView(outer)
+        preferSixtyHertz()
         var previousKeyboard=false
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(outer) {v,insets->
             val bars=insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
@@ -647,6 +667,8 @@ class MainActivity : ComponentActivity() {
             core.navigationStepDetail(update.receivedAtSeconds,update.side,update.roundaboutExit?:0,
                 update.nextManeuver.nativeCode(),update.nextGapMeters?:Double.POSITIVE_INFINITY)
         }
+        // The next stretch of the route's elevation before the car gets there.
+        routeElevation?.progress(core.routeElevationCover())
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.
         retirePreviousCue()
@@ -738,7 +760,7 @@ class MainActivity : ComponentActivity() {
         val target=journal?:return;if(!target.isAccepting)return
         if(frameJournalId!=target.sessionId){frameJournalId=target.sessionId;frameJournalSource=-1;frameJournalTime=null}
         if(frameJournalSource!=result.frame?.sourceId||frameJournalTime!=result.semanticCaptureTime) {
-            runCatching {target.offer(GuidanceTrace.frame(result))}.onFailure {target.recordLoss();Log.w("LearnDriveEvidence","Could not serialize frame evidence",it)}
+            runCatching {target.offer(GuidanceTrace.frame(result,cameraThermal,appliedFpsCap))}.onFailure {target.recordLoss();Log.w("LearnDriveEvidence","Could not serialize frame evidence",it)}
             frameJournalSource=result.frame?.sourceId?:-1;frameJournalTime=result.semanticCaptureTime
         }
     }
@@ -768,7 +790,7 @@ class MainActivity : ComponentActivity() {
     private fun canStartRoad(moving:Boolean):Boolean {
         if(!roadSource()||setup.isMonitoring()||setup.referencePending()||!cameraRunning||moving)return false
         val frame=lastCompletedVision?:return false;val age=now()-frame.time
-        return frame.frame?.sourceId==generation.get().toLong()&&age>=0&&age<.35&&visionError==null&&cameraError==null&&cameraThermal<4&&
+        return frame.frame?.sourceId==generation.get().toLong()&&age>=0&&age<.35&&visionError==null&&cameraError==null&&!CameraVisionHealth.paused(cameraThermal)&&
             frame.spatialReadiness!=SpatialReadiness.MOUNT_UNSUPPORTED
     }
     private fun confirmRoadSession() {
@@ -791,7 +813,7 @@ class MainActivity : ComponentActivity() {
             confirmation.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 if(levelStart.isPending)return@setOnClickListener
                 val current=lastCompletedVision?.takeIf {it.frame?.sourceId==generation.get().toLong()&&now()-it.time in 0.0..<.35}
-                if(!resumed||!roadSource()||setup.isMonitoring()||knownMoving()||cameraThermal>=4||cameraError!=null||visionError!=null||current?.spatialReadiness==SpatialReadiness.MOUNT_UNSUPPORTED) {
+                if(!resumed||!roadSource()||setup.isMonitoring()||knownMoving()||CameraVisionHealth.paused(cameraThermal)||cameraError!=null||visionError!=null||current?.spatialReadiness==SpatialReadiness.MOUNT_UNSUPPORTED) {
                     setStartDialogMessage("Session has not started. ${startReadinessMessage()} Stay parked, then retry.")
                 } else if(!sensors.motionAvailable) {
                     setStartDialogMessage("Level reference unavailable: ${sensors.motionStatus}. You can start without inclination lessons when the camera is ready.")
@@ -820,7 +842,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun startReadinessMessage():String=when {
         knownMoving()->"Park safely before starting."
-        cameraThermal>=4->"The phone is too warm for camera coaching. Let it cool."
+        CameraVisionHealth.paused(cameraThermal)->"The phone is too warm for camera coaching. Let it cool."
         cameraError!=null->"Camera unavailable: $cameraError"
         visionError!=null->"Camera analysis unavailable: $visionError"
         !cameraRunning->"Waiting for the rear camera."
@@ -845,7 +867,7 @@ class MainActivity : ComponentActivity() {
     private fun updateAutomaticLevelStart() {
         if(!levelStart.isPending)return
         val result=levelStart.poll(now(),generation.get().toLong(),resumed&&roadSource(),knownMoving(),
-            (!levelStart.requiresReference()||sensors.motionAvailable)&&cameraError==null&&visionError==null&&cameraThermal<4,
+            (!levelStart.requiresReference()||sensors.motionAvailable)&&cameraError==null&&visionError==null&&!CameraVisionHealth.paused(cameraThermal),
             setup.referencePending(),setup.levelAllowed(core.calibrationId()),canStartRoad())
         when(result) {
             LevelReferenceStart.READY->if(!commitRoadSession()) {
@@ -931,7 +953,7 @@ class MainActivity : ComponentActivity() {
         labToggle.setUiText(if(showLab)"Hide lab settings" else "Lab settings and test sources")
         if(mode!="Camera")return
         val frame=lastCompletedVision?.takeIf {it.frame?.sourceId==generation.get().toLong()}
-        val cameraFresh=frame!=null&&now()-frame.time in 0.0..<.35&&cameraRunning&&cameraError==null&&visionError==null&&cameraThermal<4
+        val cameraFresh=frame!=null&&now()-frame.time in 0.0..<.35&&cameraRunning&&cameraError==null&&visionError==null&&!CameraVisionHealth.paused(cameraThermal)
         dashboard.setReadiness(0,when {
             cameraError!=null||visionError!=null->"Unavailable · open setup options"
             !cameraRunning->"Starting the rear camera…"
@@ -943,6 +965,7 @@ class MainActivity : ComponentActivity() {
         dashboard.setReadiness(1,if(!coachingSettings.voiceEnabled)"Voice off · visual coaching continues" else if(audio.ready)"Ready · tap Check sound" else "$audioStatus · visual coaching continues",!coachingSettings.voiceEnabled||audio.ready)
         val measured=core.snapshot(now())
         dashboard.setReadiness(2,if(measured.speedValid)"Measured speed available" else "No reliable speed yet",measured.speedValid)
+        dashboard.setReadiness(3,if(useGoogle)hillsDetail else "Offline region: the phone's tilt is used",useGoogle&&hillsReady)
         val alignment=frame?.let {SpatialReadiness.status(it.spatialReadiness)}?:"Waiting for camera analysis"
         val heading=if(setup.state()==DriveSetup.CHECK_MOUNT)"Check mount: roll changed while measured speed was near zero. Recheck while parked."
             else if(!roadSource())"Lab screen test selected. Select the road camera to set up a mounted session."
@@ -1081,6 +1104,34 @@ class MainActivity : ComponentActivity() {
             main.post {if(resumed&&token==generation.get())requestPermissions()}
         }
     }
+    /** Caps the camera's frame rate (both the preview and the analysis stream) at `cap` frames a second;
+     * 30 restores the camera's own choice. A frame-rate change is a capture-request option: no rebinding. */
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun applyFrameRateCap(cap:Int) {
+        val bound=boundCamera?:return
+        if(cap==appliedFpsCap)return
+        appliedFpsCap=cap
+        runCatching {
+            val control=Camera2CameraControl.from(bound.cameraControl)
+            if(cap>=30){control.clearCaptureRequestOptions();return@runCatching}
+            val ranges=Camera2CameraInfo.from(bound.cameraInfo).getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            val range=ranges?.filter {it.upper<=cap}?.maxWithOrNull(compareBy<android.util.Range<Int>>({it.upper},{it.lower}))?:return@runCatching
+            control.setCaptureRequestOptions(CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,range).build())
+            Log.i("LearnDrivePerf","camera frame rate capped at $range")
+        }.onFailure {Log.w("LearnDriveVision","Camera frame-rate cap unavailable",it)}
+    }
+    /** A 120 Hz screen redraws the camera preview and map twice as often as needed: ask for 60 Hz. */
+    private fun preferSixtyHertz() {
+        runCatching {
+            @Suppress("DEPRECATION") val display=if(android.os.Build.VERSION.SDK_INT>=30)this.display else windowManager.defaultDisplay
+            val current=display?.mode?:return
+            val sixty=display.supportedModes.filter {it.physicalWidth==current.physicalWidth&&it.physicalHeight==current.physicalHeight&&it.refreshRate>=59f}
+                .minByOrNull {kotlin.math.abs(it.refreshRate-60f)}?:return
+            if(sixty.refreshRate<current.refreshRate-1||window.attributes.preferredDisplayModeId!=sixty.modeId)
+                window.attributes=window.attributes.apply {preferredDisplayModeId=sixty.modeId}
+        }.onFailure {Log.w("LearnDrivePerf","60 Hz display mode unavailable",it)}
+    }
     @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
     private fun startCamera(recoverSurface:Boolean=false) {
         // CameraX must receive an attached PreviewView surface. Starting from
@@ -1131,13 +1182,24 @@ class MainActivity : ComponentActivity() {
                 camera=future.get();camera?.unbindAll()
                 val rotation=preview.display?.rotation?:android.view.Surface.ROTATION_90
                 val view=Preview.Builder().setTargetRotation(rotation).build().also {it.surfaceProvider=preview.surfaceProvider;cameraPreviewUseCase=it}
-                val analysis=ImageAnalysis.Builder().setTargetRotation(rotation).setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build().also {cameraAnalysisUseCase=it}
+                // 1280x960 analysis frames (CameraX's default is 640x480). The detector still sees one
+                // 320x320 image, but its 4x view of the far road is now the camera's own pixels: a person
+                // 60 m ahead is ~23 px tall there instead of ~12 px in a 640-wide frame (0.8.3).
+                val analysisSize=ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(ResolutionStrategy(android.util.Size(1280,960),ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                    .build()
+                val analysis=ImageAnalysis.Builder().setTargetRotation(rotation).setResolutionSelector(analysisSize)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build().also {cameraAnalysisUseCase=it}
                 analysis.setAnalyzer(inference) {image->
                     try {
                         if(token==generation.get()&&resumed) {
                             lastCameraFrameAt=now()
                             val thermal=if(android.os.Build.VERSION.SDK_INT>=29)getSystemService(PowerManager::class.java).currentThermalStatus else 0
                             cameraThermal=thermal
+                            // Fewer camera frames once the phone is warm (the detector needs at most 8 a second).
+                            val fpsCap=CameraVisionHealth.cameraFpsCap(thermal)
+                            if(fpsCap!=appliedFpsCap)main.post {if(token==generation.get())applyFrameRateCap(fpsCap)}
                             if(CameraVisionHealth.shouldAnalyze(now(),lastRender,thermal)) {
                                 analysisBusy=true;lastRender=now();model().thermalStatus=thermal
                                 val result=model().frame(image,token.toLong(),sourceKind) { semantic ->
@@ -1161,6 +1223,7 @@ class MainActivity : ComponentActivity() {
                 val group=UseCaseGroup.Builder().addUseCase(view).addUseCase(analysis)
                 preview.viewPort?.let {group.setViewPort(it)}
                 val bound=checkNotNull(camera?.bindToLifecycle(this,CameraSelector.DEFAULT_BACK_CAMERA,group.build()))
+                boundCamera=bound;appliedFpsCap=30
                 runCatching {
                     val info=Camera2CameraInfo.from(bound.cameraInfo)
                     val intrinsics=info.getCameraCharacteristic(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
@@ -1511,5 +1574,5 @@ class MainActivity : ComponentActivity() {
     override fun onStop(){routeMap.onStop();googleNavigation?.onStop();super.onStop()}
     override fun onSaveInstanceState(out:Bundle){routeMap.onSaveInstanceState(out);googleNavigation?.onSaveInstanceState(out);super.onSaveInstanceState(out)}
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
-    override fun onDestroy() {if(::phoneVoice.isInitialized)phoneVoice.close();if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {if(::phoneVoice.isInitialized)phoneVoice.close();if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;routeElevation?.close();routeElevation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }

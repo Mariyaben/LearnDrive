@@ -78,6 +78,11 @@ struct WorldState {
     bool laneValid{};
     // Road knowledge ahead from the map (no destination needed): bump and sharp bend.
     double mapTime=-infinity,bumpAheadM=infinity,bendAheadM=infinity;
+    // Hills from map elevation along the route (not the phone's tilt): the grade here (percent,
+    // + uphill), and the next climb or descent: distance to its start (negative: on it), mean
+    // grade (signed %) and the length still ahead.
+    bool mapGradeKnown{};double mapGradePercent{};
+    double slopeAheadM=infinity,slopeGrade{},slopeLengthM{};uint64_t slopeId{};
     uint64_t bumpId{},bendId{};
     bool bendRight{};
     // Indian road practice: horn at blind bends, junction entry and when passing.
@@ -91,6 +96,9 @@ struct WorldState {
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;
     bool horizonMeasured{};
+    // The analysed image's optics (after the preview crop): box positions and sizes are angles
+    // only through it. Defaults: the uncropped 4:3 frame the coach was tuned on.
+    CameraModel camera{};
     // Turn rate (rad/s, left positive) from the gyroscope, or a replay's estimate from the video.
     double yawRate{};
     bool yawKnown{};
@@ -253,6 +261,7 @@ public:
     // Instructor-style control coaching (part of task scheduling): actions, not announcements.
     const ControlCoach& control() const noexcept {return control_;}
     void setGearBands(const GearBands& bands) noexcept {control_.setBands(bands);}
+    const GearBands& gearBands() const noexcept {return control_.bands();}
     bool taskScheduling() const noexcept {return scheduling_;}
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;

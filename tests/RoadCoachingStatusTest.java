@@ -48,7 +48,10 @@ public final class RoadCoachingStatusTest {
             check(!RoadCoachingStatus.currentEvidence(10.1, 7, 7, 10, 9.9, true, 0, null), "completion before capture");
         });
         test("thermal pause and camera errors override apparently fresh results", () -> {
-            for (int thermal = 4; thermal <= 6; thermal++) {
+            RoadCoachingStatus.State critical = RoadCoachingStatus.assess(10.1, 7, 7, 10, 10.05,
+                true, true, 4, null, SpatialReadiness.READY, false);
+            check(critical.currentEvidence && critical.status.contains("very hot"), "critical heat stops road-user coaching or hides why it is reduced");
+            for (int thermal = 5; thermal <= 6; thermal++) {
                 RoadCoachingStatus.State paused = RoadCoachingStatus.assess(10.1, 7, 7, 10, 10.05,
                     true, true, thermal, null, SpatialReadiness.READY, true);
                 check(!paused.currentEvidence && paused.status.contains("paused"), "critical heat appears operational");

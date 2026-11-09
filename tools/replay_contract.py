@@ -93,7 +93,8 @@ def load_cache(path, provenance):
     """Load only strict, same-provenance inference. No pickle or silent fallback."""
     try:
         with np.load(path, allow_pickle=False) as source:
-            if set(source.files) != {"metadata", "outputs", "detections", "semantic_indices", "inference_ms"}:
+            base = {"metadata", "outputs", "detections", "semantic_indices", "inference_ms"}
+            if set(source.files) not in (base, base | {"mosaic_plans"}):
                 raise ValueError("missing/extra cache fields; legacy cache needs regeneration")
             raw_metadata = source["metadata"]
             if raw_metadata.shape != () or raw_metadata.dtype.kind != "U":
@@ -111,7 +112,7 @@ def load_cache(path, provenance):
             if datetime.fromisoformat(metadata["created_at_utc"]).utcoffset() is None:
                 raise ValueError("cache creation time has no timezone")
             arrays = {name: source[name].copy() for name in
-                      ("outputs", "detections", "semantic_indices", "inference_ms")}
+                      ("outputs", "detections", "semantic_indices", "inference_ms", "mosaic_plans") if name in source.files}
         outputs, detections = arrays["outputs"], arrays["detections"]
         indices, timings = arrays["semantic_indices"], arrays["inference_ms"]
         spatial = provenance["input"]["spatial"]
@@ -125,6 +126,9 @@ def load_cache(path, provenance):
             raise ValueError("semantic frame indices do not match sampling contract")
         if detections.dtype != np.float32 or detections.ndim != 3 or detections.shape[0] != len(indices) or detections.shape[1] != 84 or not 0 < detections.shape[2] <= 30000:
             raise ValueError("invalid raw detector output shape/type")
+        plans = arrays.get("mosaic_plans")
+        if plans is not None and (plans.dtype != np.float32 or plans.shape != (len(indices), 8) or not np.isfinite(plans).all()):
+            raise ValueError("invalid detector mosaic plans")
         if timings.ndim != 1 or len(timings) != (len(outputs) if spatial else len(indices)):
             raise ValueError("invalid timing sample count")
         if not all(np.isfinite(a).all() for a in (outputs, detections, timings)) or np.any(timings < 0):

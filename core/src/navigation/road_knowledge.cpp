@@ -97,7 +97,7 @@ BumpMap::Hit BumpMap::along(const GeoPoint* path,size_t n,double maxS) const noe
 
 // ------------------------------------------------------------------ route line
 void RouteLine::clear() noexcept {
-    points_.clear();bends_.clear();turnCount_=0;turnsTruncated_=false;turnsTime_=-inf;
+    points_.clear();bends_.clear();grade_.clear();slopes_.clear();gradeStart_=0;turnCount_=0;turnsTruncated_=false;turnsTime_=-inf;
     progress_=0;fixTime_=-inf;matched_=false;consistent_=0;
 }
 RouteLine::Point RouteLine::at(double s) const noexcept {
@@ -112,6 +112,16 @@ double RouteLine::heading(double s) const noexcept {
     const double a=std::clamp(s,0.,std::max(0.,total-2)),b=std::min(total,a+2);
     const auto p=at(a),q=at(b);
     return std::fmod(std::atan2(q.x-p.x,q.y-p.y)*180/pi+360.,360.);
+}
+double RouteLine::aim(double now,double seconds) const noexcept {
+    if(points_.size()<2||!matched_||!std::isfinite(now)||!std::isfinite(seconds)||now<fixTime_||now-fixTime_>2.5)return std::numeric_limits<double>::quiet_NaN();
+    const double here=progress_+speedMps_*std::clamp(now-fixTime_,0.,2.5),total=points_.back().s;
+    const double ahead=std::clamp(speedMps_*seconds,15.,120.);
+    if(here+ahead>total)return std::numeric_limits<double>::quiet_NaN();
+    const auto p=at(here),q=at(here+ahead);
+    const double bearing=std::atan2(q.x-p.x,q.y-p.y),course=heading(here)*pi/180;
+    // Clockwise bearings: a point left of the course has a smaller bearing.
+    return std::remainder(course-bearing,2*pi);
 }
 bool RouteLine::load(const double* latLon,size_t count) {
     clear();
@@ -148,6 +158,111 @@ bool RouteLine::load(const double* latLon,size_t count) {
         } else s+=2;
     }
     return true;
+}
+// The road's grade from elevation samples along the line. Elevation models are several metres
+// noisy (trees and buildings in radar terrain models), so heights are resampled every 10 m,
+// averaged over +-40 m, and the grade is the rise over 100 m. A climb or descent starts at >= 5 %
+// and lasts while >= 3.5 % the same way (same-direction stretches <= 40 m apart are one slope); it
+// counts when it averages >= 6 % over >= 100 m and the road stays that much higher or lower beyond
+// it. Tuned on SRTM profiles of Kerala roads: flat highways and city streets, a river crossing,
+// rolling hills and a ghat road (docs/coach/MAP_HILLS.md).
+bool RouteLine::elevation(const double* v,size_t count) {
+    const std::vector<Slope> before=slopes_;
+    grade_.clear();slopes_.clear();gradeStart_=0;
+    if(points_.empty()||!v||count<5||count>20000)return false;
+    std::vector<std::pair<double,double>> along;along.reserve(count);
+    size_t seg=0;
+    for(size_t k=0;k<count;++k) {
+        const double lat=v[3*k],lon=v[3*k+1],h=v[3*k+2];
+        if(!coordinate(lat,lon)||!std::isfinite(h)||h<-500||h>9000)continue;
+        const double x=(lon-lon0_)*kx_,y=(lat-lat0_)*ky_;
+        double best=inf,bestS=0;size_t bestSeg=seg;
+        // Samples follow the route: search onward from the last one (a little back for safety).
+        for(size_t i=seg>20?seg-20:0;i+1<points_.size();++i) {
+            const auto& a=points_[i];const auto& b=points_[i+1];const double dx=b.x-a.x,dy=b.y-a.y,l2=dx*dx+dy*dy;
+            const double u=l2>0?std::clamp(((x-a.x)*dx+(y-a.y)*dy)/l2,0.,1.):0.;
+            const double d=std::hypot(x-a.x-u*dx,y-a.y-u*dy);
+            if(d<best){best=d;bestS=a.s+u*(b.s-a.s);bestSeg=i;}
+            if(best<2&&i>bestSeg+40)break;
+        }
+        if(best>25)continue;
+        seg=bestSeg;along.push_back({bestS,h});
+    }
+    if(along.size()<5)return false;
+    std::sort(along.begin(),along.end());
+    const double s0=along.front().first,s1=along.back().first;
+    if(s1-s0<100)return false;
+    constexpr double step=10;
+    const size_t n=size_t((s1-s0)/step+1e-6)+1;
+    std::vector<double> h(n),smooth(n);
+    for(size_t i=0,j=0;i<n;++i) {
+        const double s=s0+double(i)*step;
+        while(j+1<along.size()&&along[j+1].first<s)++j;
+        const auto& a=along[j];const auto& b=along[std::min(j+1,along.size()-1)];
+        h[i]=b.first>a.first?a.second+(b.second-a.second)*std::clamp((s-a.first)/(b.first-a.first),0.,1.):a.second;
+    }
+    for(size_t i=0;i<n;++i){double sum=0;int c=0;for(long d=-4;d<=4;++d){const long k=long(i)+d;if(k>=0&&k<long(n)){sum+=h[size_t(k)];++c;}}smooth[i]=sum/c;}
+    grade_.assign(n,0);gradeStart_=s0;
+    for(size_t i=0;i<n;++i){const size_t a=i>=5?i-5:0,b=std::min(n-1,i+5);if(b>a)grade_[i]=(smooth[b]-smooth[a])/(double(b-a)*step)*100;}
+    for(size_t i=0;i<n;) {
+        if(std::abs(grade_[i])<5){++i;continue;}
+        const double sign=grade_[i]>0?1:-1;size_t k=i;double steepest=0;
+        while(k<n&&grade_[k]*sign>=3.5){if(std::abs(grade_[k])>std::abs(steepest))steepest=grade_[k];++k;}
+        // Its grade: the mean over its steady part (within 80 % of the steepest), not the
+        // smoothing's ramps at either end, so a 12 % climb reads about 12 %, not 10 %.
+        double sum=0;int core=0;for(size_t q=i;q<k;++q)if(std::abs(grade_[q])>=.8*std::abs(steepest)){sum+=grade_[q];++core;}
+        const Slope run{s0+double(i)*step,s0+double(k-1)*step,sum/std::max(1,core),steepest,0};
+        if(!slopes_.empty()&&(slopes_.back().grade>0)==(run.grade>0)&&run.start-slopes_.back().end<=40) {
+            auto& p=slopes_.back();const double l1=p.end-p.start+step,l2=run.end-run.start+step;
+            p.grade=(p.grade*l1+run.grade*l2)/(l1+l2);p.end=run.end;if(std::abs(run.steepest)>std::abs(p.steepest))p.steepest=run.steepest;
+        } else slopes_.push_back(run);
+        i=k;
+    }
+    // Elevation models give the ground, not the road deck: a bridge over a river or valley reads as
+    // a short descent then a climb of about the same height, a tunnel or cutting as the reverse.
+    // Real roads rarely dip and rise like that within a few hundred metres, so such a pair is left
+    // out rather than announced as hills on a flat bridge.
+    std::vector<bool> crossing(slopes_.size());
+    const auto rise=[&](const Slope& q){return std::abs(q.grade)*(q.end-q.start+step)/100;};
+    for(size_t i=0;i+1<slopes_.size();++i) {
+        const auto& a=slopes_[i];const auto& b=slopes_[i+1];
+        if((a.grade>0)==(b.grade>0)||b.start-a.end>300||a.end-a.start>200||b.end-b.start>200)continue;
+        if(std::min(rise(a),rise(b))>=.6*std::max(rise(a),rise(b)))crossing[i]=crossing[i+1]=true;
+    }
+    // The road's height 30-150 m before a slope and 30-150 m beyond it (median): a climb or descent
+    // leaves the road higher or lower, by >= 5 m and at least half its own rise; a clump of trees
+    // or a building in the terrain model rises and falls back.
+    const auto level=[&](double from,double to){std::vector<double> v;
+        for(size_t i=0;i<n;++i){const double s=s0+double(i)*step;if(s>=from&&s<=to)v.push_back(smooth[i]);}
+        if(v.size()<3)return std::numeric_limits<double>::quiet_NaN();
+        std::nth_element(v.begin(),v.begin()+long(v.size()/2),v.end());return v[v.size()/2];};
+    const auto lasts=[&](const Slope& q){
+        double before=level(q.start-150,q.start-30),after=level(q.end+30,q.end+150);
+        // At either end of what is known: the first or last height there is.
+        if(!std::isfinite(before))before=q.start-s0<150?smooth.front():before;
+        if(!std::isfinite(after))after=s1-q.end<150?smooth.back():after;
+        if(!std::isfinite(before)||!std::isfinite(after))return false;
+        return (after-before)*(q.grade>0?1:-1)>=std::max(5.,.5*rise(q));};
+    {size_t k=0;for(size_t i=0;i<slopes_.size();++i){const auto& q=slopes_[i];
+        if(!crossing[i]&&q.end-q.start>=100&&std::abs(q.grade)>=6&&lasts(q))slopes_[k++]=q;}slopes_.resize(k);}
+    // A slope keeps its id when the profile is refreshed (the next stretch fetched): the new slope
+    // that overlaps an old one the same way is that slope, so it is not announced twice.
+    std::vector<bool> taken(before.size());
+    for(auto& q:slopes_) {
+        q.id=0;
+        for(size_t i=0;i<before.size();++i){const auto& o=before[i];
+            if(taken[i]||(o.grade>0)!=(q.grade>0))continue;
+            if(std::min(o.end,q.end)-std::max(o.start,q.start)>=.5*std::min(o.end-o.start,q.end-q.start)){q.id=o.id;taken[i]=true;break;}}
+        if(!q.id)q.id=slopeFlag|(generation_<<20)|(++nextSlope_&0xFFFFF);
+    }
+    return true;
+}
+double RouteLine::gradeAt(double s) const noexcept {
+    if(grade_.empty())return std::numeric_limits<double>::quiet_NaN();
+    const double i=(s-gradeStart_)/10;
+    if(i<0||i>double(grade_.size()-1))return std::numeric_limits<double>::quiet_NaN();
+    const size_t a=size_t(i),b=std::min(grade_.size()-1,a+1);
+    return grade_[a]+(grade_[b]-grade_[a])*(i-double(a));
 }
 void RouteLine::maneuvers(double time,const double* aheadM,size_t count) noexcept {
     if(points_.empty()||!std::isfinite(time)||(count&&!aheadM))return;
@@ -219,6 +334,17 @@ RouteAhead RouteLine::ahead(double now,const BumpMap& bumps) const noexcept {
     }
     const auto hit=bumps.along(path.data(),n,lookAheadM);
     out.bumpDistanceM=hit.distanceM;out.bumpId=hit.id;out.bumpLearned=hit.learned;
+    // The road's grade here and the next climb or descent (where the car is now: the last fix
+    // plus the distance driven since).
+    const double where=progress_+speedMps_*std::clamp(now-fixTime_,0.,2.5);
+    const double g=gradeAt(where);
+    if(std::isfinite(g)){out.gradeKnown=true;out.gradePercent=g;}
+    for(const auto& q:slopes_) {
+        if(q.end<where)continue;
+        if(q.start-where>600)break;
+        out.slopeDistanceM=q.start-where;out.slopeGradePercent=q.grade;out.slopeSteepestPercent=q.steepest;
+        out.slopeLengthM=q.end-std::max(q.start,where);out.slopeId=q.id;break;
+    }
     return out;
 }
 }
