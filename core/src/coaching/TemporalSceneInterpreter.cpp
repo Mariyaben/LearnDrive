@@ -30,6 +30,7 @@ InstructionMeaning instructionMeaning(int p) noexcept {
     case Prompt::turnExit:case Prompt::gearUpSecond:case Prompt::gearUpThird:case Prompt::gearUpFourth:case Prompt::gearUpFifth:
     case Prompt::gearDownSecond:case Prompt::gearDownThird:case Prompt::stopClutch:case Prompt::moveOffPrep:return InstructionMeaning::VehicleControl;
     case Prompt::downhillThird:case Prompt::downhillSecond:case Prompt::uphillSecond:case Prompt::uphillThird:return InstructionMeaning::GradePreparation;
+    case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill:return InstructionMeaning::GradePreparation;
     case Prompt::pedestrianSpace:case Prompt::riderSpace:case Prompt::roadUserQuiet:case Prompt::roadUser:case Prompt::watchPedestrians:return InstructionMeaning::RoadUserSpace;
     case Prompt::vehicleSpace:case Prompt::keepSafeGap:case Prompt::holdLaneDistance:return InstructionMeaning::FollowingGap;
     case Prompt::mapLeftTurn:case Prompt::mapRightTurn:case Prompt::mapLeftTurnNear:case Prompt::mapRightTurnNear:case Prompt::mapLeftTurn50:case Prompt::mapRightTurn50:case Prompt::mapJunction:return InstructionMeaning::TurnPreparation;

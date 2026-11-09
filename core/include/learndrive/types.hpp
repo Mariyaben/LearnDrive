@@ -59,8 +59,11 @@ enum class Prompt : int { none=0, hill=1, ease=2, brake=3, emergency=4, camera=5
     // Road knowledge ahead from the map (origin 6): speed bump, sharp (blind) bend.
     bumpAhead=89,bendHorn=90,
     // Google found a new route (a missed turn, or a better way): calm, no blame, no promise.
-    routeChanged=91 };
-constexpr int promptCount=91;
+    routeChanged=91,
+    // Hills from the elevation along the route (Google's Elevation API), named before the slope. The
+    // spoken sentence is composed for the speed (which gear, whether to slow down first).
+    mapDownhill=92,mapSteepDownhill=93,mapUphill=94,mapSteepUphill=95 };
+constexpr int promptCount=95;
 inline bool isRiskPrompt(Prompt p){const int i=int(p);return i>=81&&i<=86;}
 // Instructor phrase fragments. The situation planner composes one utterance per
 // moment from these (context clauses, then actions), e.g. "Uphill. Oncoming truck.
@@ -77,8 +80,11 @@ enum class Fragment : int { none=0,
     // Navigation (Google route): the distance and the maneuver, as an instructor says them.
     in200m=45,in150m,in100m,in50m,turnLeft,turnRight,keepLeftRoute,keepRightRoute,uTurn,
     roundaboutFirst,roundaboutSecond,roundaboutThird,roundaboutFourth,roundaboutEnter,destinationAhead,
-    leftTurnHere,rightTurnHere,thenLeft,thenRight,giveWayRight,pullOver,mergeCarefully=66 };
-constexpr int fragmentCount=66;
+    leftTurnHere,rightTurnHere,thenLeft,thenRight,giveWayRight,pullOver,mergeCarefully=66,
+    // Hills ahead (map elevation along the route), and how to drive them.
+    downhillAhead=67,steepDownhillAhead,uphillAhead,steepUphillAhead,noNeutral,controlSpeedBrake,downOneGear=73 };
+constexpr int fragmentCount=73;
+inline bool isSlopeAheadFragment(Fragment f){return int(f)>=67&&int(f)<=70;}
 inline bool isNavigationFragment(Fragment f){return int(f)>=45&&int(f)<=66;}
 inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext||isNavigationFragment(f);}
 inline const char* fragmentText(Fragment f) {
@@ -119,6 +125,10 @@ inline const char* fragmentText(Fragment f) {
     case Fragment::thenLeft:return "Then turn left straight after.";case Fragment::thenRight:return "Then turn right straight after.";
     case Fragment::giveWayRight:return "Give way to traffic from the right.";case Fragment::pullOver:return "Pull over safely.";
     case Fragment::mergeCarefully:return "merge carefully.";
+    case Fragment::downhillAhead:return "Downhill ahead.";case Fragment::steepDownhillAhead:return "Steep downhill ahead.";
+    case Fragment::uphillAhead:return "Uphill ahead.";case Fragment::steepUphillAhead:return "Steep uphill ahead.";
+    case Fragment::noNeutral:return "Do not coast in neutral.";case Fragment::controlSpeedBrake:return "Control your speed with the brake.";
+    case Fragment::downOneGear:return "Change down a gear.";
     default:return "";
     }
 }
@@ -134,7 +144,8 @@ inline bool isActorActionPrompt(Prompt p){const int i=int(p);return i>=64&&i<=68
 // Prompts the risk coach (origin 7) may use.
 inline bool riskMayUse(Prompt p){return isRiskPrompt(p)||isActorActionPrompt(p)||p==Prompt::pedestrianSpace||p==Prompt::riderSpace||p==Prompt::vehicleSpace;}
 // Vehicle-control coaching from measured speed/slope/route (origin 6).
-inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=91);}
+inline bool isControlPrompt(Prompt p){const int i=int(p);return i==63||(i>=69&&i<=80)||(i>=87&&i<=95);}
+inline bool isMapHillPrompt(Prompt p){const int i=int(p);return i>=92&&i<=95;}
 // Proposed coaching bands, not certified road classifications or safe speeds.
 inline int slopeBand(double degrees) {
     if(!std::isfinite(degrees)||std::abs(degrees)>30)return 0;
@@ -175,6 +186,7 @@ inline int priority(Prompt p) {
     case Prompt::gearUpSecond:case Prompt::gearUpThird:case Prompt::gearUpFourth:case Prompt::gearUpFifth:
     case Prompt::gearDownSecond:case Prompt::gearDownThird:case Prompt::stopClutch:case Prompt::moveOffPrep:
     case Prompt::downhillThird:case Prompt::downhillSecond:case Prompt::uphillSecond:case Prompt::uphillThird:return 2;
+    case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill:return 2;
     case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::oncomingKeepLeft:return 4;
     case Prompt::vehicleCrossingWait:case Prompt::personCrossingStop:return 5;
     case Prompt::personLeftSpace:case Prompt::personRightSpace:case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return 3;
@@ -225,6 +237,10 @@ inline const char* promptText(Prompt p) {
     case Prompt::bumpAhead:return "Speed bump ahead. Slow down, clutch down and change down";
     case Prompt::bendHorn:return "Sharp bend ahead. Sound the horn and keep left";
     case Prompt::routeChanged:return "The route has changed. Keep going and follow the new route";
+    case Prompt::mapDownhill:return "Downhill ahead. Stay in gear and control your speed with the brake";
+    case Prompt::mapSteepDownhill:return "Steep downhill ahead. Change down to second and control your speed with the brake";
+    case Prompt::mapUphill:return "Uphill ahead. Keep a steady accelerator";
+    case Prompt::mapSteepUphill:return "Steep uphill ahead. Change down before the climb and keep a steady accelerator";
     case Prompt::junctionApproach:return "Set a suitable approach speed. Prepare to give way";
     case Prompt::hill: return "Uphill. Lower gear if needed";
     case Prompt::ease: return "Ease off accelerator";
@@ -304,6 +320,17 @@ struct Decision {
     // actor. This is encounter provenance, never lane or depth certainty.
     int entryReferenceId=0;
     bool newEncounter=false;
+};
+// The analysed camera image's optics, normalized to that image (after the preview crop and
+// rotation): focal lengths in image widths / heights per unit tangent, principal point as
+// fractions. The defaults are the 4:3 phone frame the coach's geometry was first tuned on
+// (~70 degree horizontal view, optical centre mid-image). A preview that fills a wide panel
+// crops the frame, so the same angle covers more of the image and the level horizon is no
+// longer mid-image (0.8.1: the bottom 72 % of a 4:3 frame).
+struct CameraModel {
+    double fx=.72,fy=.96,cx=.5,cy=.5; bool measured{};
+    bool valid() const noexcept {return std::isfinite(fx)&&std::isfinite(fy)&&std::isfinite(cx)&&std::isfinite(cy)&&
+        fx>.2&&fx<5&&fy>.2&&fy<5&&cx>-.5&&cx<1.5&&cy>-.5&&cy<1.5;}
 };
 struct Box {
     float x{},y{},w{},h{},score{}; int category{},id{}; double tti=infinity, expansion{},confidence{};

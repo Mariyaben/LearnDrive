@@ -101,7 +101,7 @@ object GuidanceTrace {
     fun source(id:Long,kind:CaptureSource,time:Double)=JSONObject().apply {
         put("schema_version",1);put("event","source_start");put("time",time);put("source_id",id);put("source",kind.name)
     }.toString()
-    fun frame(v:VisionResult)=JSONObject().apply {
+    fun frame(v:VisionResult,thermal:Int=-1,fpsCap:Int=0)=JSONObject().apply {
         val f=v.frame
         put("schema_version",1);put("event","frame_observation");put("source_id",f?.sourceId?:0)
         put("source",f?.source?.name?:"unknown");put("capture_time",number(v.time));put("completed_time",number(v.completedAt))
@@ -115,6 +115,8 @@ object GuidanceTrace {
         put("sensor_intrinsics",f?.intrinsics?.let {JSONArray(it.toList())}?:JSONObject.NULL)
         put("original_recorded_motion_available",if(f?.source==CaptureSource.RECORDING)false else JSONObject.NULL);put("spatial_readiness",v.spatialReadiness)
         put("processing_ms",number(v.processingMs));put("tti_seconds",number(v.tti));put("approach_confidence",number(v.confidence))
+        // Android thermal status (0 none ... 4 critical, 5 emergency) and the camera frame-rate cap.
+        put("thermal_status",thermal);put("camera_fps_cap",fpsCap)
         put("in_path",v.inPath);put("road_valid",v.road?.valid?:false);put("road_bend",v.road?.bend?:0)
         put("detections",JSONArray(v.detections.take(64).map {d->JSONObject().apply {
             put("x",d.x.toDouble());put("y",d.y.toDouble());put("width",d.width.toDouble());put("height",d.height.toDouble())

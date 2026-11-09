@@ -69,6 +69,11 @@ struct ld_engine {
     double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
     bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
     double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
+    // The analysed image's optics (after the preview crop): where the level horizon is and how
+    // many image heights a radian spans. Defaults: the uncropped 4:3 frame.
+    ld::CameraModel camera{};
+    // Detector mosaic layout: 2 = long range (0.8.3: two steered views, 2x and 4x), 1 = 0.8.0.
+    int mosaicMode=2;
     double yawOverride=std::numeric_limits<double>::quiet_NaN(),yawOverrideTime=-1;
     uint64_t coachingRouteEpoch{};
     double coachingRouteEta=ld::infinity;
@@ -82,13 +87,50 @@ struct ld_engine {
 };
 // Horizon row (fraction of image height) for the camera at `time`: a replay's override, else the
 // phone's measured pitch (a camera pointing up puts the horizon low in the image), else mid-image.
+// The level horizon is at the optical centre (cy) and moves fy image heights per unit tangent of
+// the pitch: with the 0.8.1 fill-the-panel preview crop that is ~0.31 + 1.23 tan(pitch), not
+// 0.5 + 0.96 tan(pitch). Limits: the old [0.25, 0.85] of a 4:3 frame, in this image's units.
+static double horizonFromPitch(const ld::CameraModel& c,double pitch) {
+    const double k=c.fy/.96;return std::clamp(c.cy+c.fy*std::tan(pitch),c.cy-.25*k,c.cy+.35*k);
+}
 static double horizonAt(const ld_engine& e,double time) {
     if(std::isfinite(e.horizonOverride))return e.horizonOverride;
     if(e.sourceKind==LD_SOURCE_CAMERA) {
         const auto up=e.fusion.cameraUp(time);
-        if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));return std::clamp(.5+.96*std::tan(pitch),.25,.85);}
+        if(up.norm()>.9)return horizonFromPitch(e.camera,std::atan2(-up.z,std::hypot(up.x,up.y)));
     }
-    return .5;
+    return e.camera.cy;
+}
+// Turn rate (rad/s, left positive) at `time`: a replay's estimate, else the gyroscope.
+static bool yawAt(const ld_engine& e,double time,double& rate) {
+    if(std::isfinite(e.yawOverride)&&time>=e.yawOverrideTime&&time-e.yawOverrideTime<.5){rate=e.yawOverride;return true;}
+    if(e.sourceKind==LD_SOURCE_CAMERA) {
+        const auto m=e.fusion.motion();
+        if(m.valid&&!m.handled&&time>=m.time&&time-m.time<.25&&std::isfinite(m.yawRate)){rate=m.yawRate;return true;}
+    }
+    return false;
+}
+// Where the detector's zoomed views look. The 2x view covers about half the frame width and the
+// 4x view a quarter, so on a bend the far road leaves them unless they follow it: each is aimed
+// where the road will be in ~2.5 s (2x) and ~5 s (4x) of driving. Navigating, the route line knows
+// a bend before the car turns into it; otherwise the turn rate says where a constant curve leads
+// (a point t seconds ahead on a curve lies at half the heading change: yaw * t / 2).
+static ld::MosaicPlan mosaicPlan(const ld_engine& e,double time) {
+    ld::MosaicPlan p;p.horizon=float(horizonAt(e,time));
+    if(e.mosaicMode<2)return p; // 0.8.0: one centred 2x view, road band from half the height above the horizon
+    p.above=.35f;p.views=2;p.zoom[0]=2;p.zoom[1]=4;p.smooth=true;
+    double yaw{};const bool turning=yawAt(e,time,yaw);
+    for(int k=0;k<2;++k) {
+        const double seconds=k?5.:2.5;
+        // The turn rate is today's curve, not the road's: leaving a bend it still points into it
+        // while the road ahead straightens (Nov 8, 12:54: the 4x view looked right of the oncoming
+        // bus). Without a route it may swing the 4x view only ~7 degrees, the 2x view ~17.
+        double angle=turning?std::clamp(yaw*seconds/2,k?-.12:-.3,k?.12:.3):0;
+        if(e.sourceKind==LD_SOURCE_CAMERA){const double route=e.routeLine.aim(time,seconds);if(std::isfinite(route))angle=route;}
+        angle=std::clamp(angle,-.45,.45);
+        p.aim[k]=float(std::clamp(e.camera.cx-e.camera.fx*std::tan(angle),0.,1.));
+    }
+    return p;
 }
 // Detector output as decodable road-band coordinates: a mosaic's zoom-band candidates are
 // mapped back into frame geometry first (a copy; the caller's buffer is not modified).
@@ -228,7 +270,9 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
         if(w.actorCount==w.actors.size())break;
         // The learner's own bonnet/dashboard, detected as a vehicle, is not a road user.
         if(RiskCoach::egoVehicle(b.x,b.y,b.w,b.h))continue;
-        const double center=b.x+b.w*.5,foot=b.y+b.h;
+        // Below the optical centre and within the middle ~64 % of the view of a 4:3 frame, in this
+        // image's own optics (a cropped preview spreads the same angles over more of the image).
+        const double center=.5+(b.x+b.w*.5-e.camera.cx)*.72/e.camera.fx,foot=.5+(b.y+b.h-e.camera.cy)*.96/e.camera.fy;
         const bool relevant=foot>.5&&center>.18&&center<.82;
         auto& a=w.actors[w.actorCount++];a={};a.identity={IdentitySpace::Optical,uint64_t(b.id),0};a.captureTime=e.visionTime;
         // Presence confidence is the detector score. The optical-TTI estimate's
@@ -288,12 +332,13 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.visibleTop=e.mosaic.active?e.mosaic.visibleTop:0;
     w.arriving=provider&&e.providerNavigation.arriving(now);
     w.rerouting=e.providerNavigation.rerouting(now);
+    // Box geometry is read through the analysed image's own optics (the preview crop).
+    w.camera=e.camera;w.horizon=e.camera.cy;
     if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
         // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
         const auto up=e.fusion.cameraUp(now);
-        if(up.norm()>.9){const double pitch=std::atan2(-up.z,std::hypot(up.x,up.y));
-            w.horizon=std::clamp(.5+.96*std::tan(pitch),.25,.85);w.horizonMeasured=true;}
+        if(up.norm()>.9){w.horizon=horizonFromPitch(e.camera,std::atan2(-up.z,std::hypot(up.x,up.y)));w.horizonMeasured=true;}
     }
     if(std::isfinite(e.yawOverride)&&now>=e.yawOverrideTime&&now-e.yawOverrideTime<.5){w.yawRate=e.yawOverride;w.yawKnown=true;}
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
@@ -307,6 +352,10 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
             // Navigating: the route the car will actually take. Its bends need the provider's
             // maneuver positions (a turn is not a bend); without them the road scout's bend stands.
             w.mapTime=line.fixTime;w.bumpAheadM=line.bumpDistanceM;w.bumpId=line.bumpId;
+            // Hills from the route's elevation: the map, not the phone's tilt, decides the slope.
+            if(line.gradeKnown){w.mapGradeKnown=true;w.mapGradePercent=line.gradePercent;
+                w.gradeBand=ld::slopeBand(std::atan(line.gradePercent/100)*180/3.14159265358979323846);}
+            w.slopeAheadM=line.slopeDistanceM;w.slopeGrade=line.slopeGradePercent;w.slopeLengthM=line.slopeLengthM;w.slopeId=line.slopeId;
             if(line.bendsKnown){w.bendAheadM=line.bendDistanceM;w.bendId=line.bendId;w.bendRight=line.bendRight;}
             else if(ahead.matched){w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;}
         } else if(ahead.matched) {
@@ -959,6 +1008,11 @@ int ld_route_line(ld_engine* e,const double* lat_lon,size_t count) {
     try {return e&&e->routeLine.load(lat_lon,count);}catch(const std::exception& ex){if(e){e->error=ex.what();e->routeLine.clear();}return 0;}
 }
 void ld_route_maneuvers(ld_engine* e,double time,const double* ahead_m,size_t count){if(e)e->routeLine.maneuvers(time,ahead_m,count);}
+int ld_route_elevation(ld_engine* e,const double* lat_lon_elev,size_t count) {
+    try {return e&&e->routeLine.elevation(lat_lon_elev,count);}catch(const std::exception& ex){if(e){e->error=ex.what();e->routeLine.elevation(nullptr,0);}return 0;}
+}
+void ld_route_elevation_cover(ld_engine* e,double* out){if(!e||!out)return;
+    out[0]=e->routeLine.elevationStart();out[1]=e->routeLine.elevationEnd();out[2]=e->routeLine.matched()?e->routeLine.progress():-1;out[3]=double(e->routeLine.slopeCount());}
 void ld_navigation_step_detail(ld_engine* e,double received_at,int side,int roundabout_exit,int next_maneuver,double next_gap_m) {
     if(!e)return;
     e->navDetailReceipt=received_at;e->navSide=std::clamp(side,-1,1);e->navExit=std::clamp(roundabout_exit,0,8);
@@ -991,6 +1045,9 @@ int ld_road_knowledge(ld_engine* e,double now,double* out,size_t capacity) {
     out[0]=e->routeLine.loaded();out[1]=line.matched;out[2]=line.bendsKnown;out[3]=line.bendDistanceM;out[4]=line.bendRight;
     out[5]=line.bumpDistanceM;out[6]=line.bumpLearned;out[7]=double(e->bumps.learnedCount());out[8]=double(e->bumps.usableLearnedCount());
     out[9]=double(e->routeLine.bendCount());
+    // With room for 16: the map's grade here, and the next climb or descent.
+    if(capacity>=16){out[10]=line.gradeKnown;out[11]=line.gradeKnown?line.gradePercent:0;out[12]=line.slopeDistanceM;
+        out[13]=line.slopeGradePercent;out[14]=line.slopeLengthM;out[15]=double(e->routeLine.slopeCount());}
     return 1;
 }
 void ld_coaching_horn_rules(ld_engine* e,int enabled){if(e)e->hornRules=enabled!=0;}
@@ -1041,14 +1098,35 @@ int ld_preprocess(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const ui
     try {e->transform=ld::preprocess({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save?&e->gray:nullptr);e->error.clear();return 1;}
     catch(const std::exception& ex) {e->error=ex.what();return 0;}
 }
-int ld_preprocess_mosaic(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save,double time) {
-    if(!e)return 0;
+static int prepareMosaic(ld_engine* e,const ld::YuvFrame& f,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int save,const ld::MosaicPlan& plan) {
     e->zoomReady=false;e->mosaic={};
     try {
-        e->transform=ld::preprocessMosaic({w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,
-            save?&e->gray:nullptr,float(horizonAt(*e,time)),e->mosaic);
+        e->transform=ld::preprocessMosaic(f,size,tensor,bytes,dtype,layout,scale,zp,save?&e->gray:nullptr,plan,e->mosaic);
         e->error.clear();return e->mosaic.active?2:1;
     }catch(const std::exception& ex){e->mosaic={};e->error=ex.what();return 0;}
+}
+int ld_preprocess_mosaic(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save,double time) {
+    if(!e)return 0;
+    return prepareMosaic(e,{w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save,mosaicPlan(*e,time));
+}
+int ld_mosaic_plan(ld_engine* e,double time,float* out,size_t capacity) {
+    if(!e||!out||capacity<8)return 0;
+    const auto p=mosaicPlan(*e,time);
+    const float values[8]={p.horizon,p.above,float(p.views),p.zoom[0],p.zoom[1],p.aim[0],p.aim[1],p.smooth?1.f:0.f};
+    std::copy_n(values,8,out);return 8;
+}
+int ld_preprocess_mosaic_plan(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,int save,const float* plan,size_t count) {
+    if(!e)return 0;
+    if(!plan||count<8){e->error="mosaic plan needs 8 values";return 0;}
+    ld::MosaicPlan p;p.horizon=plan[0];p.above=plan[1];p.views=int(std::lround(plan[2]));p.zoom[0]=plan[3];p.zoom[1]=plan[4];
+    p.aim[0]=plan[5];p.aim[1]=plan[6];p.smooth=plan[7]>.5f;
+    return prepareMosaic(e,{w,h,rot,{y,yn,yr,yp},{u,un,ur,up},{v,vn,vr,vp},full!=0},size,tensor,bytes,dtype,layout,scale,zp,save,p);
+}
+void ld_mosaic_mode(ld_engine* e,int mode){if(e)e->mosaicMode=mode==1?1:2;}
+void ld_camera_geometry(ld_engine* e,double fx,double fy,double cx,double cy) {
+    if(!e)return;
+    ld::CameraModel c{fx,fy,cx,cy,true};
+    e->camera=c.valid()?c:ld::CameraModel{};
 }
 int ld_preprocess_zoom(ld_engine* e,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int w,int h,int rot,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zp,int full,float horizon) {
     if(!e)return 0;

@@ -138,8 +138,18 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     learnMask(w,v);
     if(w.yawKnown&&std::isfinite(w.yawRate)&&(yawCount_==0||now>=yawT_[(yawCursor_+yawT_.size()-1)%yawT_.size()]+.02)){
         yawT_[yawCursor_]=now;yawV_[yawCursor_]=w.yawRate;yawCursor_=(yawCursor_+1)%yawT_.size();yawCount_=std::min(yawCount_+1,yawT_.size());}
-    // Image geometry is relative to the measured horizon (a level camera puts it mid-image).
-    const double shift=std::isfinite(w.horizon)?std::clamp(w.horizon,.25,.85)-.5:0;
+    // Box geometry is read in the analysed image's own optics, mapped onto the 4:3 frame the
+    // thresholds below were tuned on (~0.72 image widths and ~0.96 image heights per radian,
+    // optical centre mid-image). The 0.8.1 preview fills a wide panel with the bottom of the
+    // frame: the same angle covers ~1.3x more of the image and a level horizon sits ~0.31 down,
+    // not 0.5. Read raw, road users beyond ~13 m "stood above the horizon" and were dropped as not
+    // on the road; only close ones were coached (Nov 8). Edge and mask tests stay in raw pixels.
+    const CameraModel cam=w.camera.valid()?w.camera:CameraModel{};
+    const double kx=.72/cam.fx,ky=.96/cam.fy;
+    auto X=[&](double x){return .5+(x-cam.cx)*kx;};
+    auto Y=[&](double y){return .5+(y-cam.cy)*ky;};
+    // Image geometry is relative to the measured horizon (a level camera puts it at the optical centre).
+    const double shift=std::isfinite(w.horizon)?std::clamp(Y(w.horizon),.25,.85)-.5:0;
     const double stopM=stoppingDistance(speedKnown?v:15);
     // 1. Assess every fresh optical road user from its own track history.
     for(size_t i=0;i<std::min(w.actorCount,w.actors.size())&&count_<risks_.size();++i) {
@@ -158,8 +168,11 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             // The rider's body stands on the bike: wide horizontal overlap, the bike under the person's middle.
             if(overlap>.5*std::min(a.w,b.w)&&b.y<a.y+a.h&&b.y+b.h>a.y+a.h*.5){r.category=b.category;break;}
         }
-        r.center=a.x+a.w*.5;r.foot=a.y+a.h;r.left=r.center<.5;
-        if(masked(r.center,r.foot))continue; // Part of the learner's own car.
+        // Canonical box (angles; see X/Y above): left edge, width, height. r.foot stays the raw
+        // image row (the bonnet, the frame edge and the learned mask are image facts).
+        const double ax=X(a.x),aw=a.w*kx,ah=a.h*ky;
+        r.center=ax+aw*.5;r.foot=a.y+a.h;r.left=r.center<.5;
+        if(masked(a.x+a.w*.5,r.foot))continue; // Part of the learner's own car.
         // Clipped at the left/right image edge near the bottom: alongside, being passed.
         if((a.x<.01f||a.x+a.w>.99f)&&r.foot>.9)continue;
         // Motion over the last ~0.3-1.2 s of this road user's own remembered history.
@@ -175,7 +188,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             const bool bottomCut=a.y+a.h>.99f||motion->y[k]+motion->h[k]>.99f;
             r.expansion=(sideCut&&!bottomCut?std::log(double(a.h)/motion->h[k]):bottomCut&&!sideCut?std::log(double(a.w)/motion->w[k]):
                 std::log(std::sqrt(double(a.w)*a.h/(double(motion->w[k])*motion->h[k]))))/dt;
-            const double imageLateral=((a.x+a.w*.5)-(motion->x[k]+motion->w[k]*.5))/dt;
+            const double imageLateral=((a.x+a.w*.5)-(motion->x[k]+motion->w[k]*.5))*kx/dt;
             // Turning slides every static object across the image (about 0.72 image widths per
             // radian; left turn -> rightward): remove it before judging the road user's own
             // movement (Nov 4 and 6: parked vehicles, a billboard and people walking along the
@@ -203,9 +216,11 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             const size_t k=size_t(old);const double span=a.captureTime-motion->t[k];int mid=-1;
             for(size_t q=0;q<motion->count;++q){const double age=a.captureTime-motion->t[q];
                 if(age>.1&&age<span-.1&&(mid<0||std::abs(age-span*.5)<std::abs(a.captureTime-motion->t[size_t(mid)]-span*.5)))mid=int(q);}
-            auto inward=[&](double t0,double x0,double w0,double h0,double t1,double x1,double w1,double h1){
-                const double dt=t1-t0;if(dt<=.05||w0<=0||h0<=0)return 0.;
-                const double grow=std::log(std::sqrt(w1*h1/(w0*h0)))/dt,c1=x1+w1*.5;
+            // Raw boxes in, canonical geometry inside (growth is a ratio, unchanged by the mapping).
+            auto inward=[&](double t0,double rx0,double rw0,double h0,double t1,double rx1,double rw1,double h1){
+                const double dt=t1-t0;if(dt<=.05||rw0<=0||h0<=0)return 0.;
+                const double x0=X(rx0),w0=rw0*kx,x1=X(rx1),w1=rw1*kx;
+                const double grow=std::log(std::sqrt(rw1*h1/(rw0*h0)))/dt,c1=x1+w1*.5;
                 const double lat=(c1-(x0+w0*.5))/dt-.72*meanYaw(t0,t1);
                 return (lat-(c1-.5)*std::max(0.,grow))*(c1<.5?1:-1);};
             if(mid>=0){const size_t m=size_t(mid);
@@ -238,17 +253,17 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             }
         }
         // Below-horizon position as if the camera were level, and the ground distance it implies.
-        const double foot=r.foot-shift;r.distanceM=groundDistance(foot);
+        const double foot=Y(r.foot)-shift;r.distanceM=groundDistance(foot);
         // Behind a vehicle: about a metre beyond where that vehicle stands.
-        if(behindFoot>0)r.distanceM=groundDistance(behindFoot-shift)+1;
+        if(behindFoot>0)r.distanceM=groundDistance(Y(behindFoot)-shift)+1;
         // The detector has no class for autorickshaws and calls them "truck": a "truck" whose box is
         // too short for its ground distance (under ~2.3 m tall) is a small vehicle (Nov 6: "Oncoming
         // truck" and "Truck ahead" for auto-rickshaws), with a light vehicle's margins and words.
-        if(a.category==7&&w.horizonMeasured&&std::isfinite(r.distanceM)&&a.y>.01f&&a.y+a.h<.99f&&r.distanceM*a.h/.96<2.3)r.category=2;
+        if(a.category==7&&w.horizonMeasured&&std::isfinite(r.distanceM)&&a.y>.01f&&a.y+a.h<.99f&&r.distanceM*ah/.96<2.3)r.category=2;
         // Cut off at the top (image edge, or the sky the detector mosaic left out) or bottom:
         // the apparent height says nothing about distance.
         const bool clippedTop=a.y<.01f||a.y<=w.visibleTop+.01;
-        const double sizeM=clippedTop||a.y+a.h>.99f?std::numeric_limits<double>::infinity():sizeDistance(r.category,a.h);
+        const double sizeM=clippedTop||a.y+a.h>.99f?std::numeric_limits<double>::infinity():sizeDistance(r.category,ah);
         // A road user must stand on the road where its size says it is: a person printed on a
         // billboard, or anything raised above the road, has its "feet" far too high for its size.
         // Any unclipped box (Nov 4: the billboard figures were 15-49 % of the image tall); children
@@ -262,13 +277,15 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // both cues agree, their geometric mean is the distance.
         if(std::isfinite(sizeM)&&std::isfinite(r.distanceM)&&r.distanceM>15)r.distanceM=std::sqrt(r.distanceM*sizeM);
         // Flow-based TTC only for road users close enough for it to be plausible.
-        if(std::isfinite(a.tti)&&a.tti>0&&(a.h>.15f||r.foot>.85))r.ttc=a.tti;
+        // "Close" is measured from the horizon: with the phone pitched up (Nov 8: horizon 0.70 of the
+        // preview), a foot low in the image can still be 28 m away, where flow TTC is noise.
+        if(std::isfinite(a.tti)&&a.tti>0&&(ah>.15||foot>.85))r.ttc=a.tti;
         // A small, distant box's growth is too noisy to time a collision for "Brake now" (Nov 4
         // and 6: far vehicles, a person 24 m ahead); it may still ask the learner to slow down.
         const double looming=r.expansion>.08?1/r.expansion:std::numeric_limits<double>::infinity();
-        if(a.h>.12f||foot>.75)r.ttc=std::min(r.ttc,looming);
-        const double slowTtc=a.h>.05f?std::min(r.ttc,looming):r.ttc;
-        const double edge=std::max(0.,std::abs(r.center-.5)-a.w*.5),half=corridor(foot);
+        if(ah>.12||foot>.75)r.ttc=std::min(r.ttc,looming);
+        const double slowTtc=ah>.05?std::min(r.ttc,looming):r.ttc;
+        const double edge=std::max(0.,std::abs(r.center-.5)-aw*.5),half=corridor(foot);
         // The learner's path in metres where the distance is known: the car's half-width (~0.85 m)
         // plus a margin, widening slowly for a road that bends. The image-fraction corridor was
         // ~1.8 m wide at 16 m, so people walking along the road edge were "in the path" (Nov 6).
@@ -301,7 +318,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // the learner's own), ahead or on the right in keep-left traffic. A parked or slower car
         // being caught up is not oncoming (Nov 4); a rider head-on in the middle of a narrow road
         // is (Nov 6: it got "Brake now"). Without a measurable size: the image rule.
-        const double ownApproach=speedKnown&&std::isfinite(sizeM)&&a.h>.045f?sizeM*r.expansion-std::max(0.,v)/3.6:std::numeric_limits<double>::quiet_NaN();
+        const double ownApproach=speedKnown&&std::isfinite(sizeM)&&ah>.045?sizeM*r.expansion-std::max(0.,v)/3.6:std::numeric_limits<double>::quiet_NaN();
         // Only a clear approach speed decides (above +1.5 m/s oncoming, below -1.5 m/s being caught
         // up): up close the size cue is noisy, and then the image rule decides. Its own lane counts,
         // up to 3 m beyond the path (Nov 6: a scooter 3.9 m right lost its "keep left").
@@ -317,7 +334,11 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // 28 km/h is the detector switching between figures, not a road user (Nov 4: a billboard
         // "crossing").
         const bool growing=!(speedKnown&&v>12&&std::isfinite(r.distanceM)&&r.expansion<.15*(v/3.6)/r.distanceM);
-        if(near&&steady&&growing&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=r.distanceM<=2*stopM+10?3:2;}
+        // "Brake now" only where firm braking is needed to stop short of it (stopping distance plus a
+        // margin, by the farther of the two distance cues); farther away, "brake gently, be ready to
+        // stop". Up to 0.8.2 the urgent range was twice the stopping distance (~78 m at 40 km/h):
+        // seeing further (0.8.3) turned cars crossing junctions 50-80 m ahead into "Brake now" (Nov 8).
+        if(near&&steady&&growing&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=confirmM<=1.2*stopM+5?3:2;}
         // Head-on and closing within stopping time: urgent "keep left, ease off" (Nov 6: a rider in
         // the middle of a narrow road).
         else if(oncoming) {r.kind=RiskKind::Oncoming;r.level=collision&&r.ttc<stopping+.5?3:2;}

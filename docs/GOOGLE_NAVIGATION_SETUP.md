@@ -16,7 +16,9 @@ The separately verified **0.4.1 APK** is the earlier offline foundation: it has
 no internet permission and makes no Google requests. Do not use its checks to
 claim the new provider works.
 
-Current account setup: project `learndrive-development-512108` is selected. The
+Current account setup (checked 9 November 2026): project `learndrive-development-513812` holds
+the development key **LearnDrive Android Debug** (created 5 November); the October project ID
+`learndrive-development-512108` no longer exists, and `learndrive-development` has no keys. The
 three required services below are enabled, and the development key is stored in
 ignored `android/secrets.properties`. On 19 October, Cloud Console confirmed the
 saved key restrictions: Android app `ai.learndrive.mobile` with the debug SHA-1
@@ -123,6 +125,42 @@ stay local. Ordinary diagnostic exports exclude raw GPS coordinates and key
 values. Offline navigation remains an explicitly selected local fallback.
 Google's SDK does not provide full offline navigation.
 [Navigation FAQ](https://developers.google.com/maps/documentation/navigation/android-sdk/faq).
+
+## 6. Hills along the route (Elevation API)
+
+0.8.2 names climbs and descents before the car reaches them, using the road's height along
+Google's route ([hills from the map](coach/MAP_HILLS.md)). Steps 1 and 3 were done for the
+development key on 9 November 2026; step 2 waits for an upgrade from the free trial.
+
+1. In **APIs & Services → Library**, search for **Maps Elevation API** and enable it in this
+   project. (Done for `learndrive-development-513812` on 9 November 2026.)
+2. In **Google Maps Platform → Quotas**, set a low **Requests per day** limit for the Maps
+   Elevation API, for example 500. A 10 km stretch of route is one request, so a learner drive
+   needs about one to three. On Google's free trial this is locked ("Free-of-charge trial does
+   not permit quota increases"); the trial cannot charge the card without an upgrade, and the
+   first 5,000 Elevation requests a month are free. Set the limit after upgrading.
+3. Edit the development key under **APIs & Services → Credentials** and add **Maps Elevation
+   API** to its **API restrictions**. Keep the Android app restriction. The app sends its package
+   name and signing-certificate SHA-1 with each request (`X-Android-Package`, `X-Android-Cert`).
+   On 9 November a request with exactly those headers got `OK` with the development key, and the
+   same request without them was refused, so the Android restriction works for this API.
+4. Rebuild and install the app. Pick a destination and open setup. **Hills ahead** should read
+   "Google elevation · ..." once the route loads.
+
+If it says **"Elevation API not enabled for this key"** after these steps, check steps 1 and 3 in
+the project that holds the key. A release build signed with another certificate also needs that
+certificate's SHA-1 on the key. As a last resort, create a second key for the Elevation API alone:
+
+- Application restriction: none.
+- API restrictions: **Elevation API** only.
+- Keep the low daily quota from step 2.
+
+Enter it after `ELEVATION_API_KEY=` in `android/secrets.properties` and rebuild. Like the Maps
+key, it goes only into manifest metadata and is recoverable from the APK, so the API restriction
+and the quota are what protect it. With no Elevation API access, hills come from the phone's tilt
+as before.
+
+The heights stay in memory with the route and are never stored or exported.
 
 ## Candidate toolchain and engineering checks
 

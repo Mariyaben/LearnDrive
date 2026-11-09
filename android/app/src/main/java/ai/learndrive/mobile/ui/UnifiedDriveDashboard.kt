@@ -115,7 +115,7 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
         val pages=FrameLayout(context).apply {addView(setupContentHost,LayoutParams(-1,-1));addView(destinationHost,LayoutParams(-1,-1))}
         sheet.addView(pages,LinearLayout.LayoutParams(-1,0,1f));sheet.addView(setupActionHost,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(10)})
         setupHost.addView(sheet,LayoutParams(-1,-1));addView(setupHost,LayoutParams(dp(440),-1,Gravity.END))
-        for((kind,title) in listOf("camera" to "Camera","voice" to "Voice","location" to "GPS · optional")) {
+        for((kind,title) in listOf("camera" to "Camera","voice" to "Voice","location" to "GPS · optional","hill" to "Hills ahead")) {
             val symbol=icon(kind,CoachStyle.muted);val heading=label(title,14f).apply {typeface=CoachStyle.medium};val detail=label("Checking…",12f,CoachStyle.muted).apply {maxLines=1;ellipsize=TextUtils.TruncateAt.END}
             readiness.addView(LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(6),dp(12),dp(6));background=CoachStyle.panel(context,CoachStyle.raised,12,android.graphics.Color.TRANSPARENT)
                 addView(symbol,LinearLayout.LayoutParams(dp(24),dp(24)).apply {marginEnd=dp(14)})
@@ -142,7 +142,7 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
     fun setSessionRunning(value:Boolean){if(running==value)return;running=value;quickStartButton.visibility=if(value)GONE else VISIBLE}
     fun setReadiness(index:Int,detail:String,ready:Boolean) {
         val check=checks[index];val key="$detail:$ready";if(check.key==key)return;check.key=key;check.detail.setTextIfChanged(detail)
-        check.symbol.setImageDrawable(CoachStyle.icon(context,if(ready)"check" else listOf("camera","voice","location")[index],if(ready)CoachStyle.go else CoachStyle.muted))
+        check.symbol.setImageDrawable(CoachStyle.icon(context,if(ready)"check" else listOf("camera","voice","location","hill")[index],if(ready)CoachStyle.go else CoachStyle.muted))
     }
     fun setMeasuredSpeed(kph:Double?,source:String="GPS") {
         val valid=kph?.takeIf {it.isFinite()&&it in 0.0..300.0};speedValue.setTextIfChanged(valid?.roundToInt()?.toString()?:"—");speedSource.setTextIfChanged(if(valid==null)"Speed unavailable" else source)

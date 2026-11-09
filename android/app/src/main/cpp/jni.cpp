@@ -52,6 +52,7 @@ JNIEXPORT void JNICALL JNI(bindAudioDispatcher)(JNIEnv* e,jobject,jlong h,jobjec
 JNIEXPORT void JNICALL JNI(reset)(JNIEnv*,jobject,jlong h) {ld_reset(engine(h));}
 JNIEXPORT jlong JNICALL JNI(calibrationId)(JNIEnv*,jobject,jlong h) {return jlong(ld_calibration_id(engine(h)));}
 JNIEXPORT void JNICALL JNI(cameraIntrinsics)(JNIEnv*,jobject,jlong h,jdouble fy) {ld_camera_intrinsics(engine(h),fy);}
+JNIEXPORT void JNICALL JNI(cameraGeometry)(JNIEnv*,jobject,jlong h,jdouble fx,jdouble fy,jdouble cx,jdouble cy) {ld_camera_geometry(engine(h),fx,fy,cx,cy);}
 JNIEXPORT jdoubleArray JNICALL JNI(cameraUp)(JNIEnv* e,jobject,jlong h,jdouble time){double out[3]{};ld_camera_up(engine(h),time,out);return output(e,out,3);}
 JNIEXPORT jboolean JNICALL JNI(spatialPublish)(JNIEnv* e,jobject,jlong h,jlong id,jdouble time,jobject out){
     auto* p=static_cast<float*>(e->GetDirectBufferAddress(out));auto n=e->GetDirectBufferCapacity(out);
@@ -173,6 +174,13 @@ JNIEXPORT jboolean JNICALL JNI(routeLine)(JNIEnv* e,jobject,jlong h,jdoubleArray
     std::vector<double> v(static_cast<size_t>(n));e->GetDoubleArrayRegion(latLon,0,n,v.data());
     return ld_route_line(engine(h),v.data(),v.size()/2)!=0;
 }
+JNIEXPORT jboolean JNICALL JNI(routeElevation)(JNIEnv* e,jobject,jlong h,jdoubleArray latLonElev) {
+    if(!latLonElev)return ld_route_elevation(engine(h),nullptr,0)!=0;
+    const jsize n=e->GetArrayLength(latLonElev);if(n%3)return JNI_FALSE;
+    std::vector<double> v(static_cast<size_t>(n));e->GetDoubleArrayRegion(latLonElev,0,n,v.data());
+    return ld_route_elevation(engine(h),v.data(),v.size()/3)!=0;
+}
+JNIEXPORT jdoubleArray JNICALL JNI(routeElevationCover)(JNIEnv* e,jobject,jlong h) {double v[4]{};ld_route_elevation_cover(engine(h),v);return output(e,v,4);}
 JNIEXPORT void JNICALL JNI(routeManeuvers)(JNIEnv* e,jobject,jlong h,jdouble time,jdoubleArray ahead) {
     const jsize n=ahead?e->GetArrayLength(ahead):0;
     std::vector<double> v(static_cast<size_t>(n));if(n)e->GetDoubleArrayRegion(ahead,0,n,v.data());

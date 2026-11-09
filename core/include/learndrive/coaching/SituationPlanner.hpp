@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 namespace ld::coaching {
-struct Candidate;struct WorldState;class RiskCoach;class TaskCoach;
+struct Candidate;struct WorldState;struct GearBands;class RiskCoach;class TaskCoach;
 // One composed instruction: context clauses then actions, from recorded fragments.
 struct Utterance {
     int id{},priority{};
@@ -24,7 +24,9 @@ struct Utterance {
 class SituationPlanner {
 public:
     // Returns true and fills `out` (fragments, priority) and the primary's
-    // secondary identities when composition adds context or another instruction.
-    static bool compose(Candidate& primary,const WorldState& safe,const RiskCoach&,const TaskCoach&,Utterance& out) noexcept;
+    // secondary identities when composition adds context or another instruction, or the
+    // instruction's words depend on the speed (a hill from the map). The gear bands are the
+    // control coach's speed rules of thumb.
+    static bool compose(Candidate& primary,const WorldState& safe,const RiskCoach&,const TaskCoach&,const GearBands&,Utterance& out) noexcept;
 };
 }

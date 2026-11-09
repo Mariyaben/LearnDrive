@@ -4,10 +4,13 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 
 // Local-only credentials are copied into manifest metadata, never logged or
 // duplicated in BuildConfig. Missing credentials keep the offline mode usable.
-val mapsApiKey = Properties().apply {
+val secrets = Properties().apply {
     val secretsFile = rootProject.file("secrets.properties")
     if (secretsFile.isFile) secretsFile.inputStream().use { load(it) }
-}.getProperty("MAPS_API_KEY", "").trim()
+}
+val mapsApiKey = secrets.getProperty("MAPS_API_KEY", "").trim()
+// Optional: a key for the Elevation API (hills along the route) if the Maps key is not allowed to use it.
+val elevationApiKey = secrets.getProperty("ELEVATION_API_KEY", "").trim()
 
 android {
     namespace = "ai.learndrive.mobile"
@@ -17,9 +20,10 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 42
-        versionName = "0.8.1"
+        versionCode = 45
+        versionName = "0.8.4"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
+        manifestPlaceholders["ELEVATION_API_KEY"] = elevationApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
         buildConfigField("boolean", "PRETRAINED_RUNTIME_AVAILABLE", (rootProject.file("../.tools/intelligence/android/llama-b11932/libllama.so").isFile && rootProject.file("../.tools/intelligence/include/llama.h").isFile).toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -56,6 +60,7 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:core:1.6.1")
+    testImplementation("junit:junit:4.13.2")
     implementation("io.github.rallista:valhalla-mobile:0.6.4")
     implementation("org.maplibre.gl:android-sdk:13.6.1")
     implementation("androidx.activity:activity-ktx:1.9.3")
