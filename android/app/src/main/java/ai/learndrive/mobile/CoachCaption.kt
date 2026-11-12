@@ -35,4 +35,14 @@ class CoachCaption {
     }
     fun clear(){entry=null}
     fun clearNavigation(){if(entry?.route!=null)clear()}
+    /**
+     * The camera has no current frame: what it said about the road ahead no longer stands. What
+     * Google, the map or the measured speed said still does (on the Nov 8 drive every caption was
+     * wiped while frames ran late, so turn instructions were spoken with nothing on screen).
+     */
+    fun clearCamera(){if(entry?.origin in CAMERA_ORIGINS)clear()}
+    companion object {
+        /** Road scene (1), camera (4) and the road-user coach (7) speak from camera frames. */
+        val CAMERA_ORIGINS=setOf(1,4,7)
+    }
 }

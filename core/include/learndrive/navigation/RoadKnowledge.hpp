@@ -56,6 +56,14 @@ struct RouteAhead {
     uint64_t bendId{};bool bendRight{};
     double bumpDistanceM=std::numeric_limits<double>::infinity();
     uint64_t bumpId{};bool bumpLearned{};
+    // The road's grade here from the provider's elevation along this route (percent, + uphill,
+    // smoothed over about 100 m); only where the elevation profile covers the car.
+    bool gradeKnown{};double gradePercent{};
+    // The next sustained climb or descent (>= 6 % over >= 100 m) within 600 m, or the one the car is
+    // on: distance to its start (negative: that far onto it already), mean grade (signed %),
+    // steepest grade, and the length still ahead.
+    double slopeDistanceM=std::numeric_limits<double>::infinity(),slopeGradePercent{},slopeSteepestPercent{},slopeLengthM{};
+    uint64_t slopeId{};
 };
 // The provider's route line, held in memory only for this route (never stored or exported).
 // Sharp bends (>= 55 degrees of turning within 35 m, the same rule as the junction scout)
@@ -74,11 +82,32 @@ public:
     RouteAhead ahead(double now,const BumpMap& bumps) const noexcept;
     bool loaded() const noexcept {return !points_.empty();}
     size_t bendCount() const noexcept {return bends_.size();}
+    static constexpr uint64_t slopeFlag=uint64_t(1)<<60;
+    // Elevation along this line: lat, lon, metres triples (e.g. Google's Elevation API sampled along
+    // the route), in memory only with the line. Samples more than 25 m off the line are ignored.
+    // Replaces any earlier profile; false (and none kept) when it covers under 100 m of the line.
+    bool elevation(const double* latLonElev,size_t count);
+    bool elevationKnown() const noexcept {return !grade_.empty();}
+    size_t slopeCount() const noexcept {return slopes_.size();}
+    // Where the profile covers the line (m along it); 0,0 without one.
+    double elevationStart() const noexcept {return grade_.empty()?0:gradeStart_;}
+    double elevationEnd() const noexcept {return grade_.empty()?0:gradeStart_+double(grade_.size()-1)*10;}
+    // Where the road will be `seconds` of driving ahead (at least 15 m, at most 120 m along the
+    // line): its direction from the car, radians, + left of the line's heading at the car. NaN
+    // unless matched within the last 2.5 s. Aims the detector's zoomed views into bends.
+    double aim(double now,double seconds) const noexcept;
+    // The car's distance along the line at its last matched fix (m).
+    double progress() const noexcept {return progress_;}
+    bool matched() const noexcept {return matched_;}
 private:
     struct Point {double x{},y{},s{};};
     struct Bend {double s{},angle{};uint64_t id{};};
     Point at(double s) const noexcept;
     double heading(double s) const noexcept;
+    double gradeAt(double s) const noexcept;
+    struct Slope {double start{},end{},grade{},steepest{};uint64_t id{};};
+    std::vector<double> grade_;double gradeStart_{};
+    std::vector<Slope> slopes_;uint64_t nextSlope_{};
     std::vector<Point> points_;
     std::vector<Bend> bends_;
     std::array<double,24> turns_{};size_t turnCount_{};bool turnsTruncated_{};

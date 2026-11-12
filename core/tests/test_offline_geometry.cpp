@@ -132,7 +132,27 @@ int main() {
     old=input;--old.sequence;check(!provider.update(old),"out-of-order provider sequence rejected");
     old=input;old.routeEpoch=0;++old.sequence;check(!provider.update(old),"invalid route epoch rejected");
     input.state=TurnState::rerouting;++input.sequence;provider.update(input);
-    check(provider.evaluate(12,false,false)==Prompt::none&&!provider.context(12).valid,"rerouting immediately pauses turn coaching");
+    // Rerouting starts nothing new. The turn is carried for 2.5 s so a sentence about it can finish
+    // (Google's feed blinks to "rerouting" even when it only refreshes the route), then it is gone.
+    check(provider.evaluate(12,false,false)==Prompt::none&&provider.context(12).held&&!provider.context(14.6).valid,"rerouting must start nothing and end turn coaching within seconds");
+    {   // The same turn under a refreshed route stays the same turn; a different turn does not.
+        ProviderTurnCoach p;TurnInput in{1,900,1,1,100,TurnState::navigating,7,TurnKind::left,120,12};
+        check(p.update(in),"refresh fixture");p.fix(fixAt(100)); // 45 km/h measured
+        const auto first=p.context(100).featureId;const auto epoch=p.epoch();
+        in.state=TurnState::rerouting;in.step=-1;in.kind=TurnKind::unknown;in.receivedAt=101;++in.sequence;check(p.update(in),"blink");
+        check(p.context(101).valid&&p.context(101).held&&p.context(101).featureId==first&&std::abs(p.context(101).distanceM-120)<1e-9&&!p.rerouted(101),"the turn was dropped during a rerouting blink");
+        in.state=TurnState::navigating;in.routeEpoch=2;in.step=0;in.kind=TurnKind::left;in.remainingM=103;in.receivedAt=101.5;++in.sequence;check(p.update(in),"refreshed");
+        check(p.context(101.5).featureId==first&&p.epoch()==epoch&&!p.context(101.5).held&&!p.rerouted(101.5),"a refreshed route made the same turn a new one");
+        // A real reroute: another manoeuvre, or the same kind much further on.
+        in.routeEpoch=3;in.kind=TurnKind::right;in.remainingM=300;in.receivedAt=103;++in.sequence;check(p.update(in),"rerouted");
+        check(p.context(103).featureId!=first&&p.epoch()==3&&p.rerouted(103)&&p.rerouted(107)&&!p.rerouted(112),"a reroute onto another turn was not a new turn, or not announced for a few seconds");
+        const auto second=p.context(103).featureId;
+        in.routeEpoch=4;in.remainingM=700;in.receivedAt=104;++in.sequence;
+        check(p.update(in)&&p.context(104).featureId!=second&&p.rerouted(104),"the same kind of turn 400 m further on was taken for the same turn");
+        // Ordinary progress along one route: the next step is a new turn, however close.
+        const auto third=p.context(104).featureId;in.step=1;in.remainingM=20;in.receivedAt=105;++in.sequence;
+        check(p.update(in)&&p.context(105).featureId!=third,"the next step was taken for the same turn");
+    }
     input.state=TurnState::navigating;input.routeEpoch=2;input.step=0;++input.sequence;
     check(provider.update(input)&&provider.evaluate(12,false,false)==Prompt::mapRightTurn,"new route epoch safely restarts step numbering");
     old=input;old.routeEpoch=1;++old.sequence;check(!provider.update(old),"older route revision rejected despite newer sequence");
@@ -164,9 +184,11 @@ int main() {
     ProviderTurnCoach clocks;
     input.session=200;input.routeEpoch=1;input.sequence=1;input.receivedAt=2;input.remainingM=150;input.remainingSeconds=14;
     clocks.update(input);clocks.fix(fixAt(1));clocks.fix(fixAt(2));clocks.fix(fixAt(5));
-    check(!clocks.context(5.01).valid,"fresh measured GPS cannot conceal a stale provider feed");
+    // Since 0.7.9 Google's turn stands on Google's own positioning for up to 5 s (dead-reckoned by
+    // the measured speed); our own GPS fix gates only the legacy one-shot prompt.
+    check(clocks.context(5.01).valid&&!clocks.context(7.01).valid,"fresh measured GPS cannot conceal a stale provider feed");
     input.receivedAt=8;++input.sequence;clocks.update(input);
-    check(!clocks.context(8).valid,"fresh provider receipt cannot conceal stale measured GPS");
+    check(clocks.context(8).valid&&clocks.evaluate(8,false,false)==Prompt::none,"fresh provider receipt cannot conceal stale measured GPS from the one-shot prompt");
     clocks.fix(fixAt(8));clocks.fix(fixAt(9));input.receivedAt=9;++input.sequence;clocks.update(input);
     check(clocks.context(9).valid,"independent clocks recover when both fresh");
     input.state=TurnState::stopped;++input.sequence;clocks.update(input);

@@ -24,6 +24,8 @@ struct MacroContext {
     // Unknown unless independently populated from current, applicable map tags.
     double approachSpeedLimitKmh=infinity;
     bool valid{};
+    // The provider's turn is being carried through a brief gap in its feed (see ProviderTurnCoach).
+    bool held{};
     int maneuverType{},maneuverShapeIndex=-1;
     double maneuverDistanceM=infinity;
     double gpsSpeedKmh=infinity,speedAccuracyMps=infinity,horizontalAccuracyM=infinity;
@@ -84,11 +86,23 @@ public:
     void invalidateFix() noexcept;
     bool fix(const Fix&) noexcept;
     bool active() const noexcept {return active_;}
-    TurnKind kind() const noexcept {return input_.kind;}
+    // The turn being coached: the latest "navigating" update. Google's feed blinks to "rerouting"
+    // whenever it replaces the route, even when only refreshing it for traffic, and the turn then
+    // comes back under a new route epoch (and sometimes a new step number). The turn is kept for
+    // turnHoldSeconds through such a blink, and the same manoeuvre at the distance the previous
+    // one had reached is the same turn: its instructions are not started over.
+    TurnKind kind() const noexcept {return turn_.kind;}
     // Google is finding a new route (fresh feed only).
     bool rerouting(double now) const noexcept {return active_&&available_&&std::isfinite(now)&&now>=input_.receivedAt&&now-input_.receivedAt<=5&&input_.state==TurnState::rerouting;}
-    double receivedAt() const noexcept {return input_.receivedAt;}
-    double remainingM() const noexcept {return input_.remainingM;}
+    // Google has replaced the route and the turn ahead is a different one (for a few seconds).
+    bool rerouted(double now) const noexcept {return active_&&available_&&std::isfinite(now)&&now>=routeChangedAt_&&now-routeChangedAt_<=routeChangedSeconds;}
+    // When the coached turn's distance was received, its time to the turn, and the route epoch it
+    // was first seen under (stable while it stays the same turn).
+    double receivedAt() const noexcept {return turn_.receivedAt;}
+    double remainingM() const noexcept {return turn_.remainingM;}
+    double remainingSeconds() const noexcept {return turn_.remainingSeconds;}
+    uint64_t epoch() const noexcept {return eventEpoch_;}
+    static constexpr double turnHoldSeconds=2.5,routeChangedSeconds=8;
     MacroContext context(double now) const noexcept;
     // The provider says the learner is pulling up at the destination (fresh feed only).
     bool arriving(double now) const noexcept;
@@ -96,9 +110,10 @@ public:
     void accepted(double now) noexcept;
     const char* status(double now) const noexcept;
 private:
-    TurnInput input_{};
+    TurnInput input_{},turn_{};
     Fix fix_{};
-    uint64_t eventId_{};
+    uint64_t eventId_{},eventEpoch_{};
+    double routeChangedAt_=-infinity;
     bool active_{},retired_{},available_{};
     uint64_t acceptedSession_{},acceptedEpoch_{};
     int acceptedStep_=-1,highestStep_=-1;

@@ -16,7 +16,9 @@ int main(){
             const double speed=scenario==1?std::max(12.,30-std::max(0.,t-2)*1.0):30;
             WorldState w;w.sourceId=1;w.frameSequence=i+1;w.now=w.captureTime=t;w.active=true;
             w.telemetry={t,speed,0,0,1,true,true,true,false,false,false};
-            if(seconds>=0)w.route={17,9,2,t,seconds*speed/3.6,seconds,scenario==3&&t>=3?1:t,4,true,true};
+            // A junction the app found on the map itself: steps by time (act-by). Google's turns go
+            // by Google's distance and are covered by the drive-coach and C API tests.
+            if(seconds>=0)w.route={17,9,2,t,seconds*speed/3.6,seconds,scenario==3&&t>=3?1:t,4,true,false};
             const auto d=e->decide(w,i+1);
             const int prompt=d.eligible?int(d.ticket.candidate.prompt):0;
             const bool accepted=prompt&&e->accept(i+1,prompt,w,t,false);if(accepted)++deliveries;

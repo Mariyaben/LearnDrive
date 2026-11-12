@@ -20,7 +20,8 @@ const GearBands defaultBands{};
 }
 void ControlCoach::reset() noexcept {
     gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=lastBendCue_=-1;stopCued_=moveOffCued_=lastBendRight_=false;
-    lastQuietEvent_=lastBump_=lastBend_=0;active_={};
+    hillAt_=-1;hillSign_=0;hillSteep_=false;
+    lastQuietEvent_=lastBump_=lastBend_=lastSlope_=0;active_={};
 }
 void ControlCoach::propose(int prompt,double now,double seconds) noexcept {
     if(prompt<=0||prompt>promptCount)return;
@@ -64,8 +65,11 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
         turned_=0;turnMeasured_=reroutedInTurn_=false;
     } else if(!j.quietEvent&&exitAt_<0){turned_=0;turnMeasured_=reroutedInTurn_=false;}
     // Google found a new route while driving: say so once, calmly (the next turn comes as usual).
-    if(!w.rerouting)routeChangeCued_=false;
-    else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,5);}
+    // Only once the new route is there and its next turn is a different one: Google's feed also
+    // blinks to "rerouting" when it merely refreshes the same route. The fact stands for a few
+    // seconds, so the sentence can wait its turn (on Nov 8 the blink was over before it could be said).
+    if(!w.routeChanged)routeChangeCued_=false;
+    else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,6);}
     // Stopping and moving off.
     if(v<=2){if(stoppedSince_<0)stoppedSince_=now;}
     else stoppedSince_=-1;
@@ -125,8 +129,31 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
                 lastBendCue_=now;lastBendRight_=w.bendRight;propose(int(Prompt::bendHorn),now,4);}
         }
     }
-    // Hills: measured, calibrated phone pitch only.
-    const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
+    // Hills from the map (elevation along the route): name the slope and what to do about 7 s
+    // before it starts (9 s when the learner must slow down first; at least 40 m), so the gear is
+    // changed before the hill, not on it. First seen already on it: said once if enough is left.
+    // The next stretch of a climb or descent soon after the last (a ghat road between hairpins) is
+    // the same hill: the learner is already in its gear. Named again only if steeper, or after
+    // 45 s without one.
+    const bool mapHills=w.mapGradeKnown||w.slopeId;
+    const bool mapFresh=w.slopeId&&cognition::fresh(now,w.mapTime,2.5);
+    const int hillSign=w.slopeGrade<0?-1:1;const bool hillSteep=std::abs(w.slopeGrade)>=10;
+    if(mapFresh&&w.slopeId!=lastSlope_&&v>8&&!quiet) {
+        const auto gear=hillGear(bands_,w.slopeGrade,v);
+        if(w.slopeAheadM<=std::max(40.,(gear.brakeFirst?9:7)*v/3.6)) {
+            lastSlope_=w.slopeId;slopeSign_=hillSign;
+            const bool sameHill=hillSign==hillSign_&&hillAt_>=0&&now-hillAt_<45&&(!hillSteep||hillSteep_);
+            if(!sameHill&&(w.slopeAheadM>0||w.slopeLengthM>=60))
+                propose(int(hillSign<0?(hillSteep?Prompt::mapSteepDownhill:Prompt::mapDownhill):(hillSteep?Prompt::mapSteepUphill:Prompt::mapUphill)),now,6);
+            if(!sameHill){hillSign_=hillSign;hillSteep_=hillSteep;}
+            hillAt_=now;
+        }
+    }
+    // On the hill named (or passed over as the same hill): it carries on while the car climbs or descends it.
+    if(mapFresh&&w.slopeId==lastSlope_&&w.slopeAheadM<=0&&hillSign==hillSign_){hillAt_=now;hillSteep_|=hillSteep;}
+    // Hills from the phone's tilt: only where the route has no elevation (a sagging or fallen mount
+    // misleads it).
+    const bool pitch=!mapHills&&w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
     const int band=pitch?w.gradeBand:0;const int sign=band>=2?1:band<=-2?-1:0;
     if(!pitch||std::abs(band)<1){if(slopeClearSince_<0)slopeClearSince_=now;if(now-slopeClearSince_>=5)slopeSign_=0;}
     else slopeClearSince_=-1;
@@ -155,17 +182,32 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
     case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
-    case Prompt::routeChanged:return w.rerouting;
+    case Prompt::routeChanged:return w.routeChanged;
     case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80&&w.bendAheadM>=5;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
+    case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill: {
+        // On a fresh route fix, the same way: still ahead (within about 11 s), just begun, or
+        // with enough of it left.
+        if(v<=8||!cognition::fresh(now,w.mapTime,2.5)||!w.slopeId||!std::isfinite(w.slopeAheadM)||
+           w.slopeAheadM>std::max(60.,11*v/3.6)||(w.slopeAheadM<-30&&w.slopeLengthM<60))return false;
+        return c.prompt==Prompt::mapDownhill||c.prompt==Prompt::mapSteepDownhill?w.slopeGrade<0:w.slopeGrade>0;
+    }
     case Prompt::downhillSecond:case Prompt::downhillThird:case Prompt::uphillSecond:case Prompt::uphillThird: {
-        if(!w.telemetry.calibrated||!w.telemetry.pitchValid||!std::isfinite(w.telemetry.pitchDegrees)||v<=3)return false;
+        // The phone's measured tilt, only where the route has no elevation.
+        if(w.mapGradeKnown||!w.telemetry.calibrated||!w.telemetry.pitchValid||!std::isfinite(w.telemetry.pitchDegrees)||v<=3)return false;
         if(c.prompt==Prompt::downhillSecond)return w.gradeBand<=-3;
         if(c.prompt==Prompt::downhillThird)return w.gradeBand==-2;
         return w.gradeBand>=2;
     }
     default:return v>3; // Gear changes: moving, measured speed.
     }
+}
+ControlCoach::HillGear ControlCoach::hillGear(const GearBands& b,double grade,double v) noexcept {
+    HillGear h;if(!std::isfinite(grade)||!std::isfinite(v)||v<0)return h;
+    const int hill=std::abs(grade)>=10?2:3,speed=bandFor(b,v);
+    if(speed<=hill)return h;
+    if(grade>0){h.gear=speed-hill>=2?-1:hill;return h;}
+    h.gear=hill;h.brakeFirst=speed-hill>=2;return h;
 }
 std::string ControlCoach::json() const {
     std::ostringstream o;o<<"{\"enabled\":"<<(enabled_?"true":"false")<<",\"advised_gear_for_speed\":"<<gear_

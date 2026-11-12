@@ -68,59 +68,108 @@ Transform preprocess(const YuvFrame& f,int size,void* tensor,size_t capacity,int
     }
     return tr;
 }
+namespace {
+// One output pixel: the source pixel at (fx,fy) of the upright frame, or for a downscaled view
+// (`step` > 1.5 source pixels per output pixel) the mean luminance of the 2x2 source pixels at the
+// footprint's centre: a cheap box filter that removes the finest detail (one-pixel stripes, wires,
+// railings), which nearest-neighbour sampling turns into noise. Chroma from the centre.
+void writePixel(const YuvFrame& f,const Transform& tr,float fx,float fy,float step,void* tensor,int size,int x,int y,int dtype,int layout,float qs,int zp) {
+    float rgb[3]={114,114,114};
+    if(fx>=0&&fy>=0&&fx<tr.width&&fy<tr.height) {
+        auto xy=source(f,std::min(int(fx),tr.width-1),std::min(int(fy),tr.height-1));
+        float Y=read(f.y,xy[0],xy[1]);
+        if(step>1.5f) {
+            const float d=.5f;float sum=0;
+            for(float oy:{-d,d})for(float ox:{-d,d}) {
+                const auto q=source(f,std::clamp(int(fx+ox),0,tr.width-1),std::clamp(int(fy+oy),0,tr.height-1));
+                sum+=read(f.y,q[0],q[1]);
+            }
+            Y=sum*.25f;
+        }
+        float U=read(f.u,xy[0]/2,xy[1]/2)-128.f,V=read(f.v,xy[0]/2,xy[1]/2)-128.f;
+        if(f.fullRange){rgb[0]=Y+1.402f*V;rgb[1]=Y-.344136f*U-.714136f*V;rgb[2]=Y+1.772f*U;}
+        else {Y=1.164383f*(Y-16);rgb[0]=Y+1.596027f*V;rgb[1]=Y-.391762f*U-.812968f*V;rgb[2]=Y+2.017232f*U;}
+    }
+    for(int c=0;c<3;++c) {
+        float value=std::clamp(rgb[c],0.f,255.f)/255;
+        size_t i=layout==0?(size_t(y)*size+x)*3+c:size_t(c)*size*size+y*size+x;
+        if(dtype==0) static_cast<float*>(tensor)[i]=value;
+        else { int q=int(std::round(value/qs))+zp;
+            if(dtype==1) static_cast<uint8_t*>(tensor)[i]=uint8_t(std::clamp(q,0,255));
+            else static_cast<int8_t*>(tensor)[i]=int8_t(std::clamp(q,-128,127)); }
+    }
+}
+}
 Transform preprocessMosaic(const YuvFrame& f,int size,void* tensor,size_t capacity,int dtype,int layout,float qs,int zp,Gray* gray,float horizon,Mosaic& m) {
+    MosaicPlan plan;plan.horizon=horizon;plan.above=.5f;plan.views=1;plan.zoom[0]=2;plan.aim[0]=.5f;plan.smooth=false;
+    return preprocessMosaic(f,size,tensor,capacity,dtype,layout,qs,zp,gray,plan,m);
+}
+Transform preprocessMosaic(const YuvFrame& f,int size,void* tensor,size_t capacity,int dtype,int layout,float qs,int zp,Gray* gray,const MosaicPlan& p,Mosaic& m) {
     m={};
     if(f.width<=0||f.height<=0||size<=0||size>1024||!tensor||dtype<0||dtype>2||layout<0||layout>1||
        (f.rotation!=0&&f.rotation!=90&&f.rotation!=180&&f.rotation!=270)||
        (dtype!=0&&(!std::isfinite(qs)||qs<=0))||capacity<size_t(size)*size*3*(dtype==0?4:1)) throw std::invalid_argument("invalid preprocessing arguments");
     const bool swap=f.rotation==90||f.rotation==270;
     Transform tr{swap?f.height:f.width,swap?f.width:f.height,size,0,0,0};
-    const float h=std::isfinite(horizon)?std::clamp(horizon,.2f,.85f):.5f;
+    const float h=std::isfinite(p.horizon)?std::clamp(p.horizon,.05f,.95f):.5f;
+    const float above=std::isfinite(p.above)?std::clamp(p.above,.2f,1.f):.5f;
     const float s=float(size)/tr.width;                          // the road band fills the width
-    // Rows more than half the height above the horizon: sky and canopy. A road user's head is
-    // that high only within ~1 m on a level road (or ~3 m for someone on a raised verandah);
-    // the road band always keeps at least half the image.
-    const float cropY=std::clamp((h-.50f)*tr.height,0.f,std::max(0.f,tr.height-size*.5f/s));
-    const int band=int(std::ceil((tr.height-cropY)*s)),separator=4,strip=size-band-separator;
-    if(tr.width<tr.height||band<=0||strip<48)return preprocess(f,size,tensor,capacity,dtype,layout,qs,zp,gray);
+    int wanted=std::clamp(p.views,0,2);
+    // A zoomed view must show the camera's own detail: never enlarge a frame pixel more than 1.5x
+    // (a 640-wide fallback stream gets only the 2x view, with all the spare rows).
+    if(p.smooth)while(wanted>0&&(std::isfinite(p.zoom[wanted-1])?p.zoom[wanted-1]:2.f)*s>1.5f)--wanted;
+    // Rows well above the horizon: sky and canopy. A road user's head is that high only right
+    // beside the car (0.8.0 kept half the frame height above the horizon: a road user within
+    // ~1 m; 0.35 keeps a bus top from ~9 m). The road band keeps at least 40-50 % of the image.
+    const float minBand=size*(wanted>=2?.4f:.5f);
+    const float cropY=std::clamp((h-above)*tr.height,0.f,std::max(0.f,tr.height-minBand/s));
+    const int band=int(std::ceil((tr.height-cropY)*s)),separator=4;
+    int views=wanted,spare=size-band-separator*views;
+    while(views>0&&spare<48*views){spare+=separator;--views;}   // fewer views when there is no room
+    if(tr.width<tr.height||band<=0||views==0)return preprocess(f,size,tensor,capacity,dtype,layout,qs,zp,gray);
     tr.scale=s;tr.padX=0;tr.padY=-cropY*s;
-    // Zoom band: 2x, centred across the frame, horizon 40% down it (most of a road user
-    // stands below the horizon; far ones straddle it).
-    const float zs=2*s,srcW=size/zs,srcH=strip/zs;
-    const float srcX=std::max(0.f,(tr.width-srcW)/2),srcY=std::clamp(h*tr.height-.4f*srcH,0.f,std::max(0.f,tr.height-srcH));
-    m={true,band,band+separator,srcX,srcY,zs,cropY/tr.height};
-    for(int y=0;y<size;++y) for(int x=0;x<size;++x) {
-        float fx=-1,fy=-1;
-        if(y<band){fx=(x+.5f)/s;fy=(y+.5f)/s+cropY;}
-        else if(y>=m.stripTop){fx=srcX+(x+.5f)/zs;fy=srcY+(y-m.stripTop+.5f)/zs;}
-        float rgb[3]={114,114,114};
-        if(fx>=0&&fy>=0&&fx<tr.width&&fy<tr.height) {
-            auto xy=source(f,std::min(int(fx),tr.width-1),std::min(int(fy),tr.height-1));
-            float Y=read(f.y,xy[0],xy[1]),U=read(f.u,xy[0]/2,xy[1]/2)-128.f,V=read(f.v,xy[0]/2,xy[1]/2)-128.f;
-            if(f.fullRange){rgb[0]=Y+1.402f*V;rgb[1]=Y-.344136f*U-.714136f*V;rgb[2]=Y+1.772f*U;}
-            else {Y=1.164383f*(Y-16);rgb[0]=Y+1.596027f*V;rgb[1]=Y-.391762f*U-.812968f*V;rgb[2]=Y+2.017232f*U;}
-        }
-        for(int c=0;c<3;++c) {
-            float value=std::clamp(rgb[c],0.f,255.f)/255;
-            size_t i=layout==0?(size_t(y)*size+x)*3+c:size_t(c)*size*size+y*size+x;
-            if(dtype==0) static_cast<float*>(tensor)[i]=value;
-            else { int q=int(std::round(value/qs))+zp;
-                if(dtype==1) static_cast<uint8_t*>(tensor)[i]=uint8_t(std::clamp(q,0,255));
-                else static_cast<int8_t*>(tensor)[i]=int8_t(std::clamp(q,-128,127)); }
-        }
+    m.active=true;m.bandBottom=band;m.views=views;m.visibleTop=cropY/tr.height;
+    int top=band+separator;
+    for(int k=0;k<views;++k) {
+        const int rows=k+1<views?spare/views:spare-(spare/views)*(views-1);
+        const float zs=(std::isfinite(p.zoom[k])&&p.zoom[k]>=1?p.zoom[k]:2.f)*s,srcW=size/zs,srcH=rows/zs;
+        const float centre=(std::isfinite(p.aim[k])?std::clamp(p.aim[k],0.f,1.f):.5f)*tr.width;
+        // Horizon 40 % down the view: most of a road user stands below it; far ones straddle it.
+        m.view[k]={top,rows,std::clamp(centre-srcW/2,0.f,std::max(0.f,tr.width-srcW)),
+            std::clamp(h*tr.height-.4f*srcH,0.f,std::max(0.f,tr.height-srcH)),zs};
+        top+=rows+separator;
+    }
+    for(int y=0;y<size;++y) {
+        float scale=0,fy=-1,x0=0;
+        if(y<band){scale=s;fy=(y+.5f)/s+cropY;}
+        else for(int k=0;k<views;++k)if(y>=m.view[k].top&&y<m.view[k].top+m.view[k].rows) {
+            scale=m.view[k].scale;x0=m.view[k].srcX;fy=m.view[k].srcY+(y-m.view[k].top+.5f)/scale;}
+        const float step=p.smooth&&scale>0&&scale<.75f?1/scale:1;
+        for(int x=0;x<size;++x)writePixel(f,tr,scale>0?x0+(x+.5f)/scale:-1,fy,step,tensor,size,x,y,dtype,layout,qs,zp);
     }
     if(gray) { // Motion cues use the whole frame, as without the mosaic.
         gray->pixels.resize(gray->width*gray->height);
+        const float cellX=float(tr.width)/gray->width,cellY=float(tr.height)/gray->height;
+        const bool average=p.smooth&&cellX>=4&&cellY>=4;
         for(int y=0;y<gray->height;++y) for(int x=0;x<gray->width;++x) {
-            auto xy=source(f,std::min(int((x+.5)*tr.width/gray->width),tr.width-1),std::min(int((y+.5)*tr.height/gray->height),tr.height-1));
-            gray->pixels[y*gray->width+x]=read(f.y,xy[0],xy[1]);
+            if(!average) {
+                auto xy=source(f,std::min(int((x+.5)*tr.width/gray->width),tr.width-1),std::min(int((y+.5)*tr.height/gray->height),tr.height-1));
+                gray->pixels[y*gray->width+x]=read(f.y,xy[0],xy[1]);continue;
+            }
+            int sum=0;
+            for(float oy:{-.5f,.5f})for(float ox:{-.5f,.5f}) {
+                auto xy=source(f,std::clamp(int((x+.5f)*cellX+ox),0,tr.width-1),std::clamp(int((y+.5f)*cellY+oy),0,tr.height-1));
+                sum+=read(f.y,xy[0],xy[1]);
+            }
+            gray->pixels[y*gray->width+x]=uint8_t(sum/4);
         }
     }
     return tr;
 }
 void mosaicToFull(float* v,int n,bool cf,const Transform& tr,const Mosaic& m) {
     if(!m.active)return;
-    if(!v||n<=0||tr.scale<=0||m.stripScale<=0)throw std::invalid_argument("invalid mosaic merge");
+    if(!v||n<=0||tr.scale<=0||m.views<1||m.views>2)throw std::invalid_argument("invalid mosaic merge");
+    for(int k=0;k<m.views;++k)if(m.view[k].scale<=0)throw std::invalid_argument("invalid mosaic merge");
     auto at=[&](int c,int i)->float&{return v[cf?size_t(c)*n+i:size_t(i)*84+c];};
     const float edge=2;
     for(int i=0;i<n;++i) {
@@ -131,14 +180,16 @@ void mosaicToFull(float* v,int n,bool cf,const Transform& tr,const Mosaic& m) {
         if(cy<m.bandBottom&&y2<=m.bandBottom+std::max(8.f,.12f*h)) {
             const float bottom=float(m.bandBottom);at(1,i)=(y1+bottom)/2;at(3,i)=bottom-y1;continue;
         }
-        bool keep=y1>=m.stripTop-1;
+        const MosaicView* view=nullptr;
+        for(int k=0;k<m.views;++k)if(y1>=m.view[k].top-1&&y2<=m.view[k].top+m.view[k].rows+1)view=&m.view[k];
+        bool keep=view!=nullptr;
         if(keep) {
             const float x1=cx-w/2,x2=cx+w/2;
-            // Cut by the zoom band's edge: a partial object the road band covers.
-            keep=x1>edge&&x2<tr.size-edge&&y1>m.stripTop+edge&&y2<tr.size-edge;
-            // Zoom-band pixels -> frame pixels -> road-band model pixels.
-            const float fx1=m.srcX+x1/m.stripScale,fx2=m.srcX+x2/m.stripScale;
-            const float fy1=m.srcY+(y1-m.stripTop)/m.stripScale,fy2=m.srcY+(y2-m.stripTop)/m.stripScale;
+            // Cut by the view's edge: a partial object the road band (or the wider view) covers.
+            keep=x1>edge&&x2<tr.size-edge&&y1>view->top+edge&&y2<view->top+view->rows-edge;
+            // View pixels -> frame pixels -> road-band model pixels.
+            const float fx1=view->srcX+x1/view->scale,fx2=view->srcX+x2/view->scale;
+            const float fy1=view->srcY+(y1-view->top)/view->scale,fy2=view->srcY+(y2-view->top)/view->scale;
             at(0,i)=(fx1+fx2)/2*tr.scale+tr.padX;at(1,i)=(fy1+fy2)/2*tr.scale+tr.padY;
             at(2,i)=(fx2-fx1)*tr.scale;at(3,i)=(fy2-fy1)*tr.scale;
         }

@@ -55,7 +55,8 @@ int main(){try{
     test("a pothole (one side), a single jolt, a rough road, a hand-held phone and unknown speed are not bumps",[]{
         auto pothole=run(Kind::pothole,20);check(!accepted(pothole)&&pothole.size()==1&&pothole[0].reason==BumpReason::oneSided,"pothole taken as a bump");
         auto single=run(Kind::single,20);check(!accepted(single)&&single.size()==1&&single[0].reason==BumpReason::oneAxle,"single jolt taken as a bump");
-        check(!accepted(run(Kind::bump,20,1.8)),"bump on a rough road accepted");
+        // Rough by the detector's own measure: background vibration above 1.5 m/s^2 RMS (+-3 m/s^2 here).
+        check(!accepted(run(Kind::bump,20,3.)),"bump on a rough road accepted");
         auto hand=run(Kind::bump,20,.25,true);check(!accepted(hand)&&hand[0].reason==BumpReason::handled,"hand-held jolt accepted");
         auto unknown=run(Kind::bump,20,.25,false,false);check(!accepted(unknown)&&unknown[0].reason==BumpReason::speed,"bump with unknown speed accepted");
         check(run(Kind::none,20).empty(),"ordinary road vibration made an event");
@@ -150,6 +151,80 @@ int main(){try{
         std::unique_ptr<ld_engine,decltype(&ld_destroy)> next(ld_create(),ld_destroy);
         check(ld_bump_restore(next.get(),saved[0],saved[1],saved[2],int(saved[3]),int(saved[4]))&&ld_bumps_learned(next.get(),saved,10)==1,"restore failed");
         check(std::string(ld_bump_reason(4)).find("rear")!=std::string::npos,"reason text");});
+    // Elevation along a 2 km route north, sampled every 20 m like Google's Elevation API, with a
+    // metre of model noise: flat, an 8 % descent over 300 m, flat, a 12 % climb over 200 m, flat,
+    // then a gentle 4 % rise.
+    auto profile=[](double s){
+        if(s<500)return 50.;if(s<800)return 50-.08*(s-500);if(s<1200)return 26.;if(s<1400)return 26+.12*(s-1200);
+        if(s<1600)return 50.;return 50+.04*(s-1600);};
+    auto samples=[](auto height,double from,double to,double east=0){Noise n;std::vector<double> v;
+        for(double s=from;s<=to+1e-9;s+=20){v.push_back(lat(s));v.push_back(lon(east));v.push_back(height(s)+n.next());}return v;};
+    auto northLine=[]{std::vector<double> ll;for(int i=0;i<=200;++i){ll.push_back(lat(i*10.));ll.push_back(lon(0));}return ll;};
+    test("route elevation: climbs and descents are found where they start, with their grade; gentle grades and noise are not hills",[&]{
+        const auto ll=northLine();RouteLine r;check(r.load(ll.data(),ll.size()/2),"route line");
+        const auto v=samples(profile,0,2000);
+        check(r.elevation(v.data(),v.size()/3)&&r.elevationKnown()&&r.slopeCount()==2,"not exactly one descent and one climb");
+        BumpMap none;double clock=1;
+        // Three fixes at y-16, y-8, y (a jump along the line needs two consistent fixes to match again).
+        auto at=[&](double y){for(int k=2;k>=0;--k)r.fix(clock++,lat(y-8*k),lon(0),5,0,true,30);return r.ahead(clock-1,none);};
+        auto a=at(300);std::cout<<"    at 300 m: grade "<<a.gradePercent<<" %, next "<<a.slopeGradePercent<<" % in "<<a.slopeDistanceM<<" m for "<<a.slopeLengthM<<" m\n";
+        check(a.matched&&a.gradeKnown&&std::abs(a.gradePercent)<1.5,"flat road read as a slope");
+        check(a.slopeId&&a.slopeDistanceM>185&&a.slopeDistanceM<230,"descent not found where it starts");
+        check(std::abs(a.slopeGradePercent+8)<1.5&&a.slopeLengthM>250&&a.slopeLengthM<340,"descent grade or length wrong");
+        const uint64_t descent=a.slopeId;
+        a=at(600);check(a.slopeId==descent&&a.slopeDistanceM<-80&&a.slopeDistanceM>-110&&std::abs(a.gradePercent+8)<1.5,"on the descent: not reported as on it");
+        a=at(1000);std::cout<<"    at 1000 m: next "<<a.slopeGradePercent<<" % (steepest "<<a.slopeSteepestPercent<<") in "<<a.slopeDistanceM<<" m\n";
+        check(a.slopeId&&a.slopeId!=descent&&a.slopeDistanceM>180&&a.slopeDistanceM<230&&std::abs(a.slopeGradePercent-12)<2,"steep climb wrong");
+        a=at(1500);check(!a.slopeId&&!std::isfinite(a.slopeDistanceM)&&a.gradeKnown,"a gentle 4 % rise became a hill");
+        // Refreshed (the app fetched the rest of the route): the same slopes keep their ids.
+        RouteLine p;check(p.load(ll.data(),ll.size()/2),"route line");
+        const auto first=samples(profile,0,1000);check(p.elevation(first.data(),first.size()/3)&&p.slopeCount()==1,"first stretch");
+        for(int k=2;k>=0;--k)p.fix(clock++,lat(300-8*k),lon(0),5,0,true,30);const uint64_t before=p.ahead(clock-1,none).slopeId;
+        check(p.elevation(v.data(),v.size()/3)&&p.slopeCount()==2,"refresh");
+        for(int k=2;k>=0;--k)p.fix(clock++,lat(310-8*k),lon(0),5,0,true,30);check(before&&p.ahead(clock-1,none).slopeId==before,"slope id changed on refresh");
+        // Samples off the route are not this road; a new route forgets the old profile.
+        const auto aside=samples(profile,0,2000,60);check(!r.elevation(aside.data(),aside.size()/3)&&!r.elevationKnown(),"samples 60 m off the route used");
+        check(r.elevation(v.data(),v.size()/3)&&r.load(ll.data(),ll.size()/2)&&!r.elevationKnown()&&!r.slopeCount(),"new route kept the old profile");});
+    test("route line aim: where the road will be a few seconds ahead (aims the detector's zoomed views)",[&]{
+        // North 200 m, then a left curve of radius 60 m (to the west).
+        std::vector<double> ll;for(int i=0;i<=20;++i){ll.push_back(lat(i*10.));ll.push_back(lon(0));}
+        for(int i=1;i<=30;++i){const double a=i*3*pi/180;ll.push_back(lat(200+60*std::sin(a)));ll.push_back(lon(-60+60*std::cos(a)));}
+        RouteLine r;check(r.load(ll.data(),ll.size()/2),"route line");
+        check(!std::isfinite(r.aim(1,5)),"aimed before the car was matched to the line");
+        double clock=1;auto at=[&](double y){for(int k=2;k>=0;--k)r.fix(clock++,lat(y-8*k),lon(0),5,0,true,36);return clock-1;};
+        const double straight=r.aim(at(60),5);   // 10 m/s: 50 m ahead, still the straight
+        check(std::isfinite(straight)&&std::abs(straight)<.02,"a straight road aimed off-centre");
+        const double bend=r.aim(at(185),5);      // 50 m ahead is 35 m into the left curve
+        std::cout<<"    aim 50 m ahead: straight "<<straight*180/pi<<" deg, entering the left curve "<<bend*180/pi<<" deg"<<std::endl;
+        check(bend>.15&&bend<.6,"the curve ahead was not aimed to the left");
+        check(!std::isfinite(r.aim(clock+5,5)),"aimed from a stale fix");});
+    test("route elevation: a bridge over a river (the ground model dips under the deck) is not a descent and a climb",[&]{
+        const auto ll=northLine();RouteLine r;check(r.load(ll.data(),ll.size()/2),"route line");
+        // The banks fall 8 m to the water in 40 m, 160 m of river, and rise again.
+        auto river=[](double s){if(s<400)return 30.;if(s<440)return 30-.2*(s-400);if(s<600)return 22.;if(s<640)return 22+.2*(s-600);return 30.;};
+        const auto v=samples(river,0,1500);check(r.elevation(v.data(),v.size()/3)&&r.slopeCount()==0,"bridge read as hills");
+        // The same descent that stays down is a real descent.
+        auto valley=[](double s){if(s<400)return 30.;if(s<500)return 30-.1*(s-400);return 20.;};
+        const auto d=samples(valley,0,1500);check(r.elevation(d.data(),d.size()/3)&&r.slopeCount()==1,"real descent dropped");
+        // A clump of trees or a building in a radar terrain model: 9 m up and down again within 140 m.
+        auto trees=[](double s){const double x=s-600;return 30+(x>-70&&x<70?9*(1-std::abs(x)/70):0);};
+        const auto c=samples(trees,0,1500);check(r.elevation(c.data(),c.size()/3)&&r.slopeCount()==0,"trees read as a hill");
+        // A real hill: 8 % up for 200 m, 300 m along the top, 8 % down for 200 m.
+        auto hill=[](double s){if(s<400)return 30.;if(s<600)return 30+.08*(s-400);if(s<900)return 46.;if(s<1100)return 46-.08*(s-900);return 30.;};
+        const auto k=samples(hill,0,1500);check(r.elevation(k.data(),k.size()/3)&&r.slopeCount()==2,"a real hill's climb and descent not both found");});
+    test("C API: the map's grade and the next hill along Google's route",[&]{
+        std::unique_ptr<ld_engine,decltype(&ld_destroy)> e(ld_create(),ld_destroy);
+        check(ld_guidance_begin(e.get(),1,LD_SOURCE_CAMERA,0),"camera source");
+        const auto ll=northLine();check(ld_route_line(e.get(),ll.data(),ll.size()/2),"route line");
+        const auto v=samples(profile,0,2000);check(ld_route_elevation(e.get(),v.data(),v.size()/3)==1,"elevation");
+        double cover[4]{};ld_route_elevation_cover(e.get(),cover);std::cout<<"    covers "<<cover[0]<<"-"<<cover[1]<<" m, car "<<cover[2]<<", hills "<<cover[3]<<std::endl;
+        check(cover[0]<1&&cover[1]>1980&&cover[2]==-1&&cover[3]==2,"coverage");
+        double out[16]{};
+        for(int k=0;k<4;++k){const double t=1+k;ld_gps(e.get(),t,30/3.6,.5);ld_navigation_fix(e.get(),1,t,lat(276+8*k),lon(0),5,30,.5,1,0,1);}
+        check(ld_road_knowledge(e.get(),4,out,16)&&out[1]==1&&out[10]==1&&std::abs(out[11])<1.5,"grade here");
+        check(out[12]>180&&out[12]<230&&std::abs(out[13]+8)<1.5&&out[14]>250&&out[15]==2,"next hill");
+        ld_route_elevation_cover(e.get(),cover);check(std::abs(cover[2]-300)<5,"progress");
+        check(!ld_route_elevation(e.get(),nullptr,0)&&ld_road_knowledge(e.get(),4,out,16)&&out[10]==0&&!std::isfinite(out[12]),"cleared profile still used");});
     test("the road walked by the scout carries learned bumps (no destination)",[]{
         JunctionScout s;
         const int64_t ids[]={1,2,3};const double ll[]={lat(0),lon(0),lat(200),lon(0),lat(400),lon(0)};check(s.addWay(1,6,ids,ll,3),"road");

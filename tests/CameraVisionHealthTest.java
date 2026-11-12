@@ -20,13 +20,27 @@ public final class CameraVisionHealthTest {
             check(CameraVisionHealth.shouldAnalyze(10.21,10,3), "severe heat starves the 350 ms coaching gate");
             // Detector cadence plus inference must stay inside the native capture-age gate.
             check(CameraVisionHealth.intervalSeconds(3)+.1<RoadCoachingStatus.MAX_CAPTURE_AGE_SECONDS, "severe heat makes evidence stale");
-            check(CameraVisionHealth.spatialAllowed(0)&&CameraVisionHealth.spatialAllowed(1), "cool phone loses spatial inference");
-            check(!CameraVisionHealth.spatialAllowed(2)&&!CameraVisionHealth.spatialAllowed(3), "heat keeps the optional spatial model");
+            // The optional distance model (~1 core on the S24 Ultra) runs only while the phone is cool.
+            check(CameraVisionHealth.spatialAllowed(0), "cool phone loses spatial inference");
+            for (int state=1;state<=6;state++) check(!CameraVisionHealth.spatialAllowed(state), "heat keeps the optional spatial model");
+            // Fewer camera frames once the phone is warm; the detector needs at most 8 a second.
+            check(CameraVisionHealth.cameraFpsCap(0)==30&&CameraVisionHealth.cameraFpsCap(1)==30, "cool phone loses its frame rate");
+            for (int state=2;state<=6;state++) check(CameraVisionHealth.cameraFpsCap(state)==15, "hot phone keeps 30 frames a second");
+            check(CameraVisionHealth.intervalSeconds(0)>=1.0/20, "cool phone runs the spatial model above its 20 Hz design rate");
             check(CameraVisionHealth.zoomAllowed(0,null)&&CameraVisionHealth.zoomAllowed(0,30.0), "cool, fast phone loses the zoom pass");
             check(!CameraVisionHealth.zoomAllowed(1,30.0)&&!CameraVisionHealth.zoomAllowed(0,80.0), "zoom pass runs under heat or on a slow detector");
         });
-        test("critical heat pauses and cooling restores analysis", () -> {
-            for (int state=4;state<=6;state++) {
+        test("critical heat keeps the road-user detector alive, inside the coaching freshness gate", () -> {
+            // Nov 8: "critical" from 15:11 silenced camera coaching for the rest of the drive.
+            check(!CameraVisionHealth.paused(4)&&Double.isFinite(CameraVisionHealth.intervalSeconds(4)), "critical heat stops detection");
+            check(CameraVisionHealth.intervalSeconds(4)>CameraVisionHealth.intervalSeconds(3), "critical heat does not reduce workload further");
+            check(CameraVisionHealth.intervalSeconds(4)+.1<RoadCoachingStatus.MAX_CAPTURE_AGE_SECONDS, "critical heat makes evidence stale");
+            check(CameraVisionHealth.shouldAnalyze(10.21,10,4)&&!CameraVisionHealth.shouldAnalyze(10.15,10,4), "critical cadence wrong");
+            check(CameraVisionHealth.canDisplay(11,10.8,10.9,4,null), "critical heat hides current boxes");
+            check(status(11,10.8,10.9,4,null,false).contains("very hot"), "reduced critical-heat detection is not labelled");
+        });
+        test("emergency heat pauses and cooling restores analysis", () -> {
+            for (int state=5;state<=6;state++) {
                 check(!CameraVisionHealth.shouldAnalyze(30,10,state), "critical heat still schedules inference");
                 check(!CameraVisionHealth.canDisplay(11,10.8,10.9,state,null), "thermal pause shows old boxes");
                 check(status(11,10.8,10.9,state,null,false).contains("paused"), "thermal pause is hidden");

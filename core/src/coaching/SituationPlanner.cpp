@@ -71,9 +71,10 @@ void navigation(const WorldState& w,int step,double v,Plan& plan) noexcept {
 int order(F f) noexcept {
     switch(f){case F::brakeNow:return 0;case F::brakeGently:return 1;case F::stopAndWait:return 2;case F::readyToStop:return 3;
     case F::clutchDown:return 4;case F::holdBrake:return 5;case F::keepLeft:return 6;case F::easeOff:return 7;case F::downSecond:return 8;
-    case F::downThird:return 9;case F::coverBrake:return 10;case F::giveSpace:return 11;case F::safeGap:return 12;case F::letThemPass:return 13;
+    case F::downThird:case F::downOneGear:return 9;case F::coverBrake:return 10;case F::giveSpace:return 11;case F::safeGap:return 12;case F::letThemPass:return 13;
     case F::checkMirrors:return 14;case F::signalLeft:return 15;case F::signalRight:return 16;case F::lookBothWays:return 17;
-    case F::soundHorn:return 18;case F::steadyAccelerator:return 19;case F::laneCentre:return 20;default:return 21;}
+    case F::soundHorn:return 18;case F::steadyAccelerator:return 19;case F::laneCentre:return 20;
+    case F::noNeutral:return 21;case F::controlSpeedBrake:return 22;default:return 23;}
 }
 F actorContext(const ActorRisk& r) noexcept {
     const int c=r.category;const bool person=c==0,two=c==1||c==3,truck=c==7,bus=c==5;
@@ -85,8 +86,24 @@ F actorContext(const ActorRisk& r) noexcept {
     default:return F::none;
     }
 }
+bool isSlopeContext(F f) noexcept {return (int(f)>=1&&int(f)<=3)||isSlopeAheadFragment(f);}
+// A climb or descent from the route's elevation: named ahead (or "Downhill." once on it), then what
+// to do at this speed: slow down first when far too fast for the hill's gear, the gear, and how to
+// drive it (in gear with the brake down, a steady accelerator up).
+void mapHill(Prompt p,double v,const WorldState& w,const GearBands& bands,Plan& plan) noexcept {
+    const bool down=p==Prompt::mapDownhill||p==Prompt::mapSteepDownhill,steep=p==Prompt::mapSteepDownhill||p==Prompt::mapSteepUphill;
+    const bool on=std::isfinite(w.slopeAheadM)&&w.slopeAheadM<=0;
+    plan.ctx(down?(on?(steep?F::steepDownhill:F::downhill):(steep?F::steepDownhillAhead:F::downhillAhead))
+                 :(on?F::uphill:(steep?F::steepUphillAhead:F::uphillAhead)));
+    const double grade=w.slopeId&&(w.slopeGrade<0)==down?w.slopeGrade:(down?-1:1)*(steep?10:6);
+    const auto g=v>=0?ControlCoach::hillGear(bands,grade,v):ControlCoach::HillGear{};
+    if(g.brakeFirst)plan.act(F::brakeGently);
+    if(g.gear==2)plan.act(F::downSecond);else if(g.gear==3)plan.act(F::downThird);else if(g.gear<0)plan.act(F::downOneGear);
+    if(!down)plan.act(F::steadyAccelerator);
+    else if(!g.brakeFirst){if(!g.gear)plan.act(F::noNeutral);plan.act(F::controlSpeedBrake);}
+}
 // What each recorded instruction asks the learner to do.
-bool actions(Prompt p,double v,Plan& plan) noexcept {
+bool actions(Prompt p,double v,const WorldState& w,const GearBands& bands,Plan& plan) noexcept {
     switch(p) {
     case Prompt::junctionPlanLeft:plan.ctx(F::leftTurnAhead);plan.act(F::checkMirrors);plan.act(F::signalLeft);return true;
     case Prompt::junctionPlanRight:plan.ctx(F::rightTurnAhead);plan.act(F::checkMirrors);plan.act(F::signalRight);return true;
@@ -100,10 +117,11 @@ bool actions(Prompt p,double v,Plan& plan) noexcept {
     case Prompt::clutchHoldBrake:plan.act(F::clutchDown);plan.act(F::holdBrake);return true;
     case Prompt::gearDownSecond:plan.act(F::downSecond);return true;
     case Prompt::gearDownThird:plan.act(F::downThird);return true;
-    case Prompt::downhillThird:plan.ctx(F::downhill);plan.act(F::downThird);return true;
-    case Prompt::downhillSecond:plan.ctx(F::steepDownhill);plan.act(F::downSecond);return true;
+    case Prompt::downhillThird:plan.ctx(F::downhill);if(ControlCoach::hillGear(bands,-6,v).brakeFirst)plan.act(F::brakeGently);plan.act(F::downThird);return true;
+    case Prompt::downhillSecond:plan.ctx(F::steepDownhill);if(ControlCoach::hillGear(bands,-10,v).brakeFirst)plan.act(F::brakeGently);plan.act(F::downSecond);return true;
     case Prompt::uphillSecond:plan.ctx(F::uphill);plan.act(F::downSecond);plan.act(F::steadyAccelerator);return true;
     case Prompt::uphillThird:plan.ctx(F::uphill);plan.act(F::downThird);plan.act(F::steadyAccelerator);return true;
+    case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill:mapHill(p,v,w,bands,plan);return true;
     case Prompt::vehicleCrossingWait:if(v>=0&&v<=15)plan.act(F::stopAndWait);else{plan.act(F::brakeGently);plan.act(F::readyToStop);}plan.act(F::letThemPass);return true;
     case Prompt::personCrossingStop:plan.act(F::stopAndWait);plan.act(F::letThemPass);return true;
     case Prompt::oncomingKeepLeft:plan.act(F::keepLeft);plan.act(F::easeOff);return true;
@@ -122,7 +140,7 @@ Prompt equivalent(const ActorRisk& r) noexcept {
     default:return r.category==0?Prompt::personEaseCover:(r.category==1||r.category==3)?Prompt::riderEaseCover:Prompt::vehicleEaseGap;}
 }
 }
-bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const RiskCoach& risk,const TaskCoach& task,Utterance& out) noexcept {
+bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const RiskCoach& risk,const TaskCoach& task,const GearBands& bands,Utterance& out) noexcept {
     const bool speedKnown=w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&cognition::fresh(w.now,w.telemetry.time,.15);
     const double v=speedKnown?w.telemetry.speedKmh:-1;
     Plan plan;plan.horn=w.hornRules;
@@ -132,8 +150,33 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     // found, the recorded sentence (which names it) is spoken instead (Nov 4: a bare "Stop and
     // wait. Let them pass.").
     if(primary.origin==7&&!primaryActor)return false;
-    if(primaryActor)plan.ctx(actorContext(*primaryActor));
-    if(!actions(primary.prompt,v,plan))return false;
+    if(primaryActor) {
+        // Who it is about. If this road user's conflict is not classified at this instant (its
+        // sentence was chosen a moment ago), the instruction itself says what kind it is: a
+        // road-user sentence never goes out without its subject (Nov 8: "Ease off the accelerator.
+        // Give them space." and "Brake gently. Be ready to stop.").
+        F who=actorContext(*primaryActor);
+        if(who==F::none) {
+            const int c=primaryActor->category;const bool person=c==0,two=c==1||c==3,truck=c==7,bus=c==5;
+            switch(primary.prompt) {
+            case Prompt::oncomingKeepLeft:who=truck?F::oncomingTruck:bus?F::oncomingBus:two?F::oncomingTwoWheeler:F::oncomingVehicle;break;
+            case Prompt::personLeftSpace:who=F::personLeft;break;
+            case Prompt::personRightSpace:who=F::personRight;break;
+            case Prompt::personCrossingStop:who=F::personCrossing;break;
+            case Prompt::vehicleCrossingWait:who=F::vehicleCrossing;break;
+            case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::personEaseCover:case Prompt::riderEaseCover:case Prompt::vehicleEaseGap:
+                who=person?F::personAhead:two?F::twoWheelerAhead:truck?F::truckAhead:F::vehicleAhead;break;
+            default:break;
+            }
+        }
+        plan.ctx(who);
+    }
+    if(!actions(primary.prompt,v,w,bands,plan))return false;
+    // "You first": the learner's measured speed shows the slowing is already done, so that part
+    // is left out. What speed cannot show (keeping left, giving space, covering the brake, being
+    // ready to stop, the horn) is still said: "Oncoming bus. Keep left."
+    const bool brief=primary.brief&&primaryActor&&!primary.urgent;
+    if(brief){plan.drop(F::easeOff);plan.drop(F::brakeGently);}
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
     // Indian road practice the recorded sentence does not say: sound the horn when entering
     // a junction and before passing a person or two-wheeler at the road edge.
@@ -144,14 +187,21 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         plan.act(F::soundHorn);
     const bool urgent=primary.urgent;
     int priorityMax=priority(primary.prompt);
+    // Braking for a person or two-wheeler in the path outranks a "keep left" or "give space"
+    // sentence about someone else: it may take over, and is not taken over by one.
+    if(primaryActor&&primaryActor->kind==RiskKind::InPath&&primaryActor->level>=2&&
+       (primaryActor->category==0||primaryActor->category==1||primaryActor->category==3))priorityMax=std::max(priorityMax,5);
     primary.alsoCount=0;
     auto absorb=[&](const Identity& id,Prompt p,EventKind kind,int step=0,uint64_t epoch=0){if(primary.alsoCount<primary.also.size()){
         primary.also[primary.alsoCount]=id;primary.alsoPrompt[primary.alsoCount]=p;primary.alsoKind[primary.alsoCount]=kind;
         primary.alsoStep[primary.alsoCount]=step;primary.alsoEpoch[primary.alsoCount]=epoch;++primary.alsoCount;}
         priorityMax=std::max(priorityMax,priority(p));};
     // 2. The slope changes what stopping needs: engine braking downhill, holding uphill.
-    const bool pitch=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
-    const int band=pitch?w.gradeBand:0;
+    // The slope here: the route's elevation, else the phone's measured tilt. Not again when the
+    // instruction is itself about a slope.
+    const bool pitch=w.mapGradeKnown||(w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees));
+    bool slopeSaid=false;for(size_t i=0;i<plan.contexts;++i)slopeSaid|=isSlopeContext(plan.context[i]);
+    const int band=pitch&&!slopeSaid?w.gradeBand:0;
     const bool braking=plan.has(F::brakeGently)||plan.has(F::brakeNow)||plan.has(F::readyToStop)||plan.has(F::stopAndWait);
     if(band<=-2) {
         plan.ctx(band<=-3?F::steepDownhill:F::downhill);
@@ -164,8 +214,10 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         // 3. Other valid instructions true at this moment (gear/slope advice).
         for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){const auto& c=w.candidates[i];
             if(c.identity==primary.identity||c.urgent||c.lessonStep||c.origin!=6)continue;
-            Plan probe;if(!actions(c.prompt,v,probe))continue;
-            for(size_t k=0;k<probe.contexts;++k)plan.ctx(probe.context[k]);
+            Plan probe;if(!actions(c.prompt,v,w,bands,probe))continue;
+            // One slope word: the slope here, or the one ahead.
+            bool hasSlope=false;for(size_t k=0;k<plan.contexts;++k)hasSlope|=isSlopeContext(plan.context[k]);
+            for(size_t k=0;k<probe.contexts;++k)if(!(hasSlope&&isSlopeContext(probe.context[k])))plan.ctx(probe.context[k]);
             for(size_t k=0;k<probe.actionCount;++k)plan.act(probe.actions[k]);
             absorb(c.identity,c.prompt,c.kind);}
         // 4. The next most important OTHER road user, if it needs something different.
@@ -176,7 +228,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
             if(!second||r.score>second->score)second=&r;}
         if(second) {
             plan.ctx(actorContext(*second));
-            Plan probe;actions(equivalent(*second),v,probe);
+            Plan probe;actions(equivalent(*second),v,w,bands,probe);
             for(size_t k=0;k<probe.actionCount;++k)plan.act(probe.actions[k]);
             if(const uint64_t optical=risk.opticalFor(second->id))absorb({IdentitySpace::Optical,optical,0},equivalent(*second),EventKind::Attention);
         }
@@ -185,7 +237,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         if(!primary.lessonStep&&primary.origin!=5) {
             const Candidate due=task.proposal(w);
             Plan probe;probe.horn=plan.horn;
-            if(due.lessonStep&&actions(due.prompt,v,probe)) {
+            if(due.lessonStep&&actions(due.prompt,v,w,bands,probe)) {
                 if(due.prompt==Prompt::junctionEntry)probe.act(F::soundHorn);
                 navigation(w,due.lessonStep,v,probe);
                 for(size_t k=0;k<probe.contexts;++k)plan.ctx(probe.context[k]);
@@ -204,29 +256,34 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     }
     // An urgent instruction has room for one scene word: the reason (what is there), never the
     // slope ("Downhill. Brake now." gave no reason to brake). The slope still sets the gear.
-    if(urgent&&plan.contexts>1){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);}
+    if(urgent&&plan.contexts>1){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);
+        plan.dropCtx(F::downhillAhead);plan.dropCtx(F::steepDownhillAhead);plan.dropCtx(F::uphillAhead);plan.dropCtx(F::steepUphillAhead);}
     // An urgent moment sounds different from routine advice: "Brake now", not "Brake gently".
     if(urgent&&plan.has(F::brakeGently)){plan.drop(F::brakeGently);plan.act(F::brakeNow);}
     // 6. Make the action set consistent: braking replaces easing off; one gear target.
+    // (A learner already measured slowing is not told to ease off for another road user either.)
+    if(brief)plan.drop(F::easeOff);
     if(plan.has(F::brakeNow)||plan.has(F::brakeGently)||plan.has(F::stopAndWait)){plan.drop(F::easeOff);plan.drop(F::steadyAccelerator);}
     if(plan.has(F::stopAndWait))plan.drop(F::readyToStop);
     if(plan.has(F::downSecond))plan.drop(F::downThird);
+    if(plan.has(F::downSecond)||plan.has(F::downThird))plan.drop(F::downOneGear);
     if(plan.has(F::stopAndWait)||plan.has(F::holdBrake))plan.drop(F::coverBrake);
     std::sort(plan.actions.begin(),plan.actions.begin()+plan.actionCount,[](F a,F b){return order(a)<order(b);});
     // Set the scene like an instructor: slope, then junction/bend, then road users (most important first).
-    const auto scene=[](F f){const int i=int(f);return i<=3?0:(i<=7||f==F::bumpAheadContext||isNavigationFragment(f))?1:2;};
+    const auto scene=[](F f){const int i=int(f);return i<=3||isSlopeAheadFragment(f)?0:(i<=7||f==F::bumpAheadContext||isNavigationFragment(f))?1:2;};
     std::stable_sort(plan.context.begin(),plan.context.begin()+plan.contexts,[&](F a,F b){return scene(a)<scene(b);});
     // Google's distance and maneuver come before anything else that would not fit.
     const bool navigating=plan.navigation();
     if(navigating&&plan.contexts>3){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);}
     // Composition must add something the primary recording does not already say.
-    if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor)return false;
+    // (A hill from the map is always composed: its sentence depends on the speed.)
+    if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor&&!isMapHillPrompt(primary.prompt))return false;
     // 7. Keep it speakable: urgent = what + 2 actions; otherwise <= 3 + 3 (< ~6 s).
     const size_t maxContext=urgent?1:navigating?4:3,maxActions=urgent?2:3;
     out={};
     for(size_t i=0;i<std::min(plan.contexts,maxContext);++i)out.fragments[out.count++]=int(plan.context[i]);
     for(size_t i=0;i<std::min(plan.actionCount,maxActions)&&out.count<out.fragments.size();++i)out.fragments[out.count++]=int(plan.actions[i]);
     out.priority=std::clamp(priorityMax,1,6);
-    return out.count>=2;
+    return out.count>=(brief?1u:2u);
 }
 }

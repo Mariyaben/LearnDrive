@@ -263,10 +263,50 @@ int main(){try {
         auto q=request(11);ld_guidance_result d{};check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==56,"task planning missing through C API");
         check(ld_coaching_accept(e.get(),d.sequence,d.prompt,11,0),"visual acceptance");
         check(ld_navigation_fix(e.get(),1,24,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,25,10,76,3,30,.5,1,0,1),"approach GPS fixture");
-        turn.sequence=2;turn.received_at=25;turn.estimated_remaining_m=75;turn.estimated_remaining_seconds=9;
+        // Google steps go by Google's distance (0.7.9): "brake, change down" comes at about 58 m at 30 km/h.
+        turn.sequence=2;turn.received_at=25;turn.estimated_remaining_m=55;turn.estimated_remaining_seconds=7;
         check(ld_navigation_turn_update(e.get(),&turn),"approach turn");frames.publish(e.get(),25,1,false);q=request(25);
         check(ld_guidance_decide(e.get(),&q,&d)&&d.eligible&&d.prompt==60,"task sequence missing through C API");
         ld_navigation_turn_unavailable(e.get());check(!ld_guidance_pending(e.get(),d.sequence,d.prompt,25.01),"lost provider evidence retained task ticket");
+    });
+    test("C API: a route refresh mid-junction does not start the Google turn over; a reroute is announced",[]{
+        Native e(ld_create(),ld_destroy);Frames frames;
+        check(ld_guidance_begin(e.get(),1,LD_SOURCE_CAMERA,0)&&ld_coaching_configure(e.get(),1,0,1),"configure");
+        ld_coaching_junction_lesson(e.get(),1);ld_coaching_automatic(e.get(),1);
+        ld_navigation_turn turn{1,1,2,1,11,LD_TURN_NAVIGATING,0,LD_MANEUVER_LEFT,110,13};
+        check(ld_navigation_turn_update(e.get(),&turn),"turn fixture");
+        check(ld_navigation_fix(e.get(),1,10,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,11,10,76,3,30,.5,1,0,1),"GPS fixture");frames.publish(e.get(),11,1,false);
+        auto q=request(11);ld_guidance_result d{};
+        // What is said now (the automatic coach composes its sentences), if anything.
+        const auto says=[&](const char* words){return d.eligible&&std::string(ld_prompt_text(d.prompt)).find(words)!=std::string::npos;};
+        check(ld_guidance_decide(e.get(),&q,&d)&&says("turn left")&&says("mirrors"),"preparation");
+        std::cout<<"    "<<ld_prompt_text(d.prompt)<<std::endl;
+        check(ld_coaching_accept(e.get(),d.sequence,d.prompt,11,0),"visual acceptance");
+        // Google refreshes the route: "rerouting" for a moment, then the same left turn under a new
+        // route epoch and step number, where the car has got to.
+        ld_navigation_fix(e.get(),1,12,10,76,3,30,.5,1,0,1);
+        turn.sequence=2;turn.received_at=12;turn.state=LD_TURN_REROUTING;turn.step_number=-1;turn.maneuver=LD_MANEUVER_UNKNOWN;
+        check(ld_navigation_turn_update(e.get(),&turn),"blink");frames.publish(e.get(),12,1,false);q=request(12);
+        check(ld_guidance_decide(e.get(),&q,&d)&&!d.eligible,"an instruction started during the rerouting blink");
+        turn.sequence=3;turn.received_at=12.5;turn.state=LD_TURN_NAVIGATING;turn.route_epoch=3;turn.step_number=4;turn.maneuver=LD_MANEUVER_LEFT;
+        turn.estimated_remaining_m=98;turn.estimated_remaining_seconds=12;
+        check(ld_navigation_turn_update(e.get(),&turn),"refreshed turn");frames.publish(e.get(),12.5,1,false);q=request(12.5);
+        check(ld_guidance_decide(e.get(),&q,&d)&&!d.eligible,"the turn preparation was said again after a route refresh");
+        check(ld_navigation_fix(e.get(),1,24,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,25,10,76,3,30,.5,1,0,1),"approach GPS fixture");
+        turn.sequence=4;turn.received_at=25;turn.estimated_remaining_m=55;turn.estimated_remaining_seconds=7;
+        check(ld_navigation_turn_update(e.get(),&turn),"approach turn");frames.publish(e.get(),25,1,false);q=request(25);
+        check(ld_guidance_decide(e.get(),&q,&d)&&says("turn left")&&says("Change down")&&!says("mirrors"),"the next step of the turn was lost after the route refresh");
+        std::cout<<"    "<<ld_prompt_text(d.prompt)<<std::endl;
+        check(ld_coaching_accept(e.get(),d.sequence,d.prompt,25,0),"approach acceptance");
+        // A real reroute: the next manoeuvre is now a right turn 400 m on. Said once.
+        check(ld_navigation_fix(e.get(),1,39,10,76,3,30,.5,1,0,1)&&ld_navigation_fix(e.get(),1,40,10,76,3,30,.5,1,0,1),"reroute GPS fixture");
+        turn.sequence=5;turn.received_at=40;turn.route_epoch=4;turn.step_number=0;turn.maneuver=LD_MANEUVER_RIGHT;turn.estimated_remaining_m=400;turn.estimated_remaining_seconds=48;
+        check(ld_navigation_turn_update(e.get(),&turn),"rerouted turn");
+        bool announced=false;
+        for(double t=40;t<=44&&!announced;t+=.5){frames.publish(e.get(),t,1,false);q=request(t);
+            if(ld_guidance_decide(e.get(),&q,&d)&&says("route has changed")){announced=true;std::cout<<"    "<<ld_prompt_text(d.prompt)<<std::endl;
+                check(ld_coaching_accept(e.get(),d.sequence,d.prompt,t,0),"route change acceptance");}}
+        check(announced,"the learner was not told the route had changed");
     });
     test("speech continuation never pairs an old attention box with a newer frame's clock",[]{
         // Regression from real-video replay: a frame published between rule ticks

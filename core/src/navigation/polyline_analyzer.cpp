@@ -194,11 +194,27 @@ bool ProviderTurnCoach::update(const TurnInput& next) noexcept {
     // A reroute that renumbers steps must advance the route epoch.
     if(next.session==input_.session&&next.routeEpoch==input_.routeEpoch&&
        next.state==TurnState::navigating&&next.step>=0&&next.step<highestStep_)return false;
-    const bool changed=next.session!=input_.session||next.routeEpoch!=input_.routeEpoch||
-        next.step!=input_.step||next.kind!=input_.kind;
-    if(next.session!=input_.session||next.routeEpoch!=input_.routeEpoch)highestStep_=-1;
-    if(next.state==TurnState::navigating&&next.step>=0)highestStep_=std::max(highestStep_,next.step);
-    if(changed)++eventId_;
+    const bool sameSession=next.session==input_.session;
+    if(!sameSession){turn_={};routeChangedAt_=-infinity;}
+    if(!sameSession||next.routeEpoch!=input_.routeEpoch)highestStep_=-1;
+    if(next.state==TurnState::navigating&&next.step>=0) {
+        highestStep_=std::max(highestStep_,next.step);
+        const bool had=turn_.session==next.session&&turn_.step>=0;
+        bool same=had&&next.routeEpoch==turn_.routeEpoch&&next.step==turn_.step&&next.kind==turn_.kind;
+        if(!same&&had&&next.routeEpoch!=turn_.routeEpoch) {
+            // Google replaced the route. Still the same turn if it is the same manoeuvre at the
+            // distance the previous one had reached (carried forward by the measured speed).
+            const double dt=next.receivedAt-turn_.receivedAt;
+            const double mps=fix_.speedValid&&std::isfinite(fix_.speedKmh)&&fix_.speedKmh>=0?fix_.speedKmh/3.6:0;
+            const double expected=std::max(0.,turn_.remainingM-mps*dt);
+            same=next.kind==turn_.kind&&dt>=0&&dt<=10&&std::isfinite(next.remainingM)&&std::isfinite(turn_.remainingM)&&
+                std::abs(next.remainingM-expected)<=std::max(30.,.35*std::max(expected,next.remainingM));
+            // A different turn ahead: the learner is told the route has changed.
+            if(!same)routeChangedAt_=next.receivedAt;
+        }
+        if(!same){++eventId_;eventEpoch_=next.routeEpoch;}
+        turn_=next;
+    }
     input_=next;active_=true;available_=true;retired_=false;pending_=0;return true;
 }
 void ProviderTurnCoach::clear() noexcept {
@@ -233,25 +249,31 @@ MacroContext ProviderTurnCoach::context(double now) const noexcept {
     // by the measured speed between updates, up to 5 s).
     if(!std::isfinite(now)||now<input_.receivedAt||now-input_.receivedAt>5){out.match=Match::stale;return out;}
     if(input_.state==TurnState::arrived){out.match=Match::arrived;return out;}
-    if(input_.state!=TurnState::navigating||input_.step<0)return out;
-    out.match=Match::ready;out.valid=true;
-    if(input_.kind==TurnKind::left)out.feature=Feature::leftTurn;
-    else if(input_.kind==TurnKind::right)out.feature=Feature::rightTurn;
+    const bool live=input_.state==TurnState::navigating&&input_.step>=0;
+    // "Rerouting" or no turn information for a moment: the turn is carried for a short time, so a
+    // sentence about it finishes; nothing new is started on it (see TaskCoach).
+    const bool held=!live&&(input_.state==TurnState::rerouting||input_.state==TurnState::unknown)&&
+        turn_.session==input_.session&&turn_.step>=0&&now>=turn_.receivedAt&&now-turn_.receivedAt<=turnHoldSeconds;
+    if(!live&&!held)return out;
+    out.match=Match::ready;out.valid=true;out.held=held;
+    if(turn_.kind==TurnKind::left)out.feature=Feature::leftTurn;
+    else if(turn_.kind==TurnKind::right)out.feature=Feature::rightTurn;
     // A fork, roundabout, U-turn, merge or ramp is still a junction to prepare for (look,
     // ease off, then clutch and look both ways), without a left/right signal instruction.
-    else if(input_.kind==TurnKind::fork||input_.kind==TurnKind::roundabout||input_.kind==TurnKind::uTurn||
-            input_.kind==TurnKind::merge||input_.kind==TurnKind::ramp||input_.kind==TurnKind::destination)out.feature=Feature::junction;
+    else if(turn_.kind==TurnKind::fork||turn_.kind==TurnKind::roundabout||turn_.kind==TurnKind::uTurn||
+            turn_.kind==TurnKind::merge||turn_.kind==TurnKind::ramp||turn_.kind==TurnKind::destination)out.feature=Feature::junction;
     // Provider estimates may be displayed as estimates. No shape index, bend,
     // exact-distance phrase, posted speed limit or gear can be derived here.
-    out.distanceM=out.maneuverDistanceM=input_.remainingM;
+    out.distanceM=out.maneuverDistanceM=turn_.remainingM;
     return out;
 }
 Prompt ProviderTurnCoach::evaluate(double now,bool braking,bool shock) const noexcept {
     pending_=0;const auto c=context(now);
     const bool spoken=input_.session==acceptedSession_&&input_.routeEpoch==acceptedEpoch_&&
         input_.step==acceptedStep_&&input_.kind==acceptedKind_;
-    // The legacy one-shot prompt keeps its own GPS quality requirement (the junction lesson does not).
-    if(!c.valid||consistent_<2||spoken||braking||shock||now-lastAccepted_<8||fix_.speedKmh<=3||
+    // The legacy one-shot prompt keeps its own GPS requirement, quality and freshness (the junction
+    // lesson, which coaches Google's turns in the app, does not).
+    if(!c.valid||c.held||consistent_<2||!(now>=lastFix_&&now-lastFix_<=2.5)||spoken||braking||shock||now-lastAccepted_<8||fix_.speedKmh<=3||
        !std::isfinite(input_.remainingM)||!std::isfinite(input_.remainingSeconds))return Prompt::none;
     // Provisional preparation budget: roughly three seconds of speech plus
     // learner response and estimation margin. Require both independent speed

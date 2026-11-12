@@ -78,7 +78,7 @@ size_t ObjectTracker::count(double now) const noexcept {
     size_t count=0;for(const auto& track:tracks_)if(track.used&&recent(now,track.latest.time,10))++count;return count;
 }
 void VehicleStateEstimator::beginSource(uint64_t source) noexcept {
-    source_=source;samples_={};cursor_=count_=0;latest_={};segmentStart_=lastStored_=-infinity;
+    source_=source;samples_={};cursor_=count_=0;latest_={};segmentStart_=lastStored_=changedAt_=-infinity;
 }
 ObservationResult VehicleStateEstimator::observe(uint64_t source,double capture,double speed,bool valid,double now) noexcept {
     if(!source||source!=source_||!std::isfinite(now)||!std::isfinite(capture)||capture<0||capture>now)return ObservationResult::Invalid;
@@ -87,8 +87,17 @@ ObservationResult VehicleStateEstimator::observe(uint64_t source,double capture,
     if(!recent(now,capture,maxVisionAgeSeconds))return ObservationResult::Stale;
     valid=valid&&std::isfinite(speed)&&speed>=0&&speed<=300;
     const double gap=capture-latest_.time;
-    const bool implausible=valid&&latest_.valid&&gap>0&&gap<=.5&&std::abs(speed-latest_.speed)/gap>40;
+    // More than 40 km/h per second is not driving. The rate is taken over how long the previous
+    // value had stood (0.25-1 s), not over the gap to the newest sample: measured speed is stepped
+    // (the phone's filter corrects it at each GPS fix, about once a second; a replay's readings
+    // are whole km/h twice a second), and read 30-100 times a second an ordinary 1-3 km/h step
+    // looked like 100+ km/h/s. Every step restarted the segment, so the trend was "unknown" or
+    // "steady" and never "decreasing": a learner who braked was not seen to slow (found
+    // replaying Nov 6 for "you first", 0.8.5).
+    const double stood=std::clamp(capture-changedAt_,.25,1.);
+    const bool implausible=valid&&latest_.valid&&gap>0&&gap<=.5&&std::abs(speed-latest_.speed)>40*stood;
     if(!valid||implausible||!latest_.valid||gap>.5)segmentStart_=capture;
+    if(!valid||!latest_.valid||speed!=latest_.speed)changedAt_=capture;
     latest_={capture,valid?speed:0,valid&&!implausible};
     if(capture-lastStored_>=.099999||!latest_.valid) {
         samples_[cursor_]=latest_;cursor_=(cursor_+1)%samples_.size();count_=std::min(count_+1,samples_.size());lastStored_=capture;

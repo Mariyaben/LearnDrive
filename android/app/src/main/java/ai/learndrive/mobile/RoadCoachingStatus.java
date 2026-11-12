@@ -10,7 +10,7 @@ public final class RoadCoachingStatus {
     public static boolean currentEvidence(double now, long source, long evidenceSource,
                                           double capture, double completed, boolean running,
                                           int thermal, String error) {
-        return running && thermal < 4 && error == null && source == evidenceSource &&
+        return running && !CameraVisionHealth.paused(thermal) && error == null && source == evidenceSource &&
             Double.isFinite(now) && Double.isFinite(capture) && Double.isFinite(completed) &&
             capture >= 0 && completed >= capture && now >= completed &&
             now - capture < MAX_CAPTURE_AGE_SECONDS;
@@ -35,7 +35,7 @@ public final class RoadCoachingStatus {
         if (error != null || !running)
             return new State(false, "Camera unavailable · no current road assessment",
                 "Use your instructor; camera coaching is unavailable.");
-        if (thermal >= 4)
+        if (CameraVisionHealth.paused(thermal))
             return new State(false, "Camera coaching paused · phone too hot",
                 "Keep watching the road; camera coaching is paused.");
         if (!current)
@@ -47,9 +47,12 @@ public final class RoadCoachingStatus {
         if (readiness == SpatialReadiness.MOUNT_UNSUPPORTED)
             return new State(true, "Basic detection · mount needs adjustment",
                 "Adjust the camera only when parked.");
-        String status = readiness != SpatialReadiness.READY || !spatialCurrent
-            ? "Basic detection · distance estimates unavailable"
-            : thermal >= 2 ? "Road detection active · phone warm" : "Road detection active";
+        // Under heat the optional distance model is shed first and the detector slows; say so, so
+        // a hot phone's quieter coaching is not mistaken for a quiet road.
+        String status = thermal >= 4 ? "Road users only · phone very hot"
+            : readiness != SpatialReadiness.READY || !spatialCurrent
+            ? (thermal >= 1 ? "Basic detection · phone warm, distance model off" : "Basic detection · distance estimates unavailable")
+            : thermal >= 1 ? "Road detection active · phone warm" : "Road detection active";
         return new State(true, status, "Keep scanning the road. Silence is not an all-clear.");
     }
 }

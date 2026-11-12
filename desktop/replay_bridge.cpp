@@ -75,6 +75,9 @@ EXPORT int replay_prepare(Replay* r,const uint8_t* yuv,float* tensor) {
 }
 EXPORT void replay_camera_horizon(Replay* r,double fraction){ld_camera_horizon(r->engine,fraction);}
 EXPORT void replay_camera_yaw(Replay* r,double time,double rate){ld_camera_yaw(r->engine,time,rate);}
+// Google's route line and the elevation along it, for replays of drives with a route.
+EXPORT int replay_route_line(Replay* r,const double* latLon,size_t count){return ld_route_line(r->engine,latLon,count);}
+EXPORT int replay_route_elevation(Replay* r,const double* latLonElev,size_t count){return ld_route_elevation(r->engine,latLonElev,count);}
 // The phone's audio rule: may instruction `next` interrupt the one playing (`current`)?
 EXPORT int replay_prompt_may_interrupt(int next,int current){return ld_prompt_may_interrupt(next,current);}
 // The app's detector mosaic for the frame (same YUV layout as replay_prepare); 2 = zoom band.
@@ -83,6 +86,21 @@ EXPORT int replay_prepare_mosaic(Replay* r,const uint8_t* yuv,float* tensor,doub
     return ld_preprocess_mosaic(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
         f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1,time);
 }
+// Long range (0.8.3): the layout the engine would use now (8 values), and preparing with a stored
+// one, so cached detector output is decoded with exactly the layout it was inferred on.
+EXPORT void replay_mosaic_mode(Replay* r,int mode){ld_mosaic_mode(r->engine,mode);}
+EXPORT int replay_mosaic_plan(Replay* r,double time,float* out){return ld_mosaic_plan(r->engine,time,out,8);}
+EXPORT int replay_prepare_mosaic_plan(Replay* r,const uint8_t* yuv,float* tensor,const float* plan) {
+    const auto f=r->frame(yuv);
+    return ld_preprocess_mosaic_plan(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,
+        f.v.data,f.v.size,f.v.rowStride,1,r->width,r->height,0,320,tensor,3*320*320*sizeof(float),0,1,1,0,0,1,plan,8);
+}
+// The filmed image's optics (fractions of the image): the phone's preview crop for screen recordings.
+EXPORT void replay_camera_geometry(Replay* r,double fx,double fy,double cx,double cy){ld_camera_geometry(r->engine,fx,fy,cx,cy);}
+// "You first": seed the learner's record (replays of a learner the coach already trusts) and read it back.
+EXPORT int replay_learner_restore(Replay* r,int skill,int drives,const int* outcomes,size_t count){return ld_learner_restore(r->engine,skill,drives,outcomes,count);}
+EXPORT const char* replay_learner_json(Replay* r){return ld_learner_json(r->engine);}
+EXPORT int replay_learner_hold(Replay* r,double now,double* out){return ld_learner_hold(r->engine,now,out,3);}
 EXPORT int replay_prepare_zoom(Replay* r,const uint8_t* yuv,float* tensor,float horizon) {
     const auto f=r->frame(yuv);
     return ld_preprocess_zoom(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,

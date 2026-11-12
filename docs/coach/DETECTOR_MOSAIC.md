@@ -1,5 +1,7 @@
 # Detector mosaic: seeing further ahead at no extra cost (0.8.0)
 
+> **Superseded in 0.8.3** by the long-range mosaic: 1280×960 camera frames, 2× and 4× views aimed along the road, and box geometry read through the preview crop's real optics. See [seeing road users in time](LONG_RANGE.md).
+
 ## The problem
 
 The road-user detector (YOLOv8n) sees each camera frame shrunk to 320×320. The phone's camera

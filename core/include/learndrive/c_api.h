@@ -127,6 +127,32 @@ void ld_coaching_automatic(ld_engine*,int enabled);
 // Task-aware scheduling of automatic coaching (default on); off reproduces 0.7.1.
 void ld_coaching_task_scheduling(ld_engine*,int enabled);
 const char* ld_coaching_drive_json(ld_engine*);
+// "You first" (0.8.5): the learner's measured responses to road users, per kind of situation
+// (0 people ahead, 1 two-wheelers ahead, 2 vehicles ahead, 3 oncoming traffic). Each outcome is
+// 1 slowed before the instruction (or it was not needed), 2 slowed after it, 3 no slowing seen.
+// With enough outcomes over several drives, an instruction whose slowing the learner's measured
+// speed shows is already done is shortened to what speed cannot show (level 1), then left unsaid
+// and shown on screen (level 2). A learner who has not slowed is told in full, at the same moment;
+// urgent instructions are never shortened or left unsaid. Speed only: an observation of slowing,
+// never a grade of driving. Applies to, and learns from, the road camera only (never a test video
+// or a simulation). The app stores it between drives.
+void ld_learner_waiting(ld_engine*,int enabled);
+void ld_learner_new_drive(ld_engine*);
+// out[0] = drives with an outcome, then up to 30 outcomes, oldest first. Returns values written.
+int ld_learner_outcomes(ld_engine*,int skill,int* out,size_t capacity);
+int ld_learner_restore(ld_engine*,int skill,int drives,const int* outcomes,size_t count);
+void ld_learner_forget(ld_engine*);
+// Per kind of situation: wait level (0-2), recent and this-drive tallies; plus this drive's total.
+const char* ld_learner_json(ld_engine*);
+// The road user whose instruction is left unsaid right now (decided on a camera frame within the
+// last 1.5 s): out[0] kind of situation (-1 none), out[1] 1 when the learner is measured slowing,
+// out[2] seconds since it became due. Capacity >= 3.
+int ld_learner_hold(ld_engine*,double now,double* out,size_t capacity);
+// For the after-drive review: out[0..2] this drive's outcomes over all kinds (slowed before, after,
+// no slowing seen), out[3..6] the level the record has now earned per kind (applied from the next
+// drive; the level in force is fixed when a drive begins), out[7..10] recent outcomes kept per kind.
+// Returns values written (11), 0 without room.
+int ld_learner_summary(ld_engine*,int* out,size_t capacity);
 const char* ld_coaching_task_json(ld_engine*);
 int ld_coaching_task_speech_allowed(ld_engine*);
 int ld_coaching_task_execution_quiet(ld_engine*);
@@ -160,6 +186,12 @@ int ld_route_line(ld_engine*,const double* lat_lon,size_t count);
 // Distances (m) from the car to each remaining maneuver on that route, nearest first, at `time`
 // (engine clock). Bends at a maneuver are that turn and are never announced as bends.
 void ld_route_maneuvers(ld_engine*,double time,const double* ahead_m,size_t count);
+// Elevation along the current route line: lat, lon, metres triples (Google's Elevation API sampled
+// along it). Memory only, replaced by the next call or route. Returns 1 when it covers the line.
+int ld_route_elevation(ld_engine*,const double* lat_lon_elev,size_t count);
+// out[4]: elevation covers [out0, out1] m along the line; the car is at out2 (-1 when not matched);
+// out3 climbs/descents found. Tells the app when to fetch the next stretch.
+void ld_route_elevation_cover(ld_engine*,double* out);
 // Speed bumps learned on this phone from its motion sensor (felt on two separate passes before
 // they are coached). Restore saved ones at start; read them back (5 values each: lat, lon,
 // heading, times felt, times driven over without a jolt) to save between drives.
@@ -176,6 +208,10 @@ int ld_bump_event(ld_engine*,double* out,size_t capacity);
 const char* ld_bump_reason(int reason);
 // Map knowledge in use (capacity >= 10): route line loaded, matched, bends known, bend m,
 // bend right, bump m, bump learned, learned bumps, learned bumps in use, bends on the route.
+// out[0..9]: route line loaded, matched, bends known, bend m, bend right, bump m, bump learned,
+// learned bumps, learned in use, route bends. With capacity >= 16 also: [10] map grade known,
+// [11] grade here (%), [12] m to the next climb/descent (negative: on it), [13] its grade (%),
+// [14] its length still ahead (m), [15] climbs/descents on the route.
 int ld_road_knowledge(ld_engine*,double now,double* out,size_t capacity);
 // Indian road practice (default on): horn at blind bends, junction entry and when passing.
 void ld_coaching_horn_rules(ld_engine*,int enabled);
@@ -208,6 +244,21 @@ int ld_preprocess(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint
 // geometry first, so distances are unchanged. Returns 2 with a zoom band, 1 for a plain
 // letterbox (no room), 0 on error.
 int ld_preprocess_mosaic(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,int save_gray,double time);
+// Long range (0.8.3, the default mode 2): the mosaic holds TWO zoomed views of the road ahead,
+// 2x and 4x the road band's scale, aimed where the road will be in ~2.5 s and ~5 s (route line
+// when navigating, else the turn rate). Feed a high-resolution frame (1280 wide): the 4x view
+// is then the camera's native pixels. Mode 1 restores the 0.8.0 layout (one centred 2x view).
+void ld_mosaic_mode(ld_engine*,int mode);
+// The layout ld_preprocess_mosaic would use at `time` (8 values: horizon, above, views, zoom x2,
+// aim x2, smooth), and preparing with such a stored layout (replays re-decode cached detector
+// output with exactly the layout it was inferred on).
+int ld_mosaic_plan(ld_engine*,double time,float* out,size_t capacity);
+int ld_preprocess_mosaic_plan(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,int save_gray,const float* plan,size_t count);
+// The analysed image's optics, normalized to that image after any crop and rotation: focal
+// lengths in image widths and image heights (per unit tangent) and the optical centre as
+// fractions. The horizon, ground distance, apparent-size distance and lateral offsets of road
+// users all use it. Invalid values restore the default (uncropped 4:3 frame: 0.72, 0.96, 0.5, 0.5).
+void ld_camera_geometry(ld_engine*,double fx,double fy,double cx,double cy);
 int ld_preprocess_zoom(ld_engine*,const uint8_t* y,size_t yn,int yr,int yp,const uint8_t* u,size_t un,int ur,int up,const uint8_t* v,size_t vn,int vr,int vp,int width,int height,int rotation,int size,void* tensor,size_t bytes,int dtype,int layout,float scale,int zero_point,int full_range,float horizon);
 // Merges YOLO raw output of the full frame and of the zoom (both [84,N] channel-first)
 // into [84,2N] full-frame model pixels for the usual decoding and NMS. Returns 2N or 0.

@@ -6,6 +6,7 @@
 #include "learndrive/coaching/DriveCoach.hpp"
 #include "learndrive/coaching/ControlCoach.hpp"
 #include "learndrive/coaching/RiskCoach.hpp"
+#include "learndrive/coaching/LearnerRecord.hpp"
 #include "learndrive/coaching/SituationPlanner.hpp"
 #include <array>
 #include <cstdint>
@@ -37,6 +38,9 @@ struct RouteContext {
     double captureTime=-infinity,distanceM=infinity,etaSeconds=infinity,gpsTime=-infinity;
     int feature{};
     bool valid{},provider{};
+    // Google's turn carried through a brief "rerouting" blink of its feed: started speech about it
+    // finishes, no new step starts.
+    bool held{};
     // Provider (Google) step detail: maneuver (TurnKind 1-9), side for keep/fork (-1 left,
     // +1 right), roundabout exit, and the step after this one (kind, metres after it).
     int maneuver{},side{},roundaboutExit{},nextManeuver{};
@@ -52,6 +56,12 @@ struct Candidate {
     double captureTime=-infinity,maxAge=maxVisionAgeSeconds,expiresAt=infinity;
     double confidence{},tti=infinity;
     bool supported{},urgent{},critical{},mechanicalMeasured{};
+    // The short form: the situation's name only ("Person ahead."), for a learner whose record
+    // shows they act on it ("you first").
+    bool brief{};
+    // Braking for a person or two-wheeler in the path: not kept waiting behind what was just said
+    // about someone else.
+    bool pathFirst{};
     int actorCategory=-1,evidenceKind{};
     float x{},y{},w{},h{};
     int lessonStep{}; // Native task action, zero for the existing candidate producers.
@@ -78,6 +88,11 @@ struct WorldState {
     bool laneValid{};
     // Road knowledge ahead from the map (no destination needed): bump and sharp bend.
     double mapTime=-infinity,bumpAheadM=infinity,bendAheadM=infinity;
+    // Hills from map elevation along the route (not the phone's tilt): the grade here (percent,
+    // + uphill), and the next climb or descent: distance to its start (negative: on it), mean
+    // grade (signed %) and the length still ahead.
+    bool mapGradeKnown{};double mapGradePercent{};
+    double slopeAheadM=infinity,slopeGrade{},slopeLengthM{};uint64_t slopeId{};
     uint64_t bumpId{},bendId{};
     bool bendRight{};
     // Indian road practice: horn at blind bends, junction entry and when passing.
@@ -87,10 +102,15 @@ struct WorldState {
     bool arriving{};
     // Navigation is finding a new route (a missed turn or a better way).
     bool rerouting{};
+    // Google has just replaced the route with one whose next turn is different (a few seconds).
+    bool routeChanged{};
     // Horizon row (fraction of image height) from the measured camera pitch. A camera
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;
     bool horizonMeasured{};
+    // The analysed image's optics (after the preview crop): box positions and sizes are angles
+    // only through it. Defaults: the uncropped 4:3 frame the coach was tuned on.
+    CameraModel camera{};
     // Turn rate (rad/s, left positive) from the gyroscope, or a replay's estimate from the video.
     double yawRate{};
     bool yawKnown{};
@@ -148,6 +168,8 @@ struct Event {
     uint64_t acceptances{};
     double acceptedTti=infinity;
     double startedAt=-infinity;
+    // When delivery ended (completed, interrupted, expired or failed).
+    double endedAt=-infinity;
     bool voiceSubmitted{},visualOnly{};
     DeliveryStage deliveryStage=DeliveryStage::Selected;
     bool retryable{};
@@ -246,6 +268,10 @@ public:
     // reproduces the 0.7.1 policy for same-interval comparison.
     void enableTaskScheduling(bool enabled) noexcept {if(scheduling_!=enabled){scheduling_=enabled;task_.enableScheduling(enabled);control_.reset();risk_.reset();}}
     const RiskCoach& risk() const noexcept {return risk_;}
+    // The learner's measured responses to road users, across drives ("you first"). It outlives
+    // source changes; the app stores it between drives.
+    LearnerRecord& learner() noexcept {return learner_;}
+    const LearnerRecord& learner() const noexcept {return learner_;}
     // Composed utterance by id (fragments), or nullptr.
     const Utterance* utterance(int id) const noexcept {for(const auto& u:utterances_)if(u.id&&u.id==id)return &u;return nullptr;}
     // The delivered id of a ticket's candidate: its utterance when composed.
@@ -253,6 +279,7 @@ public:
     // Instructor-style control coaching (part of task scheduling): actions, not announcements.
     const ControlCoach& control() const noexcept {return control_;}
     void setGearBands(const GearBands& bands) noexcept {control_.setBands(bands);}
+    const GearBands& gearBands() const noexcept {return control_.bands();}
     bool taskScheduling() const noexcept {return scheduling_;}
 private:
     bool ticketValid(const Ticket&,uint64_t,int,const WorldState&,double) const noexcept;
@@ -269,6 +296,7 @@ private:
     DriveCoach drive_;
     ControlCoach control_;
     RiskCoach risk_;
+    LearnerRecord learner_;
     std::array<Utterance,100> utterances_{};
     size_t utteranceSlot_{};
     Utterance lastSpoken_{};

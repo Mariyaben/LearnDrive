@@ -251,6 +251,8 @@ void CoachingEngine::beginSource(uint64_t source) noexcept {
 void CoachingEngine::invalidateEvidence() noexcept {
     if(accepted_.valid&&accepted_.stage!=DeliveryStage::Completed&&accepted_.stage!=DeliveryStage::VisualOnly)
         deliveryEvent(accepted_.sequence,int(accepted_.candidate.prompt),DeliveryStage::Interrupted,lastNow_);
+    // (The turn lesson first takes in what was just said, so the same Google turn is not restarted.)
+    task_.settle(ledger_,lastNow_);
     pending_={};accepted_={};deferred_={};decision_={};memory_.clear();interpreter_.reset(source_);task_.sourceChanged();drive_.sourceChanged();control_.reset();risk_.reset();
 }
 double CoachingEngine::interval() const noexcept {return profile_==Profile::Minimal?20:profile_==Profile::Guided?8:12;}
@@ -288,13 +290,14 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         std::array<Candidate,4> extra{};const size_t n=control_.proposals(w,extra.data(),extra.size());
         bool slopeInstruction=false;
         for(size_t i=0;i<n;++i)slopeInstruction|=extra[i].prompt==Prompt::downhillSecond||extra[i].prompt==Prompt::downhillThird||
-            extra[i].prompt==Prompt::uphillSecond||extra[i].prompt==Prompt::uphillThird;
-        if(slopeInstruction){size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i)
+            extra[i].prompt==Prompt::uphillSecond||extra[i].prompt==Prompt::uphillThird||isMapHillPrompt(extra[i].prompt);
+        // With the route's elevation, hills come from the map: the phone's tilt cues step aside.
+        if(slopeInstruction||w.mapGradeKnown){size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i)
             if(w.candidates[i].kind!=EventKind::Slope)w.candidates[kept++]=w.candidates[i];w.candidateCount=kept;}
         for(size_t i=0;i<n&&w.candidateCount<w.candidates.size();++i)w.candidates[w.candidateCount++]=extra[i];
         // Road users: the risk coach replaces object-presence announcements. Keep
         // only independently validated urgent warnings from the older producers.
-        risk_.observe(w,memory_,tracks_,ledger_,source_,int(profile_));
+        risk_.observe(w,memory_,tracks_,ledger_,source_,int(profile_),&learner_);
         {size_t kept=0;for(size_t i=0;i<std::min(w.candidateCount,w.candidates.size());++i){const auto& c=w.candidates[i];
             // Camera road users (origin 4) are reasoned about only by the risk coach.
             if(c.origin==4||((c.origin==1||c.origin==2)&&!c.urgent))continue;w.candidates[kept++]=c;}w.candidateCount=kept;}
@@ -371,6 +374,9 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         priority(c.prompt)>priority(e.acceptedPrompt)){spacing=std::min(spacing,2.);break;}
     // A risk instruction about a developing conflict is not paced like routine chatter.
     if(scheduled&&c.origin==7)spacing=std::min(spacing,priority(c.prompt)>=4?3.:priority(c.prompt)>=3?6.:interval());
+    // ...and braking for a person or two-wheeler in the path waits only for the key words of
+    // what was just said about someone else (Nov 8, 2:42).
+    if(scheduled&&c.origin==7&&c.pathFirst)spacing=std::min(spacing,1.5);
     // Consecutive vehicle-control instructions (e.g. second then third gear) are one sequence.
     if(scheduled&&c.origin==6&&lastOrdinaryOrigin_==6)spacing=std::min(interval(),4.);
     if(scheduling_&&c.lessonStep&&!followUp) {
@@ -389,7 +395,7 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     if(scheduled) {
         // One picture of the moment -> one instruction (see SituationPlanner).
         Utterance u;
-        if(SituationPlanner::compose(ticket.candidate,safe,risk_,task_,u)) {
+        if(SituationPlanner::compose(ticket.candidate,safe,risk_,task_,control_.bands(),u)) {
             // The same sentence again within 4 s (e.g. a second similar road user) adds nothing.
             if(w.now-lastSpokenAt_<4&&u.count==lastSpoken_.count&&u.priority<=lastSpoken_.priority&&
                std::equal(u.fragments.begin(),u.fragments.begin()+u.count,lastSpoken_.fragments.begin())) {
@@ -469,8 +475,17 @@ const char* CoachingEngine::continuationReason(uint64_t sequence,int prompt,cons
             for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i)if(w.actors[i].identity==c.identity)seen=std::max(seen,w.actors[i].captureTime);
             for(const auto& sample:memory_.samples())for(const auto& a:sample.observations)if(a.identity==c.identity)seen=std::max(seen,a.captureTime);
             if(c.identity.space==IdentitySpace::Optical)seen=std::max(seen,risk_.lastSeen(c.identity.id)); // Same road user under a new detector id.
-            // The warning sentence (<= 3.8 s recording) finishes about a road user seen in that time.
-            if(!std::isfinite(seen)||now-seen>3.5)return "ACTOR_NOT_OBSERVED";
+            // A warning sentence that has started finishes about a road user seen in the time it takes
+            // to say. With the slope or the turn named first that is up to about 5.5 s; at 3.5 s the
+            // only thing ever cut was the last word of a sentence about a vehicle that had just passed
+            // ("...Ease off the accel-": five times in 4.7 minutes of the Nov 6 replay).
+            // ...unless a turn step is waiting to be said ("brake, change down", or the turn itself)
+            // and the road user has been gone for 1.5 s: its few seconds are worth more than the rest
+            // of a sentence about a vehicle that has passed (Nov 5, 4:00: "Oncoming vehicle. Keep
+            // left. Ease off the accelerator." was said to its end and "Left turn here" never came).
+            const Candidate step=task_.proposal(w);
+            const bool stepWaiting=step.prompt!=Prompt::none&&step.lessonStep>=2;
+            if(!std::isfinite(seen)||now-seen>(stepWaiting?1.5:6.))return "ACTOR_NOT_OBSERVED";
             return "OK";
         }
         if(c.kind==EventKind::Slope&&!w.telemetry.pitchValid)return "EVIDENCE_LOST"; // Phone knocked in its mount.
@@ -503,9 +518,9 @@ const char* CoachingEngine::continuationReason(uint64_t sequence,int prompt,cons
         for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i)if(w.actors[i].identity==c.identity)seen=std::max(seen,w.actors[i].captureTime);
         for(const auto& sample:memory_.samples())for(const auto& a:sample.observations)if(a.identity==c.identity)seen=std::max(seen,a.captureTime);
         if(c.identity.space==IdentitySpace::Optical)seen=std::max(seen,risk_.lastSeen(c.identity.id)); // Same road user under a new detector id.
-        // Finish the warning sentence (<=3.8 s recording) about a road user seen in
-        // this time; a crossing vehicle often leaves the view within a second.
-        if(!std::isfinite(seen)||now-seen>3.5)return "ACTOR_NOT_OBSERVED";
+        // Finish the warning sentence about a road user seen in the time it takes to say (see
+        // above); a crossing vehicle often leaves the view within a second.
+        if(!std::isfinite(seen)||now-seen>6)return "ACTOR_NOT_OBSERVED";
         return "OK";
     }
     else if(scheduling_&&!c.urgent) {
@@ -554,6 +569,7 @@ bool CoachingEngine::deliveryEvent(uint64_t sequence,int prompt,DeliveryStage st
     if(stage==DeliveryStage::Completed&&!ticket->onset)return false;
     ticket->stage=stage;
     auto& event=ledger_.observe(source_,ticket->candidate,now);event.deliveryStage=stage;
+    if(stage!=DeliveryStage::Scheduled)event.endedAt=now;
     if(stage==DeliveryStage::Completed)drive_.delivered(ticket->candidate,now);
     const bool failed=stage==DeliveryStage::Interrupted||stage==DeliveryStage::Expired||stage==DeliveryStage::Failed;
     // What a composed sentence also said shares its fate: finished, or to be said again.

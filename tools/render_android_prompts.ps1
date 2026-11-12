@@ -61,7 +61,11 @@ try {
         'You are drifting right. Keep left',
         'Speed bump ahead. Slow down, clutch down and change down',
         'Sharp bend ahead. Sound the horn and keep left',
-        'The route has changed. Keep going and follow the new route')
+        'The route has changed. Keep going and follow the new route',
+        'Downhill ahead. Stay in gear and control your speed with the brake',
+        'Steep downhill ahead. Change down to second and control your speed with the brake',
+        'Uphill ahead. Keep a steady accelerator',
+        'Steep uphill ahead. Change down before the climb and keep a steady accelerator')
     for ($index = 0; $index -lt $phrases.Length; $index++) {
         if ($PromptIds.Count -gt 0 -and ($index + 1) -notin $PromptIds) { continue }
         if ($PromptIds.Count -eq 0 -and $FragmentIds.Count -gt 0) { continue } # Fragments only.
@@ -144,7 +148,14 @@ try {
         'Then turn right straight after.',
         'Give way to traffic from the right.',
         'Pull over safely.',
-        'merge carefully.')
+        'merge carefully.',
+        'Downhill ahead.',
+        'Steep downhill ahead.',
+        'Uphill ahead.',
+        'Steep uphill ahead.',
+        'Do not coast in neutral.',
+        'Control your speed with the brake.',
+        'Change down a gear.')
     if ($Fragments -or $FragmentIds.Count -gt 0 -or $PromptIds.Count -eq 0) {
         for ($index = 0; $index -lt $fragmentTexts.Length; $index++) {
             if ($FragmentIds.Count -gt 0 -and ($index + 1) -notin $FragmentIds) { continue }

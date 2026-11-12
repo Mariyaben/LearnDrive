@@ -28,6 +28,13 @@ public:
     size_t proposals(const WorldState&,Candidate* out,size_t capacity) const noexcept;
     static bool evidence(const Candidate&,const WorldState&,double now) noexcept;
     int advisedGear() const noexcept {return gear_;}
+    // The gear advice for a climb or descent at this speed, from the same speed bands (rules of
+    // thumb, never the selected gear). The hill's gear is second when steep (>= 10 %), else third.
+    // gear 0: nothing to name (this speed's own gear is already at or below it); 2 or 3: change
+    // down to it; -1: change down a gear (climbing fast: one gear at a time). brakeFirst: going
+    // downhill two gears above it, slow down before changing down.
+    struct HillGear {int gear{};bool brakeFirst{};};
+    static HillGear hillGear(const GearBands&,double gradePercent,double speedKmh) noexcept;
     std::string json() const;
 private:
     struct Active {int prompt{};uint64_t id{};double until=-1;};
@@ -36,8 +43,10 @@ private:
     GearBands bands_{};
     int gear_{},candidateGear_{},slopeSign_{};
     double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1,lastBendCue_=-1;
+    // The hill last named from the map and when the car was last on it (or named it): its way and steepness.
+    double hillAt_=-1;int hillSign_{};bool hillSteep_{};
     bool stopCued_{},moveOffCued_{},lastBendRight_{},routeChangeCued_{};
-    uint64_t lastQuietEvent_{},next_{1},lastBump_{},lastBend_{};
+    uint64_t lastQuietEvent_{},next_{1},lastBump_{},lastBend_{},lastSlope_{};
     // Heading change through the held junction (rad, from the turn rate) and whether it was measured.
     double turned_{},lastYawAt_=-1;bool turnMeasured_{},reroutedInTurn_{};
     std::array<Active,4> active_{};
