@@ -5,7 +5,64 @@ void SensorFusion::restartCalibration(const char* reason) {
     calibrated_=false;start_=-1;count_=linearCount_=0;pitchBias_=0;pitchTrail_={};pitchCursor_=pitchCount_=0;pitchTrailTime_=-1;handledUntil_=-1;
     sum_=squares_=gyroSum_=linearSum_={};calibrationProgress_=0;
     calibrationReason_=reason;
-    poseCursor_=poseCount_=0;
+}
+// Only the road's slope needs the level-ground reference. Without it the phone still knows which way
+// is down (the camera's horizon), how fast the car turns, whether it brakes, and with GPS how fast it
+// goes. Up to 0.8.3 an unlevelled phone tracked none of that while moving: the speed filter's
+// uncertainty stopped growing, so each GPS reading counted for less and the speed became a running
+// mean of the whole drive. On Nov 8 the mount tilted at 2:36; for the remaining 14 minutes the app
+// showed 25-31 km/h at 33-49 km/h, had no turn rate and no measured horizon.
+void SensorFusion::live(const ImuSample& s,double dt) {
+    const Vec3 measured=s.hasLinear?s.acceleration-s.linear:s.acceleration;
+    const Vec3 rotation=s.gyro-gyroOffset_;
+    if(rotation.norm()>30*pi/180)handledUntil_=s.time+1.5;
+    if(liveCount_==0||up_.norm()<.9) {
+        // (Re)seed gravity from a plausible reading; never invent an upright phone.
+        if(std::abs(measured.norm()-gravity)>1.5){motion_={};liveCount_=0;return;}
+        up_=measured.unit();liveCount_=0;
+    }
+    ++liveCount_;
+    if(dt<=0||dt>.2){motion_={};return;}
+    const double angle=rotation.norm()*dt;
+    if(angle>1e-9) {
+        const Vec3 axis=rotation.unit();
+        up_=(up_*std::cos(angle)-axis.cross(up_)*std::sin(angle)+axis*(axis.dot(up_)*(1-std::cos(angle)))).unit();
+    }
+    const bool gravityReliable=s.hasLinear||(s.acceleration-up_*gravity).norm()<.6;
+    if(gravityReliable&&std::abs(measured.norm()-gravity)<.35) {
+        const double alpha=1-std::exp(-dt/.8);
+        up_=(up_*(1-alpha)+measured.unit()*alpha).unit();
+    }
+    // The rear camera looks forward: its axis, levelled, is the car's direction.
+    const Vec3 camera{0,0,-1},level=camera-up_*camera.dot(up_);
+    const bool forwardKnown=level.norm()>=.35&&liveCount_>20;
+    if(!forwardKnown) {
+        // Camera towards the ground or sky, or still warming up: speed follows GPS alone.
+        motion_={};if(lastGps_>=0)pvv_=std::max(1e-6,pvv_+4*dt);return;
+    }
+    const Vec3 forward=level.unit(),right=forward.cross(up_).unit();
+    const Vec3 linear=s.hasLinear?s.linear-linearOffset_:s.acceleration-up_*gravity;
+    const double longitudinal=linear.dot(forward);
+    motion_={s.time,linear.dot(up_),rotation.dot(right),rotation.dot(forward),s.time<=handledUntil_,true};
+    yawFiltered_+=(rotation.dot(up_)-yawFiltered_)*(1-std::exp(-dt/.15));
+    motion_.yawRate=yawFiltered_;
+    acceleration_=longitudinal;
+    longitudinalFiltered_+=(longitudinal-longitudinalFiltered_)*(1-std::exp(-dt/.3));
+    hardFiltered_+=(longitudinal-hardFiltered_)*(1-std::exp(-dt/.12));
+    // Braking flags only from gravity-separated input: a lagging gravity estimate reads as braking.
+    if(s.hasLinear) {
+        braking_=longitudinalFiltered_<=-1.5||(braking_&&longitudinalFiltered_<-.9);
+        if(braking_)brakeUntil_=s.time+.3;
+        if(hardFiltered_<=-3.5)hardUntil_=s.time+.6;
+        if(linear.norm()>12)shockUntil_=s.time+.5;
+    }
+    // Speed is predicted only once GPS has given one: before the first fix there is nothing to carry
+    // forward, and a long blind prediction makes that first fix look like accelerometer bias.
+    if(lastGps_<0)return;
+    velocity_=std::max(0.0,velocity_+(acceleration_-bias_)*dt);
+    pvv_=std::max(1e-6,pvv_-2*dt*pvb_+dt*dt*pbb_+.7*dt);
+    pvb_-=dt*pbb_;
+    pbb_+=.002*dt;
 }
 void SensorFusion::calibrate(const ImuSample& s) {
     // Only accept a quiet, stationary five-second window. Gravity gives roll/pitch,
@@ -41,9 +98,14 @@ void SensorFusion::imu(const ImuSample& s) {
     if(!std::isfinite(s.time)||s.time<0||!s.acceleration.finite()||!s.gyro.finite()||
        (s.hasLinear&&!s.linear.finite())||s.time<=lastImu_) return;
     double dt=lastImu_<0?0:s.time-lastImu_;
-    if(dt>.2)restartCalibration("Motion data paused; normalize the phone plane again");
+    if(dt>.2){restartCalibration("Motion data paused; normalize the phone plane again");poseCursor_=poseCount_=0;liveCount_=0;}
     lastImu_=s.time;
-    if(!calibrated_) { motion_={};calibrate(s);rememberCameraPose(s.time);return; }
+    if(!calibrated_) {
+        calibrate(s);
+        if(!calibrated_)live(s,dt);
+        rememberCameraPose(s.time);return;
+    }
+    liveCount_=21; // Gravity is tracked below; a later loss of the level reference keeps the pose.
     if(dt<=0||dt>.2) return; // Never integrate a long suspend/resume gap.
     const Vec3 rotation=s.gyro-gyroOffset_;
     const double angle=rotation.norm()*dt;
@@ -144,11 +206,11 @@ Vec3 SensorFusion::cameraUp(double time) const noexcept {
         if(age<closest){closest=age;result=cameraPoses_[i].up;}
     }
     if(result.norm()>.9)return result;
-    if(time>=lastImu_&&time-lastImu_<.25)return calibrated_?up_:(count_>20?sum_.unit():Vec3{});
+    if(time>=lastImu_&&time-lastImu_<.25)return calibrated_?up_:(count_>20?sum_.unit():(liveCount_>20?up_:Vec3{}));
     return {};
 }
 void SensorFusion::rememberCameraPose(double time) noexcept {
-    const Vec3 value=calibrated_?up_:(count_>20?sum_.unit():Vec3{});
+    const Vec3 value=calibrated_?up_:(count_>20?sum_.unit():(liveCount_>20?up_:Vec3{}));
     if(value.norm()<.9)return;
     cameraPoses_[poseCursor_]={time,value};poseCursor_=(poseCursor_+1)%cameraPoses_.size();
     poseCount_=std::min(poseCount_+1,cameraPoses_.size());

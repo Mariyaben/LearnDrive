@@ -127,6 +127,32 @@ void ld_coaching_automatic(ld_engine*,int enabled);
 // Task-aware scheduling of automatic coaching (default on); off reproduces 0.7.1.
 void ld_coaching_task_scheduling(ld_engine*,int enabled);
 const char* ld_coaching_drive_json(ld_engine*);
+// "You first" (0.8.5): the learner's measured responses to road users, per kind of situation
+// (0 people ahead, 1 two-wheelers ahead, 2 vehicles ahead, 3 oncoming traffic). Each outcome is
+// 1 slowed before the instruction (or it was not needed), 2 slowed after it, 3 no slowing seen.
+// With enough outcomes over several drives, an instruction whose slowing the learner's measured
+// speed shows is already done is shortened to what speed cannot show (level 1), then left unsaid
+// and shown on screen (level 2). A learner who has not slowed is told in full, at the same moment;
+// urgent instructions are never shortened or left unsaid. Speed only: an observation of slowing,
+// never a grade of driving. Applies to, and learns from, the road camera only (never a test video
+// or a simulation). The app stores it between drives.
+void ld_learner_waiting(ld_engine*,int enabled);
+void ld_learner_new_drive(ld_engine*);
+// out[0] = drives with an outcome, then up to 30 outcomes, oldest first. Returns values written.
+int ld_learner_outcomes(ld_engine*,int skill,int* out,size_t capacity);
+int ld_learner_restore(ld_engine*,int skill,int drives,const int* outcomes,size_t count);
+void ld_learner_forget(ld_engine*);
+// Per kind of situation: wait level (0-2), recent and this-drive tallies; plus this drive's total.
+const char* ld_learner_json(ld_engine*);
+// The road user whose instruction is left unsaid right now (decided on a camera frame within the
+// last 1.5 s): out[0] kind of situation (-1 none), out[1] 1 when the learner is measured slowing,
+// out[2] seconds since it became due. Capacity >= 3.
+int ld_learner_hold(ld_engine*,double now,double* out,size_t capacity);
+// For the after-drive review: out[0..2] this drive's outcomes over all kinds (slowed before, after,
+// no slowing seen), out[3..6] the level the record has now earned per kind (applied from the next
+// drive; the level in force is fixed when a drive begins), out[7..10] recent outcomes kept per kind.
+// Returns values written (11), 0 without room.
+int ld_learner_summary(ld_engine*,int* out,size_t capacity);
 const char* ld_coaching_task_json(ld_engine*);
 int ld_coaching_task_speech_allowed(ld_engine*);
 int ld_coaching_task_execution_quiet(ld_engine*);

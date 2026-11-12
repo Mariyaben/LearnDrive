@@ -125,7 +125,7 @@ double RouteLine::aim(double now,double seconds) const noexcept {
 }
 bool RouteLine::load(const double* latLon,size_t count) {
     clear();
-    if(!count)return true;
+    if(!count)return false; // No line: cleared, nothing loaded.
     if(!latLon||count<2||count>100000)return false;
     if(!coordinate(latLon[0],latLon[1]))return false;
     lat0_=latLon[0];lon0_=latLon[1];kx_=kxAt(lat0_);ky_=ky;

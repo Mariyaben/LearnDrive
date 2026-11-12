@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.build-deps/
+dist/
+.pytest_cache/
+*.qgz~
+*.qgs~

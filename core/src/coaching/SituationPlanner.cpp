@@ -150,8 +150,33 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     // found, the recorded sentence (which names it) is spoken instead (Nov 4: a bare "Stop and
     // wait. Let them pass.").
     if(primary.origin==7&&!primaryActor)return false;
-    if(primaryActor)plan.ctx(actorContext(*primaryActor));
+    if(primaryActor) {
+        // Who it is about. If this road user's conflict is not classified at this instant (its
+        // sentence was chosen a moment ago), the instruction itself says what kind it is: a
+        // road-user sentence never goes out without its subject (Nov 8: "Ease off the accelerator.
+        // Give them space." and "Brake gently. Be ready to stop.").
+        F who=actorContext(*primaryActor);
+        if(who==F::none) {
+            const int c=primaryActor->category;const bool person=c==0,two=c==1||c==3,truck=c==7,bus=c==5;
+            switch(primary.prompt) {
+            case Prompt::oncomingKeepLeft:who=truck?F::oncomingTruck:bus?F::oncomingBus:two?F::oncomingTwoWheeler:F::oncomingVehicle;break;
+            case Prompt::personLeftSpace:who=F::personLeft;break;
+            case Prompt::personRightSpace:who=F::personRight;break;
+            case Prompt::personCrossingStop:who=F::personCrossing;break;
+            case Prompt::vehicleCrossingWait:who=F::vehicleCrossing;break;
+            case Prompt::brakeReadyStop:case Prompt::clutchHoldBrake:case Prompt::personEaseCover:case Prompt::riderEaseCover:case Prompt::vehicleEaseGap:
+                who=person?F::personAhead:two?F::twoWheelerAhead:truck?F::truckAhead:F::vehicleAhead;break;
+            default:break;
+            }
+        }
+        plan.ctx(who);
+    }
     if(!actions(primary.prompt,v,w,bands,plan))return false;
+    // "You first": the learner's measured speed shows the slowing is already done, so that part
+    // is left out. What speed cannot show (keeping left, giving space, covering the brake, being
+    // ready to stop, the horn) is still said: "Oncoming bus. Keep left."
+    const bool brief=primary.brief&&primaryActor&&!primary.urgent;
+    if(brief){plan.drop(F::easeOff);plan.drop(F::brakeGently);}
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
     // Indian road practice the recorded sentence does not say: sound the horn when entering
     // a junction and before passing a person or two-wheeler at the road edge.
@@ -162,6 +187,10 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         plan.act(F::soundHorn);
     const bool urgent=primary.urgent;
     int priorityMax=priority(primary.prompt);
+    // Braking for a person or two-wheeler in the path outranks a "keep left" or "give space"
+    // sentence about someone else: it may take over, and is not taken over by one.
+    if(primaryActor&&primaryActor->kind==RiskKind::InPath&&primaryActor->level>=2&&
+       (primaryActor->category==0||primaryActor->category==1||primaryActor->category==3))priorityMax=std::max(priorityMax,5);
     primary.alsoCount=0;
     auto absorb=[&](const Identity& id,Prompt p,EventKind kind,int step=0,uint64_t epoch=0){if(primary.alsoCount<primary.also.size()){
         primary.also[primary.alsoCount]=id;primary.alsoPrompt[primary.alsoCount]=p;primary.alsoKind[primary.alsoCount]=kind;
@@ -232,6 +261,8 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     // An urgent moment sounds different from routine advice: "Brake now", not "Brake gently".
     if(urgent&&plan.has(F::brakeGently)){plan.drop(F::brakeGently);plan.act(F::brakeNow);}
     // 6. Make the action set consistent: braking replaces easing off; one gear target.
+    // (A learner already measured slowing is not told to ease off for another road user either.)
+    if(brief)plan.drop(F::easeOff);
     if(plan.has(F::brakeNow)||plan.has(F::brakeGently)||plan.has(F::stopAndWait)){plan.drop(F::easeOff);plan.drop(F::steadyAccelerator);}
     if(plan.has(F::stopAndWait))plan.drop(F::readyToStop);
     if(plan.has(F::downSecond))plan.drop(F::downThird);
@@ -253,6 +284,6 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     for(size_t i=0;i<std::min(plan.contexts,maxContext);++i)out.fragments[out.count++]=int(plan.context[i]);
     for(size_t i=0;i<std::min(plan.actionCount,maxActions)&&out.count<out.fragments.size();++i)out.fragments[out.count++]=int(plan.actions[i]);
     out.priority=std::clamp(priorityMax,1,6);
-    return out.count>=2;
+    return out.count>=(brief?1u:2u);
 }
 }

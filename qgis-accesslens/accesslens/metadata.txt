@@ -1,0 +1,18 @@
+[general]
+name=AccessLens
+description=Find population-weighted gaps in access to clinics, schools and public services.
+about=Assign communities to their nearest service location, calculate population coverage, rank access gaps, and export mapped results and an offline HTML report. Includes a fictional demo.
+version=0.1.0
+qgisMinimumVersion=3.44
+qgisMaximumVersion=3.99
+author=Mariya Benny
+email=98140958+Mariyaben@users.noreply.github.com
+repository=https://github.com/Mariyaben/AccessLens
+homepage=https://github.com/Mariyaben/AccessLens
+tracker=https://github.com/Mariyaben/AccessLens/issues
+category=Vector
+tags=accessibility,spatial analysis,public services,population,planning
+icon=icon.svg
+experimental=True
+hasProcessingProvider=True
+changelog=0.1.0 - Initial portfolio implementation; QGIS runtime validation pending.

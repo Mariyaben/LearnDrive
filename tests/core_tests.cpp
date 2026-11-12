@@ -56,6 +56,50 @@ int main() {
     });
     test("motion resets calibration",[]{SensorFusion f;for(int i=0;i<600;++i)f.imu({i*.01,{0,gravity,0},{0,.2,0},{},true});check(!f.snapshot(5.99).calibrated,"motion accepted");});
     test("GPS movement prevents stationary calibration",[]{SensorFusion f;f.gps(0,10,.5);for(int i=1;i<600;++i){f.imu({i*.01,{0,gravity,0},{},{},true});if(i%100==0)f.gps(i*.01,10,.5);}check(!f.snapshot(5.99).calibrated,"moving vehicle calibrated");});
+    test("an unlevelled phone still follows GPS speed while driving (Nov 8: the speed froze)",[]{
+        // Never levelled: the drive starts before the phone has been still for 5 s. The car goes from
+        // 5 to 15 m/s over a minute, cruises, then slows to 6 m/s; GPS speed arrives once a second.
+        SensorFusion f;double worst=0;
+        auto speed=[](double t){return t<60?5+10*t/60:t<120?15.:std::max(6.,15-(t-120)*.5);};
+        for(int i=0;i<=15000;++i){const double t=i*.01,a=(speed(t+.005)-speed(t-.005))/.01;
+            f.imu({t,{0,gravity,-a},{},{0,0,-a},true});          // rear camera along -z: speeding up is -z
+            if(i%100==0)f.gps(t,speed(t),.8);
+            if(t>5&&i%100==50)worst=std::max(worst,std::abs(f.snapshot(t).speedKmh/3.6-speed(t)));}
+        const auto end=f.snapshot(150);
+        check(!end.calibrated&&end.speedValid,"the drive should be unlevelled with a valid speed");
+        check(worst<1.0,"speed drifted from GPS without the level reference");
+        check(!end.pitchValid,"road slope claimed without a level reference");});
+    test("an unlevelled phone keeps its camera pose and turn rate while driving",[]{
+        // Camera pitched up 17 degrees (gravity "up" then has -z), turning left at 0.2 rad/s.
+        SensorFusion f;f.gps(0,10,.5);const double p=17*pi/180;
+        const Vec3 up{0,std::cos(p)*gravity,-std::sin(p)*gravity},gyro=up.unit()*.2;
+        for(int i=1;i<=300;++i){const double t=i*.01;f.imu({t,up,gyro,{},true});if(i%100==0)f.gps(t,10,.5);}
+        const Vec3 pose=f.cameraUp(2.92);                      // a frame captured 80 ms before the newest sample
+        check(pose.norm()>.9,"no camera pose while moving without the level reference");
+        near(std::atan2(-pose.z,std::hypot(pose.x,pose.y))*180/pi,17,1);
+        const auto m=f.motion();
+        check(m.valid&&!m.handled&&std::abs(m.yawRate-.2)<.02,"no turn rate while moving without the level reference");
+        check(!f.snapshot(3).calibrated,"moving vehicle calibrated");});
+    test("a mount that moves mid-drive loses only the slope: speed, pose and turn rate carry on",[]{
+        auto f=calibrated();f.gps(5.01,10,.5);double t=5.01;
+        auto drive=[&](double seconds,Vec3 up,Vec3 gyro,double v0,double a){
+            const int n=int(seconds*100);for(int i=1;i<=n;++i){t+=.01;const double v=v0+a*i*.01;
+                f.imu({t,up+Vec3{0,0,-a},gyro,{0,0,-a},true});if(i%100==0)f.gps(t,v,.5);}};
+        drive(5,{0,gravity,0},{},10,0);check(f.snapshot(t).calibrated,"control: levelled before the mount moves");
+        // The phone tips back 9 degrees in 0.2 s (hand or pothole), then stays there.
+        for(int i=1;i<=20;++i){t+=.01;const double q=.8*i*.01;f.imu({t,{0,std::cos(q)*gravity,-std::sin(q)*gravity},{.8,0,0},{},true});}
+        const Vec3 tipped{0,std::cos(.16)*gravity,-std::sin(.16)*gravity};
+        drive(4,tipped,{},10,0);
+        check(!f.snapshot(t).calibrated,"control: a moved mount should drop the level reference");
+        drive(20,tipped,{},10,.4);                              // speeds up to 18 m/s
+        near(f.snapshot(t).speedKmh/3.6,18,.8);
+        drive(20,tipped,{},18,-.5);                             // slows to 8 m/s
+        near(f.snapshot(t).speedKmh/3.6,8,.8);
+        const Vec3 pose=f.cameraUp(t-.08);
+        check(pose.norm()>.9,"camera pose lost with the level reference");
+        near(std::atan2(-pose.z,std::hypot(pose.x,pose.y))*180/pi,.16*180/pi,1);
+        check(f.motion().valid,"motion lost with the level reference");
+        check(!f.snapshot(t).pitchValid,"road slope claimed after the mount moved");});
     test("suspend requires new calibration",[]{auto f=calibrated();f.imu({10,{0,gravity,0},{},{},true});check(!f.snapshot(10).calibrated,"old mount calibration survived suspension");});
     test("vertical camera rejects ambiguous heading",[]{SensorFusion f;for(int i=0;i<600;++i)f.imu({i*.01,{0,0,gravity},{},{},true});check(!f.snapshot(5.99).calibrated,"vertical camera accepted");});
     test("tilted mount calibrates to zero",[]{SensorFusion f;Vec3 up{0,std::cos(.3)*gravity,std::sin(.3)*gravity};for(int i=0;i<600;++i)f.imu({i*.01,up,{},{},true});near(f.snapshot(5.99).pitchDegrees,0);check(f.snapshot(5.99).calibrated,"tilted mount failed");});
@@ -831,5 +875,18 @@ int main() {
             check(d.prompt==(scenario==0?Prompt::keepSafeGap:scenario==3?Prompt::none:Prompt::roadUserQuiet),"gap wording ignored lead age or measured motion");
         }
     });
+    test("you first: a test video or simulation neither uses nor changes the learner's record",[]{
+        // Twenty "slowed before being told" and ten "slowed when told" over five drives: level 2.
+        auto* e=ld_create();int outcomes[30];for(int i=0;i<30;++i)outcomes[i]=i<20?1:2;int s[11]{};
+        check(ld_learner_restore(e,0,5,outcomes,30)&&ld_learner_summary(e,s,11)==11&&s[3]==2&&s[7]==30,"a record over five drives did not earn level 2");
+        // The level in force for people ahead, as the coach applies it.
+        auto applied=[&]{const std::string json=ld_learner_json(e);return json.find("\"people ahead\",\"wait_level\":2")!=std::string::npos;};
+        check(ld_guidance_begin(e,1,LD_SOURCE_RECORDING,0)&&!applied()&&ld_learner_summary(e,s,11)==11&&s[7]==30,"a played-back video used the learner's record");
+        check(ld_guidance_begin(e,2,LD_SOURCE_SCREEN,1)&&!applied(),"a filmed video used the learner's record");
+        check(ld_guidance_begin(e,3,LD_SOURCE_CAMERA,2)&&applied(),"the record did not apply to the road camera");
+        ld_learner_waiting(e,0);check(!applied()&&ld_learner_summary(e,s,11)==11&&s[3]==0,"switched off, the coach still waited");
+        ld_learner_waiting(e,1);ld_learner_forget(e);check(ld_learner_summary(e,s,11)==11&&s[3]==0&&s[7]==0,"forgetting kept the record");
+        double hold[3]{};check(ld_learner_hold(e,3,hold,3)==1&&hold[0]<0,"a held instruction was reported with nothing on the road");
+        ld_destroy(e);});
     std::cout<<passed<<" passed, "<<failed<<" failed\n";return failed?1:0;
 }

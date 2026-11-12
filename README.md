@@ -1,6 +1,39 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.8.4 (experimental, host-tested only).** Less phone heat, and camera
+**Current Android candidate: 0.8.5 (experimental, host-tested only).** The rest of what the Nov 8
+drive showed ([what 0.8.5 fixes](docs/coach/NOV8_FIXES.md)), and a coach that says less as the
+learner needs less ([you first](docs/coach/YOU_FIRST.md)).
+
+- **The speed reading no longer freezes.** When the phone moved in its mount the motion processing
+  stopped, the speed became a running average and dropped out for a second at a time. Speed, turn
+  rate and camera pitch now carry on; only slope from the phone's tilt is lost.
+- **Turn instructions are not cut off and said again.** A started sentence finishes through a gap
+  in the speed reading; a step cut off after its key words is not started over; the same Google
+  turn survives a camera restart and a route refresh. A real reroute is announced.
+- **People at the road edge are not "Brake now".** The coach learns during the drive which way the
+  car is heading in the image, so a phone turned towards the driver no longer puts the roadside in
+  the path. A person in the lane no longer waits behind "Keep left" about someone else.
+- **"Vehicle crossing. Brake now" only for vehicles that cross.** Not for a parked vehicle the
+  tracker jumped to, a car overtaking and pulling in, or traffic coming round a left-hand bend.
+- **One instruction per situation.** People standing together are told about once, "Brake now" is
+  said once, a warning sentence is not cut at its last word when the vehicle has passed, and
+  nothing is started about a pedestrian the car is already passing.
+- **Names.** A scooter rider seen from behind is not a person; a pedestrian in front of a distant
+  motorcycle is not a rider. (An autorickshaw can still be called a bus.)
+- **Start.** With a Google route the hills come from the map, so the start dialog no longer asks
+  for level ground.
+- **Captions** stay on screen for turn, hill and gear instructions when camera frames run late.
+- **You first.** The coach records what the learner's measured speed did about road users. Once
+  the record shows they slow, it leaves out the slowing they have already done ("Oncoming bus. Keep
+  left."), and later the whole instruction, shown on screen instead. A new learner is told
+  everything in full, and "Brake now" is never left out.
+- **The coach can now see slowing.** The measure behind every "is the learner slowing?" rule never
+  reported "slowing" on stepped speed readings, so a learner who braked was still told "Brake now".
+
+All 23 native test programs pass (16 older tests had been failing since 0.7.8). Not yet tried on
+the phone.
+
+**Previously, 0.8.4 (experimental, host-tested only).** Less phone heat, and camera
 coaching no longer stops when the phone gets very hot ([phone heat](docs/coach/PHONE_HEAT.md)).
 
 On the Nov 8 drive the phone was at Android's "moderate" heat 6 s in, and at "critical" from 15:11. From then on there was no camera coaching at all.
