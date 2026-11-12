@@ -71,6 +71,7 @@ private:
     std::array<Sample,101> samples_{};
     size_t cursor_{},count_{};
     Sample latest_{};
-    double segmentStart_=-infinity,lastStored_=-infinity;
+    // changedAt_: when the latest speed value first appeared (speed readings are often stepped).
+    double segmentStart_=-infinity,lastStored_=-infinity,changedAt_=-infinity;
 };
 } // namespace ld::coaching

@@ -1,0 +1,284 @@
+{
+  "crs": "EPSG:32643",
+  "provenance": "Fictional Bengaluru-area planning demo \u2014 synthetic communities and clinics",
+  "communities": [
+    {
+      "id": "C01",
+      "name": "Community 01",
+      "x": 777000,
+      "y": 1433000,
+      "population": 120
+    },
+    {
+      "id": "C02",
+      "name": "Community 02",
+      "x": 777800,
+      "y": 1433000,
+      "population": 293
+    },
+    {
+      "id": "C03",
+      "name": "Community 03",
+      "x": 778600,
+      "y": 1433000,
+      "population": 466
+    },
+    {
+      "id": "C04",
+      "name": "Community 04",
+      "x": 779400,
+      "y": 1433000,
+      "population": 639
+    },
+    {
+      "id": "C05",
+      "name": "Community 05",
+      "x": 780200,
+      "y": 1433000,
+      "population": 812
+    },
+    {
+      "id": "C06",
+      "name": "Community 06",
+      "x": 781000,
+      "y": 1433000,
+      "population": 985
+    },
+    {
+      "id": "C07",
+      "name": "Community 07",
+      "x": 777120,
+      "y": 1433750,
+      "population": 391
+    },
+    {
+      "id": "C08",
+      "name": "Community 08",
+      "x": 777920,
+      "y": 1433750,
+      "population": 564
+    },
+    {
+      "id": "C09",
+      "name": "Community 09",
+      "x": 778720,
+      "y": 1433750,
+      "population": 737
+    },
+    {
+      "id": "C10",
+      "name": "Community 10",
+      "x": 779520,
+      "y": 1433750,
+      "population": 910
+    },
+    {
+      "id": "C11",
+      "name": "Community 11",
+      "x": 780320,
+      "y": 1433750,
+      "population": 203
+    },
+    {
+      "id": "C12",
+      "name": "Community 12",
+      "x": 781120,
+      "y": 1433750,
+      "population": 376
+    },
+    {
+      "id": "C13",
+      "name": "Community 13",
+      "x": 777000,
+      "y": 1434500,
+      "population": 662
+    },
+    {
+      "id": "C14",
+      "name": "Community 14",
+      "x": 777800,
+      "y": 1434500,
+      "population": 835
+    },
+    {
+      "id": "C15",
+      "name": "Community 15",
+      "x": 778600,
+      "y": 1434500,
+      "population": 128
+    },
+    {
+      "id": "C16",
+      "name": "Community 16",
+      "x": 779400,
+      "y": 1434500,
+      "population": 301
+    },
+    {
+      "id": "C17",
+      "name": "Community 17",
+      "x": 780200,
+      "y": 1434500,
+      "population": 474
+    },
+    {
+      "id": "C18",
+      "name": "Community 18",
+      "x": 781000,
+      "y": 1434500,
+      "population": 647
+    },
+    {
+      "id": "C19",
+      "name": "Community 19",
+      "x": 777120,
+      "y": 1435250,
+      "population": 933
+    },
+    {
+      "id": "C20",
+      "name": "Community 20",
+      "x": 777920,
+      "y": 1435250,
+      "population": 226
+    },
+    {
+      "id": "C21",
+      "name": "Community 21",
+      "x": 778720,
+      "y": 1435250,
+      "population": 399
+    },
+    {
+      "id": "C22",
+      "name": "Community 22",
+      "x": 779520,
+      "y": 1435250,
+      "population": 572
+    },
+    {
+      "id": "C23",
+      "name": "Community 23",
+      "x": 780320,
+      "y": 1435250,
+      "population": 745
+    },
+    {
+      "id": "C24",
+      "name": "Community 24",
+      "x": 781120,
+      "y": 1435250,
+      "population": 918
+    },
+    {
+      "id": "C25",
+      "name": "Community 25",
+      "x": 777000,
+      "y": 1436000,
+      "population": 324
+    },
+    {
+      "id": "C26",
+      "name": "Community 26",
+      "x": 777800,
+      "y": 1436000,
+      "population": 497
+    },
+    {
+      "id": "C27",
+      "name": "Community 27",
+      "x": 778600,
+      "y": 1436000,
+      "population": 670
+    },
+    {
+      "id": "C28",
+      "name": "Community 28",
+      "x": 779400,
+      "y": 1436000,
+      "population": 843
+    },
+    {
+      "id": "C29",
+      "name": "Community 29",
+      "x": 780200,
+      "y": 1436000,
+      "population": 136
+    },
+    {
+      "id": "C30",
+      "name": "Community 30",
+      "x": 781000,
+      "y": 1436000,
+      "population": 309
+    },
+    {
+      "id": "C31",
+      "name": "Community 31",
+      "x": 777120,
+      "y": 1436750,
+      "population": 595
+    },
+    {
+      "id": "C32",
+      "name": "Community 32",
+      "x": 777920,
+      "y": 1436750,
+      "population": 768
+    },
+    {
+      "id": "C33",
+      "name": "Community 33",
+      "x": 778720,
+      "y": 1436750,
+      "population": 941
+    },
+    {
+      "id": "C34",
+      "name": "Community 34",
+      "x": 779520,
+      "y": 1436750,
+      "population": 234
+    },
+    {
+      "id": "C35",
+      "name": "Community 35",
+      "x": 780320,
+      "y": 1436750,
+      "population": 407
+    },
+    {
+      "id": "C36",
+      "name": "Community 36",
+      "x": 781120,
+      "y": 1436750,
+      "population": 580
+    }
+  ],
+  "facilities": [
+    {
+      "id": "F01",
+      "name": "West clinic (fictional)",
+      "x": 777450,
+      "y": 1433550
+    },
+    {
+      "id": "F02",
+      "name": "Central clinic (fictional)",
+      "x": 779200,
+      "y": 1434400
+    },
+    {
+      "id": "F03",
+      "name": "North clinic (fictional)",
+      "x": 777850,
+      "y": 1436100
+    },
+    {
+      "id": "F04",
+      "name": "East clinic (fictional)",
+      "x": 780850,
+      "y": 1435900
+    }
+  ]
+}

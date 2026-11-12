@@ -103,8 +103,15 @@ bool DriveCoach::valid(const Candidate& c,const WorldState& w,double now,bool st
     if(c.prompt==Prompt::moveOffPrep)return w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh<=3;
     if(c.origin==7)return true; // Risk instructions also apply while stopped (waiting at a junction).
     const auto d=domain(c);
-    if(d==DriveTask::Grade||d==DriveTask::Bend||d==DriveTask::Junction)
-        return w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>3&&w.telemetry.speedKmh<=300;
+    if(d==DriveTask::Grade||d==DriveTask::Bend||d==DriveTask::Junction) {
+        const bool known=w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh);
+        // A started sentence finishes through a moment without a speed reading; only a measured
+        // stop ends it. On the Nov 8 drive the speed reading dropped out for a second at a time
+        // ("Speed unavailable" at 3:59): "Right turn here..." was cut and said again from the
+        // start, as were the turn preparation, a hill and a bend instruction.
+        if(started&&!known)return true;
+        return known&&w.telemetry.speedKmh>3&&w.telemetry.speedKmh<=300;
+    }
     return !(w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh<=3);
 }
 void DriveCoach::selected(const Candidate& c,double) noexcept {if(enabled_){task_=domain(c);phase_=c.urgent?"WARNING":"PREPARING";}}

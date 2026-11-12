@@ -55,7 +55,8 @@ int main(){try{
     test("a pothole (one side), a single jolt, a rough road, a hand-held phone and unknown speed are not bumps",[]{
         auto pothole=run(Kind::pothole,20);check(!accepted(pothole)&&pothole.size()==1&&pothole[0].reason==BumpReason::oneSided,"pothole taken as a bump");
         auto single=run(Kind::single,20);check(!accepted(single)&&single.size()==1&&single[0].reason==BumpReason::oneAxle,"single jolt taken as a bump");
-        check(!accepted(run(Kind::bump,20,1.8)),"bump on a rough road accepted");
+        // Rough by the detector's own measure: background vibration above 1.5 m/s^2 RMS (+-3 m/s^2 here).
+        check(!accepted(run(Kind::bump,20,3.)),"bump on a rough road accepted");
         auto hand=run(Kind::bump,20,.25,true);check(!accepted(hand)&&hand[0].reason==BumpReason::handled,"hand-held jolt accepted");
         auto unknown=run(Kind::bump,20,.25,false,false);check(!accepted(unknown)&&unknown[0].reason==BumpReason::speed,"bump with unknown speed accepted");
         check(run(Kind::none,20).empty(),"ordinary road vibration made an event");

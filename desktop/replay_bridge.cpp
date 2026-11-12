@@ -97,6 +97,10 @@ EXPORT int replay_prepare_mosaic_plan(Replay* r,const uint8_t* yuv,float* tensor
 }
 // The filmed image's optics (fractions of the image): the phone's preview crop for screen recordings.
 EXPORT void replay_camera_geometry(Replay* r,double fx,double fy,double cx,double cy){ld_camera_geometry(r->engine,fx,fy,cx,cy);}
+// "You first": seed the learner's record (replays of a learner the coach already trusts) and read it back.
+EXPORT int replay_learner_restore(Replay* r,int skill,int drives,const int* outcomes,size_t count){return ld_learner_restore(r->engine,skill,drives,outcomes,count);}
+EXPORT const char* replay_learner_json(Replay* r){return ld_learner_json(r->engine);}
+EXPORT int replay_learner_hold(Replay* r,double now,double* out){return ld_learner_hold(r->engine,now,out,3);}
 EXPORT int replay_prepare_zoom(Replay* r,const uint8_t* yuv,float* tensor,float horizon) {
     const auto f=r->frame(yuv);
     return ld_preprocess_zoom(r->engine,f.y.data,f.y.size,f.y.rowStride,1,f.u.data,f.u.size,f.u.rowStride,1,

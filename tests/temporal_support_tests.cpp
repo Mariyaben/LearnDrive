@@ -1,4 +1,5 @@
 #include "learndrive/coaching/TemporalSupport.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -81,6 +82,30 @@ int main(){try {
         for(int i=0;i<=200;++i)v.observe(2,3+i*.1,20+i*.05,true,3+i*.1);
         check(v.sampleCount(23)<=101,"unbounded telemetry retention");
         check(v.trend(23)==MotionTrend::Steady,"small speed noise became response");
+    });
+    test("stepped speed readings still show a learner slowing down or speeding up",[]{
+        // Whole km/h twice a second (a replay's readings), read 100 times a second: 24 -> 9 km/h.
+        const double steps[]={24,24,23,22,20,17,15,12,11,9};
+        VehicleStateEstimator v;v.beginSource(1);bool decreasing=false;
+        for(int i=0;i<500;++i){const double t=i*.01;v.observe(1,t,steps[std::min(9,int(t/.5))],true,t);
+            if(t>=2.5)decreasing|=v.trend(t)==MotionTrend::Decreasing;}
+        check(decreasing,"braking from 24 to 9 km/h in stepped readings was never seen as slowing");
+        check(v.trend(4.99)==MotionTrend::Decreasing,"still slowing at the end of the braking");
+        // The phone's filter: smooth between GPS fixes, a 3 km/h correction at each one-second fix.
+        VehicleStateEstimator p;p.beginSource(1);
+        for(int i=0;i<=120;++i){const double t=i/30.;p.observe(1,t,40-1.5*t-3*std::floor(t),true,t);}
+        check(p.trend(4)==MotionTrend::Decreasing,"GPS corrections of 3 km/h hid the slowing");
+        VehicleStateEstimator up;up.beginSource(1);
+        for(int i=0;i<400;++i){const double t=i*.01;up.observe(1,t,10+2*std::floor(t/.5),true,t);}
+        check(up.trend(3.99)==MotionTrend::Increasing,"stepped readings hid the speeding up");
+        // A glitch is still not driving: 30 km/h for two seconds, then one reading of 75.
+        VehicleStateEstimator g;g.beginSource(1);
+        for(int i=0;i<=200;++i)g.observe(1,i*.01,30,true,i*.01);
+        g.observe(1,2.01,75,true,2.01);check(g.trend(2.01)==MotionTrend::Unknown,"a 45 km/h jump in one reading became a trend");
+        // ...nor is a 12 km/h jump between two readings of a smoothly changing speed.
+        VehicleStateEstimator s;s.beginSource(1);
+        for(int i=0;i<=200;++i)s.observe(1,i*.01,30+.01*i,true,i*.01);
+        s.observe(1,2.01,44.1,true,2.01);check(s.trend(2.01)==MotionTrend::Unknown,"a 12 km/h jump in 10 ms became a trend");
     });
     std::cout<<passed<<" temporal support groups passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

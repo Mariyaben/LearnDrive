@@ -35,7 +35,11 @@ def inference_key(provenance):
 
 
 POLICY_SOURCES = ("core/src/coaching/", "core/include/learndrive/coaching/", "core/src/c_api.cpp",
-                  "core/include/learndrive/c_api.h", "core/include/learndrive/types.hpp")
+                  "core/include/learndrive/c_api.h", "core/include/learndrive/types.hpp",
+                  # Navigation, motion sensing and bump learning never touch the detector's input or output.
+                  "core/src/navigation/", "core/include/learndrive/navigation", "core/src/fusion.cpp",
+                  "core/include/learndrive/fusion.hpp", "core/src/bump_detector.cpp",
+                  "core/include/learndrive/BumpDetector.hpp")
 
 
 def inference_provenance(root, video, assets, library, geometry, fps, semantic_hz,

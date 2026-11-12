@@ -83,8 +83,9 @@ void BumpDetector::finish(double time) noexcept {
             }
         }
         if(best<=0)e.reason=BumpReason::oneAxle;
+        // A car rolled by one side dropping into a pothole pitches little: name the roll first.
+        else if(maxRoll_>rollShare*std::max(maxPitch_,minPitch))e.reason=BumpReason::oneSided;
         else if(maxPitch_<minPitch)e.reason=BumpReason::weakPitch;
-        else if(maxRoll_>rollShare*maxPitch_)e.reason=BumpReason::oneSided;
         else e.reason=BumpReason::accepted;
     }
     const size_t slot=(head_+count_)%done_.size();

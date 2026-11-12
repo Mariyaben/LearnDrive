@@ -30,12 +30,16 @@ public:
     CarMotion motion() const noexcept {return motion_;}
 private:
     void calibrate(const ImuSample& s);
+    // Motion without the level reference: gravity, turn rate, longitudinal acceleration and speed.
+    void live(const ImuSample& s,double dt);
     void restartCalibration(const char* reason);
     void rememberCameraPose(double time) noexcept;
     struct CameraPose {double time=-infinity;Vec3 up;};
     std::array<CameraPose,64> cameraPoses_{};
     size_t poseCursor_{},poseCount_{};
     bool calibrated_{};
+    // Samples of gravity tracked since the motion stream (re)started; the pose needs a short warm-up.
+    int liveCount_{};
     uint64_t calibrationId_{};
     double start_=-1,lastImu_=-1,lastGps_=-1,calibrationProgress_{};
     int count_{},linearCount_{};

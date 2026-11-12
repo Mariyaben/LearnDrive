@@ -252,6 +252,25 @@ class NativeCore : AutoCloseable {
     private external fun calibrationId(h:Long):Long
     private external fun cameraIntrinsics(h:Long,fy:Double)
     private external fun cameraGeometry(h:Long,fx:Double,fy:Double,cx:Double,cy:Double)
+    /** "You first": the learner's measured responses to road users (see ld_learner_* in c_api.h). */
+    @Synchronized fun learnerWaiting(enabled:Boolean)=learnerWaiting(handle,enabled)
+    @Synchronized fun learnerNewDrive()=learnerNewDrive(handle)
+    @Synchronized fun learnerForget()=learnerForget(handle)
+    @Synchronized fun learnerOutcomes(skill:Int):IntArray=learnerOutcomes(handle,skill)
+    @Synchronized fun learnerRestore(skill:Int,drives:Int,outcomes:IntArray):Boolean=learnerRestore(handle,skill,drives,outcomes)
+    @Synchronized fun learnerJson():String=learnerJson(handle)
+    /** This drive's outcomes (before, after, none), wait level per kind (4), recent outcomes per kind (4). */
+    @Synchronized fun learnerSummary():IntArray=learnerSummary(handle)
+    /** Kind of situation whose instruction is held (-1 none), 1 if the learner is slowing, seconds held. */
+    @Synchronized fun learnerHold(now:Double):DoubleArray=learnerHold(handle,now)
+    private external fun learnerWaiting(h:Long,enabled:Boolean)
+    private external fun learnerNewDrive(h:Long)
+    private external fun learnerForget(h:Long)
+    private external fun learnerOutcomes(h:Long,skill:Int):IntArray
+    private external fun learnerRestore(h:Long,skill:Int,drives:Int,outcomes:IntArray):Boolean
+    private external fun learnerJson(h:Long):String
+    private external fun learnerSummary(h:Long):IntArray
+    private external fun learnerHold(h:Long,now:Double):DoubleArray
     private external fun cameraUp(h:Long,time:Double):DoubleArray
     private external fun spatialPublish(h:Long,id:Long,time:Double,output:ByteBuffer):Boolean
     private external fun spatialUnavailable(h:Long,id:Long,time:Double):Boolean

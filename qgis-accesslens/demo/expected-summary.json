@@ -1,0 +1,11 @@
+{
+  "communities": 36,
+  "facilities": 4,
+  "population": 19640,
+  "served_population": 10183,
+  "underserved_population": 9457,
+  "coverage_pct": 51.848268839103866,
+  "underserved_communities": 15,
+  "weighted_mean_m": 1030.4460391058494,
+  "max_distance_m": 2280.350850198276
+}

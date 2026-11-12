@@ -128,7 +128,9 @@ static ld::MosaicPlan mosaicPlan(const ld_engine& e,double time) {
         double angle=turning?std::clamp(yaw*seconds/2,k?-.12:-.3,k?.12:.3):0;
         if(e.sourceKind==LD_SOURCE_CAMERA){const double route=e.routeLine.aim(time,seconds);if(std::isfinite(route))angle=route;}
         angle=std::clamp(angle,-.45,.45);
-        p.aim[k]=float(std::clamp(e.camera.cx-e.camera.fx*std::tan(angle),0.,1.));
+        // "Straight ahead" is the column the car is heading for, learned on this drive when the
+        // phone is turned in its mount (else the optical centre).
+        p.aim[k]=float(std::clamp(e.coaching.risk().headingColumn(e.camera.cx)-e.camera.fx*std::tan(angle),0.,1.));
     }
     return p;
 }
@@ -317,6 +319,7 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.route={};w.route.routeId=route.routeId;w.route.eventId=route.featureId;w.route.epoch=e.coachingRouteEpoch;
     w.route.captureTime=provider?e.coachingRouteReceipt:route.fixTime;w.route.gpsTime=route.fixTime;
     w.route.distanceM=route.distanceM;w.route.feature=int(route.feature);w.route.valid=route.valid&&route.featureId!=0;w.route.provider=provider;
+    w.route.held=provider&&route.held;
     w.route.etaSeconds=provider&&std::isfinite(e.coachingRouteEta)?std::max(0.,e.coachingRouteEta-(now-e.coachingRouteReceipt)):ld::infinity;
     if(provider&&w.route.valid) {
         // Google's distance at the moment of its update, carried forward by the measured
@@ -331,7 +334,9 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     w.hornRules=e.hornRules;
     w.visibleTop=e.mosaic.active?e.mosaic.visibleTop:0;
     w.arriving=provider&&e.providerNavigation.arriving(now);
-    w.rerouting=e.providerNavigation.rerouting(now);
+    // Being rerouted, or just rerouted onto a different turn (said once: "The route has changed").
+    w.rerouting=e.providerNavigation.rerouting(now)||e.providerNavigation.rerouted(now);
+    w.routeChanged=e.providerNavigation.rerouted(now);
     // Box geometry is read through the analysed image's own optics (the preview crop).
     w.camera=e.camera;w.horizon=e.camera.cy;
     if(std::isfinite(e.horizonOverride)){w.horizon=e.horizonOverride;w.horizonMeasured=true;}
@@ -633,6 +638,9 @@ const char* ld_dual_policy_reason(ld_engine* e) {return e?e->dualReason:"engine 
 int ld_guidance_begin(ld_engine* e,uint64_t id,int kind,double now) {
     if(!e||!id||id<=e->sourceId||kind<LD_SOURCE_CAMERA||kind>LD_SOURCE_SCREEN||!std::isfinite(now)||now<0)return 0;
     ld_camera_started(e,now);e->sourceId=id;e->sourceKind=kind;e->guidance={};e->guidanceTime=now;e->sourceStartedAt=now;
+    // "You first" learns from, and applies to, the learner's own driving only: never a test video
+    // or a simulation, whose speed is a manual or scripted value.
+    e->coaching.learner().measuredDriving(kind==LD_SOURCE_CAMERA);
     e->spatialCamera={};e->focalY=ld::infinity;e->gray={};e->transform={};e->semanticHazard={};
     e->spatialUnavailableAt=-ld::infinity;
     e->navigation.invalidateFix();
@@ -853,6 +861,27 @@ void ld_coaching_task_scheduling(ld_engine* e,int enabled){if(e)e->coaching.enab
 const char* ld_coaching_drive_json(ld_engine* e){
     if(!e)return "{}";try{e->intelligenceContext=e->coaching.drive().json(e->coaching.task());return e->intelligenceContext.c_str();}catch(...){return "{}";}
 }
+void ld_learner_waiting(ld_engine* e,int enabled){if(e)e->coaching.learner().enableWaiting(enabled!=0);}
+void ld_learner_new_drive(ld_engine* e){if(e)e->coaching.learner().newDrive();}
+int ld_learner_outcomes(ld_engine* e,int skill,int* out,size_t capacity){return e?int(e->coaching.learner().outcomes(skill,out,capacity)):0;}
+int ld_learner_restore(ld_engine* e,int skill,int drives,const int* outcomes,size_t count){return e&&e->coaching.learner().restore(skill,drives,outcomes,count);}
+void ld_learner_forget(ld_engine* e){if(e)e->coaching.learner().forget();}
+const char* ld_learner_json(ld_engine* e){
+    if(!e)return "{}";try{e->intelligenceContext=e->coaching.learner().json();return e->intelligenceContext.c_str();}catch(...){return "{}";}
+}
+int ld_learner_hold(ld_engine* e,double now,double* out,size_t capacity){
+    if(!e||!out||capacity<3)return 0;
+    // Only a hold decided on a camera frame within the last 1.5 s: when frames stop, so does the claim.
+    const auto h=e->coaching.risk().hold();const bool live=h.skill>=0&&std::isfinite(now)&&std::abs(now-h.at)<=1.5;
+    out[0]=live?h.skill:-1;out[1]=live&&h.responding;out[2]=live?std::max(0.,now-h.since):0;return 1;
+}
+int ld_learner_summary(ld_engine* e,int* out,size_t capacity){
+    if(!e||!out||capacity<11)return 0;
+    const auto& r=e->coaching.learner();out[0]=out[1]=out[2]=0;
+    for(int k=0;k<ld::coaching::LearnerRecord::skills;++k){const auto d=r.drive(k);out[0]+=d.before;out[1]+=d.after;out[2]+=d.none;
+        out[3+k]=r.earnedLevel(k);out[7+k]=r.recent(k).total();}
+    return 11;
+}
 const char* ld_coaching_task_json(ld_engine* e){
     if(!e)return "{}";try{e->intelligenceContext=e->coaching.task().json();return e->intelligenceContext.c_str();}catch(...){return "{}";}
 }
@@ -934,7 +963,10 @@ int ld_navigation_turn_update(ld_engine* e,const ld_navigation_turn* turn) {
         turn->received_at,static_cast<ld::navigation::TurnState>(turn->state),turn->step_number,
         static_cast<ld::navigation::TurnKind>(turn->maneuver),turn->estimated_remaining_m,turn->estimated_remaining_seconds};
     if(!e->providerNavigation.update(input))return 0;
-    e->coachingRouteReceipt=turn->received_at;e->coachingRouteEpoch=turn->route_epoch;e->coachingRouteEta=turn->estimated_remaining_seconds;
+    // The coached turn's own receipt time, time-to-turn and epoch: a "rerouting" blink of the feed
+    // carries the turn on, and the same turn under a refreshed route keeps its epoch.
+    e->coachingRouteReceipt=e->providerNavigation.receivedAt();e->coachingRouteEpoch=e->providerNavigation.epoch();
+    e->coachingRouteEta=e->providerNavigation.remainingSeconds();
     e->navigation.clear();e->guidance.eligible=0;return 1;
 }
 void ld_navigation_turn_unavailable(ld_engine* e) {

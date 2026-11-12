@@ -1,0 +1,65 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "F01",
+        "name": "West clinic (fictional)",
+        "data_source": "synthetic"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55729645707167,
+          12.955016895227836
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "F02",
+        "name": "Central clinic (fictional)",
+        "data_source": "synthetic"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57349394637157,
+          12.962536638575262
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "F03",
+        "name": "North clinic (fictional)",
+        "data_source": "synthetic"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5612164638027,
+          12.978016502273121
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "F04",
+        "name": "East clinic (fictional)",
+        "data_source": "synthetic"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58883192936834,
+          12.975936097607985
+        ]
+      }
+    }
+  ]
+}

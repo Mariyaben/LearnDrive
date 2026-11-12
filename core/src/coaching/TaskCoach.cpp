@@ -24,6 +24,10 @@ double lead(const WorldState& w,double now) noexcept {
     return seconds;
 }
 bool delivered(const Event& e) noexcept {return e.visualOnly||e.deliveryStage==DeliveryStage::Completed;}
+// Interrupted, but only after the part that matters had been spoken.
+bool saidEnough(const Event& e) noexcept {
+    return e.deliveryStage==DeliveryStage::Interrupted&&std::isfinite(e.startedAt)&&e.startedAt>=0&&e.endedAt-e.startedAt>=saidEnoughSeconds;
+}
 const char* phase(TaskPhase p) {
     switch(p){case TaskPhase::Off:return "OFF";case TaskPhase::Waiting:return "WAITING_FOR_ROUTE";case TaskPhase::Preparing:return "PREPARING";
     case TaskPhase::AwaitingDelivery:return "AWAITING_DELIVERY";case TaskPhase::ObservingResponse:return "OBSERVING_RESPONSE";
@@ -51,8 +55,16 @@ bool TaskCoach::reserves(double block) const noexcept {
     return false;
 }
 void TaskCoach::sourceChanged() noexcept {
-    if(state_.event){++state_.unassessedOutcomes;state_.event=0;}
+    if(state_.event) {
+        ++state_.unassessedOutcomes;
+        // Remember what was said about this turn (a step cut off by the restart counts once its
+        // key words were out): if the same Google turn comes back, it is not coached again.
+        const auto heard=[&](int step){return state_.flightStep==step&&state_.flightHeard>=saidEnoughSeconds;};
+        state_.said={state_.route,state_.event,state_.epoch,state_.planningDelivered||heard(1),state_.approachDelivered||heard(2),state_.entryDelivered||heard(3)};
+        state_.event=0;
+    }
     state_.phase=enabled_?TaskPhase::Waiting:TaskPhase::Off;state_.planningDelivered=state_.approachDelivered=state_.speedReductionObserved=state_.entryDelivered=false;
+    state_.flightStep=0;state_.flightHeard=0;
 }
 double TaskCoach::leadSeconds(const WorldState& w,double now) noexcept {return lead(w,now);}
 bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool started) noexcept {
@@ -65,6 +77,7 @@ bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool 
        cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&
        std::isfinite(w.telemetry.speedKmh)&&w.telemetry.speedKmh>=0&&w.telemetry.speedKmh<=3&&!w.telemetry.shock&&
        c.origin==5&&c.kind==EventKind::Route&&c.lessonEpoch==w.route.epoch&&(c.lessonStep==2||c.lessonStep==3))return true;
+    if(w.route.held&&!started)return false;
     // Braking to approach the junction is the expected response, not missing evidence.
     if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock||c.origin!=5||c.kind!=EventKind::Route||c.urgent||c.critical||c.lessonEpoch!=w.route.epoch)return false;
     if(w.route.provider) {
@@ -94,6 +107,25 @@ bool TaskCoach::evidence(const Candidate& c,const WorldState& w,double now,bool 
     const bool actBy=seconds>=(started?actByEntryClose:actByApproachClose)&&(started||seconds<=actByApproachOpen);
     return c.lessonStep==2&&approachPrompt&&(fixed||actBy);
 }
+// What the ledger says about the current turn's steps: said (finished, shown, or cut off only after
+// its key words: never started over then), still being spoken, or neither.
+void TaskCoach::absorb(const EventLedger& ledger,double now,bool& submitted,bool& entrySubmitted) noexcept {
+    state_.flightStep=0;state_.flightHeard=0;
+    for(const auto& e:ledger.entries())if(e.used&&e.sourceId==state_.source&&e.identity.space==IdentitySpace::Route&&e.identity.id==state_.event&&
+        e.identity.scope==state_.route&&e.lessonEpoch==state_.epoch&&e.acceptedAt>=state_.startedAt&&e.lessonStep){
+        const bool said=delivered(e)||saidEnough(e);
+        if(said&&e.lessonStep==1&&!state_.planningDelivered){state_.planningDelivered=true;state_.responseSince=now;++state_.planningCompletions;}
+        if(said&&e.lessonStep==2&&!state_.approachDelivered){state_.approachDelivered=true;++state_.approachCompletions;}
+        if(said&&e.lessonStep==3&&!state_.entryDelivered){state_.entryDelivered=true;++state_.entryCompletions;}
+        if(e.deliveryStage==DeliveryStage::Started&&std::isfinite(e.startedAt)&&e.startedAt>=0){state_.flightStep=e.lessonStep;state_.flightHeard=now-e.startedAt;}
+        submitted|=e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started;
+        entrySubmitted|=e.lessonStep==3&&(e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started);
+    }
+}
+void TaskCoach::settle(const EventLedger& ledger,double now) noexcept {
+    if(!enabled_||!state_.event||!std::isfinite(now))return;
+    bool submitted=false,entrySubmitted=false;absorb(ledger,now,submitted,entrySubmitted);
+}
 void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const EventLedger& ledger) noexcept {
     if(!enabled_)return;
     if(!w.active){state_.quietUntil=-1;state_.quietEvent=0;sourceChanged();return;}
@@ -111,19 +143,28 @@ void TaskCoach::observe(const WorldState& w,const ShortMemory& memory,const Even
     }
     if(seconds<0||w.telemetry.hardBraking||w.telemetry.shock){state_.phase=TaskPhase::Uncertain;return;}
     if(different){
-        if(state_.event)++state_.unassessedOutcomes;
+        // The same Google turn after a camera restart (only the source changed) or after a moment
+        // without readings: Google's turn does not depend on the camera, so what was already said
+        // about it stands. (A hot phone's camera restarting mid-junction started the turn's
+        // instructions over.) Junctions the app finds itself keep starting afresh: the same
+        // junction can be driven twice.
+        const bool held=state_.event&&state_.route==w.route.routeId&&state_.event==w.route.eventId&&state_.epoch==w.route.epoch;
+        const bool back=!state_.event&&state_.said.event&&state_.said.route==w.route.routeId&&state_.said.event==w.route.eventId&&state_.said.epoch==w.route.epoch;
+        const bool same=w.route.provider&&(held||back);
+        const auto heard=[&](int step){return state_.flightStep==step&&state_.flightHeard>=saidEnoughSeconds;};
+        const bool planning=same&&(held?state_.planningDelivered||heard(1):state_.said.planning);
+        const bool approach=same&&(held?state_.approachDelivered||heard(2):state_.said.approach);
+        const bool entry=same&&(held?state_.entryDelivered||heard(3):state_.said.entry);
+        if(state_.event&&!same)++state_.unassessedOutcomes;
+        if(same&&back&&state_.unassessedOutcomes)--state_.unassessedOutcomes;
         state_.source=w.sourceId;state_.route=w.route.routeId;state_.event=w.route.eventId;state_.epoch=w.route.epoch;
-        state_.startedAt=w.now;state_.responseSince=-1;state_.planningDelivered=state_.approachDelivered=state_.speedReductionObserved=state_.entryDelivered=false;++state_.opportunities;
+        state_.startedAt=w.now;state_.responseSince=planning?w.now:-1;state_.speedReductionObserved=false;
+        state_.planningDelivered=planning;state_.approachDelivered=approach;state_.entryDelivered=entry;
+        if(!same)++state_.opportunities;
+        state_.said={};
     }
     bool submitted=false,entrySubmitted=false;
-    for(const auto& e:ledger.entries())if(e.used&&e.sourceId==w.sourceId&&e.identity.space==IdentitySpace::Route&&e.identity.id==w.route.eventId&&
-        e.identity.scope==w.route.routeId&&e.lessonEpoch==state_.epoch&&e.acceptedAt>=state_.startedAt&&e.lessonStep){
-        if(delivered(e)&&e.lessonStep==1&&!state_.planningDelivered){state_.planningDelivered=true;state_.responseSince=w.now;++state_.planningCompletions;}
-        if(delivered(e)&&e.lessonStep==2&&!state_.approachDelivered){state_.approachDelivered=true;++state_.approachCompletions;}
-        if(delivered(e)&&e.lessonStep==3&&!state_.entryDelivered){state_.entryDelivered=true;++state_.entryCompletions;}
-        submitted|=e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started;
-        entrySubmitted|=e.lessonStep==3&&(e.deliveryStage==DeliveryStage::Submitted||e.deliveryStage==DeliveryStage::Started);
-    }
+    absorb(ledger,w.now,submitted,entrySubmitted);
     if(state_.planningDelivered&&memory.speedTrend(w.now,state_.responseSince)==SpeedTrend::Decreasing&&!state_.speedReductionObserved){state_.speedReductionObserved=true;++state_.observedReductions;}
     state_.byDistance=false;
     if(scheduling_&&w.route.provider) {
@@ -170,7 +211,7 @@ Candidate TaskCoach::proposal(const WorldState& w) const noexcept {
     else return c;
     c.origin=5;c.kind=EventKind::Route;c.identity={IdentitySpace::Route,w.route.eventId,w.route.routeId};c.supported=true;c.lessonEpoch=w.route.epoch;
     c.captureTime=w.route.captureTime;c.maxAge=w.route.provider?3:2.5;c.expiresAt=c.captureTime+c.maxAge;
-    if(!evidence(c,w,w.now))return {};
+    if(w.route.held||!evidence(c,w,w.now))return {}; // Nothing new starts on a turn carried through a feed blink.
     return c;
 }
 bool TaskCoach::valid(const Candidate& c,const WorldState& w,double now,const EventLedger& ledger) const noexcept {
@@ -185,8 +226,8 @@ bool TaskCoach::valid(const Candidate& c,const WorldState& w,double now,const Ev
     if(c.lessonStep==3)return scheduling_&&!state_.entryDelivered; // Still said if the preparation was missed.
     if(!state_.planningDelivered||state_.approachDelivered)return false;
     if(state_.speedReductionObserved&&!(scheduling_&&c.prompt==Prompt::junctionGearDown))return false;
-    for(const auto& e:ledger.entries())if(e.used&&e.sourceId==w.sourceId&&e.identity==c.identity&&e.lessonStep==1&&e.lessonEpoch==state_.epoch&&e.acceptedAt>=state_.startedAt&&delivered(e))return true;
-    return false;
+    // The preparation was said (see observe: finished, said enough, or carried over for the same turn).
+    return true;
 }
 bool TaskCoach::continuing(const Candidate& c,const WorldState& w,double now,const EventLedger& ledger) const noexcept {
     if(!c.lessonStep||!scheduling_)return valid(c,w,now,ledger);

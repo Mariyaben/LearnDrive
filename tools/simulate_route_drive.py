@@ -490,7 +490,10 @@ def run(args):
             side = None  # Without a route the brain cannot know which way the learner will go.
         # The latest preparation at least 3 s before the turn (anything later is for the next
         # junction, or too late to count), and the latest entry cue before the turn itself.
-        prep = latest(lambda x: ("turn ahead" in x.lower() or "junction ahead" in x.lower()) and
+        # (Since 0.7.9 a Google turn is prepared by distance: "In 100 metres, turn right. Check your
+        # mirrors. Signal right." The older wording was "Right turn ahead. Check your mirrors...".)
+        prep = latest(lambda x: ("turn ahead" in x.lower() or "junction ahead" in x.lower() or
+                                 (x.lower().startswith("in ") and "metres" in x.lower())) and
                       ("signal" in x.lower() or "mirrors" in x.lower() or "ease off" in x.lower()), prev_t, t_m - 3)
         entry = latest(lambda x: "look both ways" in x.lower(), prev_t, t_m + .2)
         right_side = prep is None or side is None or side in prep["text"].lower()

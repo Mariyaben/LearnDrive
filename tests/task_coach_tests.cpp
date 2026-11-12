@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 using namespace ld;
 using namespace ld::coaching;
 namespace {
@@ -12,12 +13,14 @@ int failed=0;
 // Every group runs: one failure no longer hides the rest of the suite.
 template<class F>void test(const char* name,F f){try{f();++passed;std::cout<<"PASS "<<name<<'\n';}
     catch(const std::exception& e){++failed;std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';}}
-// Act-by schedule at 30 km/h: preparation 6.5-14.5 s before the junction, "brake, change
-// down" 6.5-10.5 s, entry 2-6 s (only at or below 25 km/h); routine cues quiet below 8 s.
+// A junction found on the map by the app itself (not a Google step: those run on Google's
+// distance since 0.7.9 and are covered by the drive-coach tests). Act-by schedule at 30 km/h:
+// preparation 6.5-14.5 s before the junction, "brake, change down" 6.5-10.5 s, entry 2-6 s
+// (only at or below 25 km/h); routine cues quiet below 8 s.
 WorldState scene(double time,double seconds=13,double speed=30,int feature=4,uint64_t event=9){
     WorldState w;w.sourceId=1;w.now=w.captureTime=time;w.frameSequence=uint64_t(time*1000)+1;
     w.active=true;w.audioReady=true;w.telemetry={time,speed,0,0,1,true,true,true,false,false,false};
-    w.route={17,event,2,time,seconds*speed/3.6,seconds,time,feature,true,true};return w;
+    w.route={17,event,2,time,seconds*speed/3.6,seconds,time,feature,true,false};return w;
 }
 void actor(WorldState& w,bool urgent){
     ActorObservation a;a.identity={IdentitySpace::Attention,7,0};a.captureTime=w.now;a.confidence=.9;
@@ -97,11 +100,12 @@ int main(){try {
         f.decide(scene(4.2,13,32));check(!f.p->task().progress().speedReductionObserved,"steady response called slowing");
     });
     test("stale and missing inputs suppress the task",[]{
+        // (The time to the junction is no longer an input: the lead is distance over measured speed.)
         for(int fault=0;fault<10;++fault){Fixture f;auto w=scene(5);
             switch(fault){case 0:w.captureTime=4;break;case 1:w.route.gpsTime=2;break;case 2:w.route.captureTime=1;break;
             case 3:w.telemetry.time=4;break;case 4:w.telemetry.speedValid=false;break;case 5:w.route.valid=false;break;
-            case 6:w.route.etaSeconds=infinity;break;case 7:w.telemetry.speedKmh=0;break;case 8:w.active=false;break;case 9:w.route.distanceM=-1;break;}
-            check(!f.decide(w).eligible,"missing/stale evidence produced teaching");}
+            case 6:w.route.routeId=0;break;case 7:w.telemetry.speedKmh=0;break;case 8:w.active=false;break;case 9:w.route.distanceM=-1;break;}
+            check(!f.decide(w).eligible,(std::string("missing/stale evidence produced teaching: fault ")+std::to_string(fault)).c_str());}
     });
     test("hard braking and a jolt suppress extra teaching; braking to approach the junction does not",[]{
         for(int fault=0;fault<3;++fault){Fixture f;auto w=scene(1);w.telemetry.braking=fault==0;w.telemetry.hardBraking=fault==1;w.telemetry.shock=fault==2;
@@ -148,9 +152,9 @@ int main(){try {
     });
     test("disabled task rejects forged lesson and preserves map bend advice",[]{
         Fixture f;f.p->enableJunctionLesson(false);auto w=scene(1);Candidate c;c.prompt=Prompt::junctionPlanLeft;c.lessonStep=1;c.lessonEpoch=2;c.origin=5;c.kind=EventKind::Route;
-        c.identity={IdentitySpace::Route,9,17};c.captureTime=1;c.maxAge=3;c.expiresAt=4;c.supported=true;w.candidates[w.candidateCount++]=c;
+        c.identity={IdentitySpace::Route,9,17};c.captureTime=1;c.maxAge=2.5;c.expiresAt=3.5;c.supported=true;w.candidates[w.candidateCount++]=c;
         check(!f.decide(w).eligible,"forged disabled lesson");
-        Fixture bend;w=scene(1,30,30,1);c={};c.prompt=Prompt::mapLeftBend;c.origin=5;c.kind=EventKind::Route;c.identity={IdentitySpace::Route,9,17};c.captureTime=1;c.maxAge=3;c.expiresAt=4;c.supported=true;w.candidates[0]=c;w.candidateCount=1;
+        Fixture bend;w=scene(1,30,30,1);c={};c.prompt=Prompt::mapLeftBend;c.origin=5;c.kind=EventKind::Route;c.identity={IdentitySpace::Route,9,17};c.captureTime=1;c.maxAge=2.5;c.expiresAt=3.5;c.supported=true;w.candidates[0]=c;w.candidateCount=1;
         check(bend.decide(w).eligible,"junction pilot suppressed non-junction map context");
     });
     test("C API task status is explicit and aggregate only",[]{

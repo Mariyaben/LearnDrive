@@ -23,6 +23,11 @@ struct TaskProgress {
     // separate "brake, change down" step is needed (faster than actByApproachSpeed).
     double prepareLead=-1;
     bool fast{};
+    // The lesson step being spoken at the last tick and how long it had been audible.
+    int flightStep{};double flightHeard{};
+    // The Google turn last left behind by a camera restart or a moment without readings, and what
+    // had been said about it: the same turn coming back is not coached from the start again.
+    struct Said {uint64_t route{},event{},epoch{};bool planning{},approach{},entry{};} said;
 };
 // Experimental timing constants of the task schedule (seconds of lead time).
 inline constexpr double planningWindowOpen=40,planningWindowClose=22,approachWindowOpen=18,approachWindowClose=13;
@@ -50,6 +55,10 @@ inline double routePrepareBand(double kmh) noexcept {
 inline double routeEntryDistance(double kmh) noexcept {return std::max(14.,std::max(0.,kmh)/3.6*4);}
 inline double routeApproachDistance(double kmh) noexcept {return routePrepareBand(kmh)>50?62:std::max(28.,std::max(0.,kmh)/3.6*7);}
 inline constexpr double routeApproachSpeed=12,routeEntrySpeed=30,routeProviderAge=5;
+// A step cut off after this much of its sentence has said what matters ("In 100 metres, turn
+// left." takes about two seconds); starting it over repeats the instruction (Nov 8: the turn
+// preparation and "turn here" were each said twice within four seconds at two junctions).
+inline constexpr double saidEnoughSeconds=2;
 // A bounded teaching episode. No inference of mirror, indicator, control use or
 // manoeuvre correctness. Evidence and sequence are rechecked at delivery onset.
 class TaskCoach {
@@ -57,6 +66,8 @@ public:
     void enable(bool value) noexcept;
     bool enabled() const noexcept {return enabled_;}
     void sourceChanged() noexcept;
+    // Before the source changes: take in what the ledger says was said about the current turn.
+    void settle(const EventLedger&,double now) noexcept;
     void observe(const WorldState&,const ShortMemory&,const EventLedger&) noexcept;
     Candidate proposal(const WorldState&) const noexcept;
     bool valid(const Candidate&,const WorldState&,double,const EventLedger&) const noexcept;
@@ -78,6 +89,7 @@ public:
     // step of this episode less than minimumUsefulWindow of its delivery window.
     bool reserves(double blockSeconds) const noexcept;
 private:
+    void absorb(const EventLedger&,double now,bool& submitted,bool& entrySubmitted) noexcept;
     bool enabled_{},scheduling_=true;
     TaskProgress state_{};
 };

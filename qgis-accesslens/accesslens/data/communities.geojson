@@ -1,0 +1,581 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C01",
+        "name": "Community 01",
+        "data_source": "synthetic",
+        "population": 120
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55310101328944,
+          12.950089021079018
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C02",
+        "name": "Community 02",
+        "data_source": "synthetic",
+        "population": 293
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56046941269788,
+          12.950016699882447
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C03",
+        "name": "Community 03",
+        "data_source": "synthetic",
+        "population": 466
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5678377673453,
+          12.949944170798743
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C04",
+        "name": "Community 04",
+        "data_source": "synthetic",
+        "population": 639
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57520607710326,
+          12.949871433833795
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C05",
+        "name": "Community 05",
+        "data_source": "synthetic",
+        "population": 812
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58257434184335,
+          12.94979848899349
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C06",
+        "name": "Community 06",
+        "data_source": "synthetic",
+        "population": 985
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58994256143717,
+          12.94972533628375
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C07",
+        "name": "Community 07",
+        "data_source": "synthetic",
+        "population": 391
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55427535423406,
+          12.956853468908605
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C08",
+        "name": "Community 08",
+        "data_source": "synthetic",
+        "population": 564
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5616439456832,
+          12.95678107740337
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C09",
+        "name": "Community 09",
+        "data_source": "synthetic",
+        "population": 737
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56901249234623,
+          12.956708477899495
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C10",
+        "name": "Community 10",
+        "data_source": "synthetic",
+        "population": 910
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57638099409473,
+          12.95663567040286
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C11",
+        "name": "Community 11",
+        "data_source": "synthetic",
+        "population": 203
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58374945080031,
+          12.956562654919374
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C12",
+        "name": "Community 12",
+        "data_source": "synthetic",
+        "population": 376
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.59111786233449,
+          12.956489431454953
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C13",
+        "name": "Community 13",
+        "data_source": "synthetic",
+        "population": 662
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55323914926721,
+          12.963639594430266
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C14",
+        "name": "Community 14",
+        "data_source": "synthetic",
+        "population": 835
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56060794628357,
+          12.963567195014948
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C15",
+        "name": "Community 15",
+        "data_source": "synthetic",
+        "population": 128
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5679766985273,
+          12.963494587487707
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C16",
+        "name": "Community 16",
+        "data_source": "synthetic",
+        "population": 301
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57534540586997,
+          12.963421771854424
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C17",
+        "name": "Community 17",
+        "data_source": "synthetic",
+        "population": 474
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58271406818314,
+          12.963348748121007
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C18",
+        "name": "Community 18",
+        "data_source": "synthetic",
+        "population": 647
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.59008268533834,
+          12.963275516293375
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C19",
+        "name": "Community 19",
+        "data_source": "synthetic",
+        "population": 933
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55441362835863,
+          12.970404022780835
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C20",
+        "name": "Community 20",
+        "data_source": "synthetic",
+        "population": 226
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56178261763972,
+          12.970331553019072
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C21",
+        "name": "Community 21",
+        "data_source": "synthetic",
+        "population": 399
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56915156212311,
+          12.97025887503386
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C22",
+        "name": "Community 22",
+        "data_source": "synthetic",
+        "population": 572
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57652046168035,
+          12.970185988831094
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C23",
+        "name": "Community 23",
+        "data_source": "synthetic",
+        "population": 745
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58388931618299,
+          12.970112894416681
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C24",
+        "name": "Community 24",
+        "data_source": "synthetic",
+        "population": 918
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.59125812550255,
+          12.970039591796542
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C25",
+        "name": "Community 25",
+        "data_source": "synthetic",
+        "population": 324
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55337744219715,
+          12.97719015225781
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C26",
+        "name": "Community 26",
+        "data_source": "synthetic",
+        "population": 497
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.560746637273,
+          12.97711767461562
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C27",
+        "name": "Community 27",
+        "data_source": "synthetic",
+        "population": 670
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56811578756464,
+          12.977044988636687
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C28",
+        "name": "Community 28",
+        "data_source": "synthetic",
+        "population": 843
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57548489294359,
+          12.976972094326904
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C29",
+        "name": "Community 29",
+        "data_source": "synthetic",
+        "population": 136
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.58285395328136,
+          12.976898991692181
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C30",
+        "name": "Community 30",
+        "data_source": "synthetic",
+        "population": 309
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.59022296844948,
+          12.976825680738443
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C31",
+        "name": "Community 31",
+        "data_source": "synthetic",
+        "population": 595
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.55455205952342,
+          12.983954561120443
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C32",
+        "name": "Community 32",
+        "data_source": "synthetic",
+        "population": 768
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5619214470881,
+          12.98388201309402
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C33",
+        "name": "Community 33",
+        "data_source": "synthetic",
+        "population": 941
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.56929078984349,
+          12.983809256619317
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C34",
+        "name": "Community 34",
+        "data_source": "synthetic",
+        "population": 234
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.57666008766108,
+          12.98373629170224
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C35",
+        "name": "Community 35",
+        "data_source": "synthetic",
+        "population": 407
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.5840293404124,
+          12.983663118348696
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "C36",
+        "name": "Community 36",
+        "data_source": "synthetic",
+        "population": 580
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.59139854796894,
+          12.983589736564621
+        ]
+      }
+    }
+  ]
+}

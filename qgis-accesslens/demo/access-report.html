@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AccessLens — Service access analysis</title>
+<style>
+:root{color-scheme:light;--ink:#163744;--muted:#536d77;--teal:#157e73;--line:#dce7e6}
+*{box-sizing:border-box}body{margin:0;background:#f4f6f3;color:var(--ink);font:15px/1.6 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1240px;margin:auto;padding:44px 36px}header{display:flex;justify-content:space-between;gap:24px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:24px}
+.brand{font-weight:800;font-size:24px;letter-spacing:-1px}.brand span{color:var(--teal)}.pill{font-size:11px;letter-spacing:1.5px;border:1px solid #b3cbc5;border-radius:30px;padding:8px 14px}
+.eyebrow{color:var(--teal);font-size:12px;letter-spacing:2px;font-weight:700;margin-top:34px}h1{font-size:clamp(30px,4vw,49px);letter-spacing:-2px;line-height:1.1;margin:12px 0}p{color:var(--muted)}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:28px 0}.metric,article{background:white;border:1px solid var(--line);border-radius:14px;padding:22px}
+.metric strong{font-size:32px;display:block;line-height:1.2;margin:10px 0;color:var(--teal)}.metric small,.caption{color:var(--muted);font-size:12px}
+.layout{display:grid;grid-template-columns:1.65fr 1fr;gap:22px}h2{font-size:19px;margin:0 0 16px}svg{display:block;width:100%;height:auto}.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin:12px 0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--teal)}.gap{background:#d05b46}.facility{background:#183c4a;border-radius:0;transform:rotate(45deg)}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:right;padding:11px 7px;border-bottom:1px solid var(--line)}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}th{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted)}.note{font-size:13px;background:#eef5f1;border-radius:10px;padding:16px;margin-top:20px}.bottom{margin-top:22px}footer{font-size:12px;color:var(--muted);padding:24px 0}@media(max-width:900px){.layout{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}main{padding:24px 16px}}@media print{body{background:white}main{padding:0}article,.metric{break-inside:avoid}.layout{display:block}article{margin-bottom:16px}}
+</style></head><body><main>
+<header><div class="brand">Access<span>Lens</span> / QGIS</div><div class="pill">SERVICE ACCESS / ANALYSIS REPORT</div></header>
+<div class="eyebrow">SPATIAL ANALYSIS · POPULATION COVERAGE</div>
+<h1>Find the gaps.<br>Make access visible.</h1>
+<p>Fictional Bengaluru-area planning demo — synthetic communities and clinics · 36 communities · 4 facilities · 1,000 m access threshold</p>
+<section class="metrics" aria-label="Summary metrics">
+<div class="metric">Population within reach<strong>51.8%</strong><small>Population-weighted coverage</small></div>
+<div class="metric">People outside threshold<strong>9,457</strong><small>Of 19,640 total people</small></div>
+<div class="metric">Communities underserved<strong>15</strong><small>Of 36 communities assessed</small></div>
+<div class="metric">Mean distance<strong>1,030 m</strong><small>Weighted by population</small></div>
+</section><section class="layout"><article><h2>Service access map</h2><svg viewBox="0 0 960 620" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="map-title">Community access to service locations</title>
+<desc id="map-desc">Teal points are within the distance threshold; coral points are outside. Circles show straight-line service radii. Diamond markers show facilities.</desc>
+<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#dce6e6" stroke-width="0.7"/></pattern></defs>
+<rect width="960" height="620" rx="16" fill="#f2f7f5"/>
+<rect width="960" height="620" rx="16" fill="url(#grid)"/>
+<circle cx="328.80" cy="434.43" r="93.91" fill="#168a7b" fill-opacity="0.08" stroke="#168a7b" stroke-opacity="0.3" stroke-dasharray="5 5"/>
+<circle cx="493.15" cy="354.61" r="93.91" fill="#168a7b" fill-opacity="0.08" stroke="#168a7b" stroke-opacity="0.3" stroke-dasharray="5 5"/>
+<circle cx="366.37" cy="194.96" r="93.91" fill="#168a7b" fill-opacity="0.08" stroke="#168a7b" stroke-opacity="0.3" stroke-dasharray="5 5"/>
+<circle cx="648.10" cy="213.74" r="93.91" fill="#168a7b" fill-opacity="0.08" stroke="#168a7b" stroke-opacity="0.3" stroke-dasharray="5 5"/>
+<path d="M286.54 486.09L328.80 434.43" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="286.54" cy="486.09" r="6.44" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 01: 120 people; 711 m; served</title></circle>
+<path d="M361.67 486.09L328.80 434.43" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="361.67" cy="486.09" r="7.82" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 02: 293 people; 652 m; served</title></circle>
+<path d="M436.80 486.09L328.80 434.43" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="436.80" cy="486.09" r="8.81" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 03: 466 people; 1275 m; underserved</title></circle>
+<path d="M511.93 486.09L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="511.93" cy="486.09" r="9.64" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 04: 639 people; 1414 m; underserved</title></circle>
+<path d="M587.06 486.09L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="587.06" cy="486.09" r="10.36" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 05: 812 people; 1720 m; underserved</title></circle>
+<path d="M662.19 486.09L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="662.19" cy="486.09" r="11.00" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 06: 985 people; 2280 m; underserved</title></circle>
+<path d="M297.81 415.65L328.80 434.43" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="297.81" cy="415.65" r="8.41" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 07: 391 people; 386 m; served</title></circle>
+<path d="M372.94 415.65L328.80 434.43" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="372.94" cy="415.65" r="9.30" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 08: 564 people; 511 m; served</title></circle>
+<path d="M448.07 415.65L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="448.07" cy="415.65" r="10.05" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 09: 737 people; 808 m; served</title></circle>
+<path d="M523.20 415.65L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="523.20" cy="415.65" r="10.73" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 10: 910 people; 724 m; served</title></circle>
+<path d="M598.33 415.65L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="598.33" cy="415.65" r="7.18" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 11: 203 people; 1295 m; underserved</title></circle>
+<path d="M673.46 415.65L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="673.46" cy="415.65" r="8.32" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 12: 376 people; 2027 m; underserved</title></circle>
+<path d="M286.54 345.22L328.80 434.43" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="286.54" cy="345.22" r="9.74" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 13: 662 people; 1051 m; underserved</title></circle>
+<path d="M361.67 345.22L328.80 434.43" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="361.67" cy="345.22" r="10.45" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 14: 835 people; 1012 m; underserved</title></circle>
+<path d="M436.80 345.22L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="436.80" cy="345.22" r="6.52" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 15: 128 people; 608 m; served</title></circle>
+<path d="M511.93 345.22L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="511.93" cy="345.22" r="7.87" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 16: 301 people; 224 m; served</title></circle>
+<path d="M587.06 345.22L493.15 354.61" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="587.06" cy="345.22" r="8.86" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 17: 474 people; 1005 m; underserved</title></circle>
+<path d="M662.19 345.22L648.10 213.74" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="662.19" cy="345.22" r="9.67" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 18: 647 people; 1408 m; underserved</title></circle>
+<path d="M297.81 274.78L366.37 194.96" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="297.81" cy="274.78" r="10.81" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 19: 933 people; 1120 m; underserved</title></circle>
+<path d="M372.94 274.78L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="372.94" cy="274.78" r="7.35" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 20: 226 people; 853 m; served</title></circle>
+<path d="M448.07 274.78L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="448.07" cy="274.78" r="8.46" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 21: 399 people; 976 m; served</title></circle>
+<path d="M523.20 274.78L493.15 354.61" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="523.20" cy="274.78" r="9.33" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 22: 572 people; 908 m; served</title></circle>
+<path d="M598.33 274.78L648.10 213.74" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="598.33" cy="274.78" r="10.09" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 23: 745 people; 839 m; served</title></circle>
+<path d="M673.46 274.78L648.10 213.74" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="673.46" cy="274.78" r="10.76" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 24: 918 people; 704 m; served</title></circle>
+<path d="M286.54 204.35L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="286.54" cy="204.35" r="8.01" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 25: 324 people; 856 m; served</title></circle>
+<path d="M361.67 204.35L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="361.67" cy="204.35" r="8.97" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 26: 497 people; 112 m; served</title></circle>
+<path d="M436.80 204.35L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="436.80" cy="204.35" r="9.77" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 27: 670 people; 757 m; served</title></circle>
+<path d="M511.93 204.35L648.10 213.74" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="511.93" cy="204.35" r="10.48" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 28: 843 people; 1453 m; underserved</title></circle>
+<path d="M587.06 204.35L648.10 213.74" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="587.06" cy="204.35" r="6.60" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 29: 136 people; 658 m; served</title></circle>
+<path d="M662.19 204.35L648.10 213.74" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="662.19" cy="204.35" r="7.92" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 30: 309 people; 180 m; served</title></circle>
+<path d="M297.81 133.91L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="297.81" cy="133.91" r="9.44" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 31: 595 people; 977 m; served</title></circle>
+<path d="M372.94 133.91L366.37 194.96" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="372.94" cy="133.91" r="10.18" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 32: 768 people; 654 m; served</title></circle>
+<path d="M448.07 133.91L366.37 194.96" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="448.07" cy="133.91" r="10.84" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 33: 941 people; 1086 m; underserved</title></circle>
+<path d="M523.20 133.91L648.10 213.74" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="523.20" cy="133.91" r="7.41" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 34: 234 people; 1578 m; underserved</title></circle>
+<path d="M598.33 133.91L648.10 213.74" stroke="#d05b46" opacity="0.25" stroke-width="1.2"/>
+<circle cx="598.33" cy="133.91" r="8.50" fill="#d05b46" stroke="white" stroke-width="1.6"><title>Community 35: 407 people; 1002 m; underserved</title></circle>
+<path d="M673.46 133.91L648.10 213.74" stroke="#157e73" opacity="0.25" stroke-width="1.2"/>
+<circle cx="673.46" cy="133.91" r="9.37" fill="#157e73" stroke="white" stroke-width="1.6"><title>Community 36: 580 people; 892 m; served</title></circle>
+<path d="M328.80 424.43l10 10 -10 10 -10 -10Z" fill="#183c4a" stroke="white" stroke-width="2"><title>West clinic (fictional)</title></path>
+<text x="343.80" y="438.43" font-family="sans-serif" font-size="12" font-weight="700" fill="#183c4a">F1</text>
+<path d="M493.15 344.61l10 10 -10 10 -10 -10Z" fill="#183c4a" stroke="white" stroke-width="2"><title>Central clinic (fictional)</title></path>
+<text x="508.15" y="358.61" font-family="sans-serif" font-size="12" font-weight="700" fill="#183c4a">F2</text>
+<path d="M366.37 184.96l10 10 -10 10 -10 -10Z" fill="#183c4a" stroke="white" stroke-width="2"><title>North clinic (fictional)</title></path>
+<text x="381.37" y="198.96" font-family="sans-serif" font-size="12" font-weight="700" fill="#183c4a">F3</text>
+<path d="M648.10 203.74l10 10 -10 10 -10 -10Z" fill="#183c4a" stroke="white" stroke-width="2"><title>East clinic (fictional)</title></path>
+<text x="663.10" y="217.74" font-family="sans-serif" font-size="12" font-weight="700" fill="#183c4a">F4</text>
+<path d="M900 70V30l-5 12m5-12 5 12" stroke="#183c4a" stroke-width="2" fill="none"/>
+<text x="900" y="22" text-anchor="middle" fill="#183c4a" font-family="sans-serif" font-size="12">Grid N</text>
+<path d="M40 570v8h93.91v-8" stroke="#183c4a" fill="none" stroke-width="2"/>
+<text x="40" y="600" fill="#183c4a" font-family="sans-serif" font-size="12">1,000 m · local projected grid</text>
+</svg>
+<div class="legend"><span><i class="dot"></i>Within threshold</span><span><i class="dot gap"></i>Underserved</span><span><i class="dot facility"></i>Facility</span></div>
+<p class="caption">Point size reflects population. Dashed circles show each facility's service radius; lines connect communities to their nearest facility. This is a schematic map without a basemap.</p>
+<p class="caption">F1: West clinic (fictional) · F2: Central clinic (fictional) · F3: North clinic (fictional) · F4: East clinic (fictional)</p></article>
+<article><h2>Priority access gaps</h2><p class="caption">Top ten by population × excess distance (person-km).</p>
+<table><thead><tr><th>Rank</th><th>Community</th><th>People</th><th>Metres</th><th>Score</th></tr></thead><tbody><tr><td>01</td><td>Community 06</td><td>985</td><td>2,280</td><td>1,261.1</td></tr><tr><td>02</td><td>Community 05</td><td>812</td><td>1,720</td><td>585.0</td></tr><tr><td>03</td><td>Community 12</td><td>376</td><td>2,027</td><td>386.2</td></tr><tr><td>04</td><td>Community 28</td><td>843</td><td>1,453</td><td>382.3</td></tr><tr><td>05</td><td>Community 04</td><td>639</td><td>1,414</td><td>264.7</td></tr><tr><td>06</td><td>Community 18</td><td>647</td><td>1,408</td><td>264.0</td></tr><tr><td>07</td><td>Community 34</td><td>234</td><td>1,578</td><td>135.3</td></tr><tr><td>08</td><td>Community 03</td><td>466</td><td>1,275</td><td>128.0</td></tr><tr><td>09</td><td>Community 19</td><td>933</td><td>1,120</td><td>112.4</td></tr><tr><td>10</td><td>Community 33</td><td>941</td><td>1,086</td><td>80.9</td></tr></tbody></table>
+<div class="note"><strong>How to read priority</strong><br>Higher scores indicate larger population-distance gaps. These ranks support investigation; they do not identify an optimal new facility location.</div></article></section>
+<article class="bottom"><h2>How the distance target changes coverage</h2><table><thead><tr><th>Threshold</th><th>Population served</th><th>Coverage</th></tr></thead><tbody><tr><td>500 m</td><td>1,498</td><td>7.6%</td></tr><tr><td>1,000 m</td><td>10,183</td><td>51.8%</td></tr><tr><td>1,500 m</td><td>17,233</td><td>87.7%</td></tr></tbody></table></article>
+<article class="bottom"><h2>Method &amp; interpretation</h2><p>Each community is assigned to its nearest facility using straight-line distance in EPSG:32643. A community is served when its distance is at most 1,000 m. All of its population is represented at a single point. Population coverage is served population divided by total population; it is undefined when total population is zero.</p><p>Distances use a local projected grid. They do not represent road routes, travel times, opening hours, facility capacity, affordability, or real-world service quality. Choose an appropriate local metre-based CRS before interpreting results. Service circles may overlap and should not be summed as area coverage.</p></article>
+<footer>AccessLens 0.1.0 · Reproducible GIS portfolio project · Fictional Bengaluru-area planning demo — synthetic communities and clinics · CRS: EPSG:32643</footer>
+</main></body></html>

@@ -89,6 +89,11 @@ class Native:
                     "coaching_drive": ([P], C.c_char_p),
                     "coaching_continue_reason": ([P, C.c_int, C.c_double], C.c_char_p)})
 
+    def bind_learner(self):
+        self._bind({"learner_restore": ([P, C.c_int, C.c_int, P, C.c_size_t], C.c_int),
+                    "learner_json": ([P], C.c_char_p),
+                    "learner_hold": ([P, C.c_double, P], C.c_int)})
+
     def bind_navigation(self):
         self._bind({"live_navigation": ([P], C.c_int),
                     "navigation": ([P, C.c_double, C.c_uint64, C.c_int, C.c_int, C.c_double, C.c_double, C.c_double], C.c_int),
@@ -320,14 +325,40 @@ def main():
                         help="Task-aware scheduling of automatic coaching; off reproduces 0.7.1")
     parser.add_argument("--navigation", type=Path, help="SYNTHETIC navigation overlay JSON: "
                         '{"turns":[{"at":s,"maneuver":"left|right","appear_lead_s":45}],"unavailable":[[a,b]]}')
+    parser.add_argument("--google-feed", type=Path,
+                        help="Google's own turn feed for this drive, one sample a second: "
+                             '{"samples":[[seconds, turn index, "left|right", metres], ...]} '
+                             "(tools/google_feed_from_ocr.py rebuilds it from a screen recording)")
     parser.add_argument("--video-yaw", choices=["on", "off"], default="on",
                         help="Feed the camera's turn rate measured from the video (the phone uses its gyroscope)")
     parser.add_argument("--research-emergencies", action="store_true",
                         help="Enable unvalidated emergency phrases for explicit lab review")
+    parser.add_argument("--learner-level", type=int, choices=[0, 1, 2],
+                        help='"You first": replay as a learner whose record has earned this wait level for every kind '
+                             "of road user (0 = a new learner). The report lists what was left unsaid and what the "
+                             "learner's measured speed did about each road user")
     args = parser.parse_args()
+    if args.learner_level is not None and (args.coaching_profile == "legacy" or not args.speeds_as_live):
+        raise ValueError("--learner-level needs an explicit coaching profile and --speeds-as-live "
+                         "(the record only learns from the learner's own measured speed)")
     if args.save_temporal_context and args.coaching_profile=="legacy":raise ValueError("Temporal summaries require an explicit coaching profile")
     if (args.automatic or args.navigation) and args.coaching_profile=="legacy":raise ValueError("Automatic coaching/navigation overlay requires an explicit coaching profile")
     overlay = json.loads(args.navigation.read_text(encoding="utf-8")) if args.navigation else None
+    feed = None
+    if args.google_feed:
+        if overlay is not None:
+            raise ValueError("--google-feed replaces --navigation")
+        if args.coaching_profile == "legacy":
+            raise ValueError("--google-feed needs an explicit coaching profile")
+        raw_feed = json.loads(args.google_feed.read_text(encoding="utf-8"))["samples"]
+        # One value a second through each turn's countdown, as the Navigation SDK delivers it:
+        # seconds the on-screen text could not be read are filled in between their neighbours.
+        feed = {}
+        for index in sorted({s[1] for s in raw_feed}):
+            rows = sorted((s for s in raw_feed if s[1] == index), key=lambda s: s[0])
+            times, values = [r[0] for r in rows], [r[3] for r in rows]
+            for second in range(int(times[0]), int(times[-1]) + 1):
+                feed[second] = (index, rows[0][2], float(np.interp(second, times, values)))
     turns = sorted(overlay.get("turns", []), key=lambda t: t["at"]) if overlay else []
     nav_gaps = overlay.get("unavailable", []) if overlay else []
     spatial = args.mode == "spatial"
@@ -482,7 +513,7 @@ def main():
         native.camera_geometry(handle, *camera_geometry)
     if args.mosaic:
         native.mosaic_mode(handle, args.mosaic_mode)
-    if overlay is not None or args.speeds_as_live:
+    if overlay is not None or feed is not None or args.speeds_as_live:
         if args.speeds_as_live and not args.speeds:raise ValueError("--speeds-as-live needs --speeds from the same drive")
         native.bind_navigation()
         if not native.live_navigation(handle):raise RuntimeError("Live replay source rejected")
@@ -491,6 +522,16 @@ def main():
         native.bind_automatic()
         native.coaching_automatic(handle, int(args.automatic), int(args.scheduling == "on"))
     interruptions, nav_sequence, last_nav = [], 0, -math.inf
+    # "You first": the same seeded records as the native tests. Level 1 slowed when told on five
+    # drives; level 2 mostly slowed before being told. Level 0 is a new learner (nothing seeded).
+    holds, hold, held = [], None, np.empty(3, np.float64)
+    if args.learner_level is not None:
+        native.bind_learner()
+        if args.learner_level:
+            seeded = np.array([1] * 20 + [2] * 10 if args.learner_level == 2 else [2] * 30, np.int32)
+            for skill in range(4):
+                if not native.learner_restore(handle, skill, 5, ptr(seeded), seeded.size):
+                    raise RuntimeError("Seeded learner record rejected")
     native.emergencies(handle, int(args.research_emergencies))
     box_buffer, road, decision = np.empty(64 * 6, np.float32), np.empty(13, np.float64), np.empty(8, np.float64)
     trace = np.empty(22, np.float64)
@@ -518,9 +559,19 @@ def main():
     def speed_at(t):
         return speed_timeline.at(t).speed_kmh
     def evaluate_until(deadline):
-        nonlocal tick, playing, playing_until, last_nav, nav_sequence
+        nonlocal tick, playing, playing_until, last_nav, nav_sequence, hold
         while tick / 100 < deadline - 1e-8:
             now = tick / 100
+            if feed is not None and now - last_nav >= 1 - 1e-9:
+                last_nav = now
+                sample = feed.get(int(now - args.pre_roll_seconds))
+                if sample is not None:
+                    index, side, metres = sample
+                    speed_now = speed_timeline.at(now - args.pre_roll_seconds).speed_kmh
+                    nav_sequence += 1
+                    native.navigation(handle, now, nav_sequence, index, {"left": 1, "right": 2}[side], metres,
+                                      metres / max((speed_now or 0) / 3.6, 1.0),
+                                      speed_now if speed_now is not None else math.nan)
             if overlay is not None and now - last_nav >= .5 - 1e-9:
                 last_nav = now
                 if any(a <= now < b for a, b in nav_gaps):
@@ -564,6 +615,14 @@ def main():
             native.tick(handle, now, speed if speed is not None else math.nan,
                         int(speed is not None and now >= args.pre_roll_seconds), playing, ptr(decision))
             native.trace(handle, ptr(trace))
+            if args.learner_level is not None:
+                # An instruction left unsaid because the learner had already slowed: from when to when.
+                native.learner_hold(handle, now, ptr(held))
+                if held[0] >= 0 and (hold is None or hold["kind"] != int(held[0]) or now - hold["_last"] > 1):
+                    hold = {"time": round(now - args.pre_roll_seconds, 2), "kind": int(held[0]), "speed_kmh": speed, "_last": now}
+                    holds.append(hold)
+                if held[0] >= 0:
+                    hold["_last"] = now; hold["until"] = round(now - args.pre_roll_seconds, 2)
             reason = native.guidance_reason(handle).decode()
             traces.append({"schema_version": 1, "event": "decision", "time": now, "source": "MP4",
                            "sequence": int(trace[0]), "source_id": int(trace[1]),
@@ -681,6 +740,7 @@ def main():
         decoded.close()
         if args.coaching_profile != "legacy":
             drive_state = native.coaching_drive(handle).decode()
+        learner_state = json.loads(native.learner_json(handle)) if args.learner_level is not None else None
         native.destroy(handle)
     with (args.output / "decisions.jsonl").open("w", encoding="utf-8") as trace_file:
         for entry in traces:
@@ -722,10 +782,18 @@ def main():
         "events": events, "startup_events": startup_events, "interruptions": interruptions,
         "automatic": args.automatic, "task_scheduling": args.scheduling, "speeds_as_live": args.speeds_as_live,
         "policy_independent_cache": args.policy_independent_cache,
+        "you_first": {"seeded_wait_level": args.learner_level,
+                      "kinds": ["people ahead", "two-wheelers ahead", "vehicles ahead", "oncoming traffic"],
+                      "left_unsaid": [{k: v for k, v in h.items() if not k.startswith("_")} for h in holds],
+                      "record_after_replay": learner_state,
+                      "note": "Outcomes are the learner's measured speed only (slowed before / after an instruction, "
+                              "or no slowing seen); an observation, not a driving grade"} if args.learner_level is not None else None,
         "detector_zoom": {"horizon": args.zoom_horizon} if args.detector_zoom else None,
         "camera_horizon": args.camera_horizon,
         "camera_horizon_track": str(args.camera_horizon_track) if args.camera_horizon_track else None,
         "navigation_overlay": {"synthetic": True, "turns": turns, "unavailable": nav_gaps} if overlay else None,
+        "google_feed": {"path": str(args.google_feed), "seconds": len(feed),
+                        "note": "Google's own distances as shown on screen during the drive (10 m display steps)"} if feed else None,
         "final_drive": json.loads(drive_state) if args.coaching_profile != "legacy" else None, "candidate_tick_counts": candidate_counts,
         "limitations": ["No ground-truth depth, collision labels, calibrated optics or recorded IMU",
             "Headless shared-core replay, not a physical Android camera/audio test",

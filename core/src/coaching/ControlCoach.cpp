@@ -65,8 +65,11 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
         turned_=0;turnMeasured_=reroutedInTurn_=false;
     } else if(!j.quietEvent&&exitAt_<0){turned_=0;turnMeasured_=reroutedInTurn_=false;}
     // Google found a new route while driving: say so once, calmly (the next turn comes as usual).
-    if(!w.rerouting)routeChangeCued_=false;
-    else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,5);}
+    // Only once the new route is there and its next turn is a different one: Google's feed also
+    // blinks to "rerouting" when it merely refreshes the same route. The fact stands for a few
+    // seconds, so the sentence can wait its turn (on Nov 8 the blink was over before it could be said).
+    if(!w.routeChanged)routeChangeCued_=false;
+    else if(!routeChangeCued_&&v>5&&support>=1){routeChangeCued_=true;propose(int(Prompt::routeChanged),now,6);}
     // Stopping and moving off.
     if(v<=2){if(stoppedSince_<0)stoppedSince_=now;}
     else stoppedSince_=-1;
@@ -179,7 +182,7 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::stopClutch:return v>2&&v<15;
     case Prompt::turnExit:return v>3&&v<35;
     case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
-    case Prompt::routeChanged:return w.rerouting;
+    case Prompt::routeChanged:return w.routeChanged;
     case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80&&w.bendAheadM>=5;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill: {
