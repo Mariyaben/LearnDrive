@@ -1517,10 +1517,13 @@ class MainActivity : ComponentActivity() {
             }
             // A camera pointing at the sky sees little road: tell the driver (adjust only when parked).
             val mountAdvice=if(mode=="Camera"&&cameraRunning)core.cameraUp(visionNow).let {SpatialReadiness.mountAdvice(it[0],it[1],it[2])} else null
+            // ...and only while it can be acted on: stopped or crawling. On the move this line says
+            // what the camera is doing (on Nov 12 the advice replaced it for 13 of 14 minutes).
+            val canAdjust=!measured.speedValid||!measured.speed.isFinite()||measured.speed<5
             status.setUiText(when {
                 mode=="Desk"->"Simulated driving"
                 mode=="MP4"||options.filmedVideo->"Recorded / screen test · basic detection"
-                mountAdvice!=null->mountAdvice
+                mountAdvice!=null&&canAdjust->mountAdvice
                 else->roadHealth.status
             })
             if(showLab||mode!="Camera")metrics.append("\n$visionStatus\n$warningStatus")

@@ -102,6 +102,18 @@ void mapHill(Prompt p,double v,const WorldState& w,const GearBands& bands,Plan& 
     if(!down)plan.act(F::steadyAccelerator);
     else if(!g.brakeFirst){if(!g.gear)plan.act(F::noNeutral);plan.act(F::controlSpeedBrake);}
 }
+// A bend on the route: which way and whether sharp, then what this speed needs for it (ease off
+// or brake gently, and the gear). A sharp one is blind: the horn, and "keep left" where there is
+// room for it in the sentence. "Sharp left bend ahead. Brake gently. Change down to second. Sound
+// the horn."; "Right bend ahead. Ease off the accelerator."; "Sharp right bend ahead. Keep left.
+// Sound the horn."
+void mapBend(double v,const WorldState& w,const GearBands& bands,Plan& plan) noexcept {
+    plan.ctx(w.bendSharp?(w.bendRight?F::sharpRightBendAhead:F::sharpLeftBendAhead):(w.bendRight?F::rightBendAhead:F::leftBendAhead));
+    const auto need=v>=0?ControlCoach::bendAdvice(bands,w.bendAdviseKmh,v):ControlCoach::BendAdvice{};
+    if(need.brake)plan.act(F::brakeGently);else if(need.ease)plan.act(F::easeOff);
+    if(need.gear==2)plan.act(F::downSecond);else if(need.gear==3)plan.act(F::downThird);
+    if(w.bendSharp){plan.act(F::soundHorn);if(!need.gear||!plan.horn)plan.act(F::keepLeft);}
+}
 // What each recorded instruction asks the learner to do.
 bool actions(Prompt p,double v,const WorldState& w,const GearBands& bands,Plan& plan) noexcept {
     switch(p) {
@@ -129,7 +141,7 @@ bool actions(Prompt p,double v,const WorldState& w,const GearBands& bands,Plan& 
     case Prompt::driftLeftCentre:plan.ctx(F::driftingLeft);plan.act(F::laneCentre);return true;
     case Prompt::driftRightKeepLeft:plan.ctx(F::driftingRight);plan.act(F::keepLeft);return true;
     case Prompt::bumpAhead:plan.ctx(F::bumpAheadContext);plan.act(F::brakeGently);plan.act(F::clutchDown);plan.act(F::downSecond);return true;
-    case Prompt::bendHorn:plan.ctx(F::bendAhead);plan.act(F::soundHorn);plan.act(F::keepLeft);return true;
+    case Prompt::bendHorn:mapBend(v,w,bands,plan);return true;
     default:return false; // Gear-up, stop/move-off, turn exit, awareness: their own recording is clearer.
     }
 }
@@ -178,6 +190,7 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     const bool brief=primary.brief&&primaryActor&&!primary.urgent;
     if(brief){plan.drop(F::easeOff);plan.drop(F::brakeGently);}
     const size_t ownContexts=plan.contexts,ownActions=plan.actionCount;
+    const std::array<F,8> own=plan.actions; // What this instruction itself asks for.
     // Indian road practice the recorded sentence does not say: sound the horn when entering
     // a junction and before passing a person or two-wheeler at the road edge.
     if(primary.prompt==Prompt::junctionEntry)plan.act(F::soundHorn);
@@ -225,6 +238,11 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
         for(size_t i=0;i<risk.riskCount();++i){const auto& r=risk.riskAt(i);
             if(!r.level||(primaryActor&&r.id==primaryActor->id)||actorContext(r)==F::none)continue;
             if(primaryActor&&actorContext(r)==actorContext(*primaryActor))continue;
+            // It joins the sentence only if it calls for an action of its own (level 2), or is a
+            // person or rider and the sentence is already about a road user. "Vehicle ahead. Ease
+            // off the accelerator. Keep a safe gap." riding along with a turn instruction made an
+            // 18-word sentence and pushed the turn's own "Signal left" out (Nov 12, 5:13).
+            if(r.level<2&&!(primaryActor&&(r.category==0||r.category==1||r.category==3)))continue;
             if(!second||r.score>second->score)second=&r;}
         if(second) {
             plan.ctx(actorContext(*second));
@@ -270,19 +288,30 @@ bool SituationPlanner::compose(Candidate& primary,const WorldState& w,const Risk
     if(plan.has(F::stopAndWait)||plan.has(F::holdBrake))plan.drop(F::coverBrake);
     std::sort(plan.actions.begin(),plan.actions.begin()+plan.actionCount,[](F a,F b){return order(a)<order(b);});
     // Set the scene like an instructor: slope, then junction/bend, then road users (most important first).
-    const auto scene=[](F f){const int i=int(f);return i<=3||isSlopeAheadFragment(f)?0:(i<=7||f==F::bumpAheadContext||isNavigationFragment(f))?1:2;};
+    const auto scene=[](F f){const int i=int(f);return i<=3||isSlopeAheadFragment(f)?0:(i<=7||f==F::bumpAheadContext||isNavigationFragment(f)||isBendAheadFragment(f))?1:2;};
     std::stable_sort(plan.context.begin(),plan.context.begin()+plan.contexts,[&](F a,F b){return scene(a)<scene(b);});
     // Google's distance and maneuver come before anything else that would not fit.
     const bool navigating=plan.navigation();
     if(navigating&&plan.contexts>3){plan.dropCtx(F::downhill);plan.dropCtx(F::steepDownhill);plan.dropCtx(F::uphill);}
     // Composition must add something the primary recording does not already say.
     // (A hill from the map is always composed: its sentence depends on the speed.)
-    if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor&&!isMapHillPrompt(primary.prompt))return false;
+    // (...and so is a bend from the map: which way it goes and what this speed needs.)
+    if(plan.contexts==ownContexts&&plan.actionCount<=ownActions&&!primary.alsoCount&&!primaryActor&&!isMapHillPrompt(primary.prompt)&&primary.prompt!=Prompt::bendHorn)return false;
     // 7. Keep it speakable: urgent = what + 2 actions; otherwise <= 3 + 3 (< ~6 s).
     const size_t maxContext=urgent?1:navigating?4:3,maxActions=urgent?2:3;
     out={};
     for(size_t i=0;i<std::min(plan.contexts,maxContext);++i)out.fragments[out.count++]=int(plan.context[i]);
-    for(size_t i=0;i<std::min(plan.actionCount,maxActions)&&out.count<out.fragments.size();++i)out.fragments[out.count++]=int(plan.actions[i]);
+    // A turn step keeps what it asks for itself (mirrors, signal, clutch, look both ways); what
+    // else is true at the moment gets the places left over, most urgent first.
+    std::array<F,8> chosen{};size_t chosenCount=0;
+    if(primary.lessonStep&&!urgent&&plan.actionCount>maxActions) {
+        const auto mine=[&](F f){return std::find(own.begin(),own.begin()+long(ownActions),f)!=own.begin()+long(ownActions);};
+        size_t kept=0;for(size_t i=0;i<plan.actionCount;++i)kept+=mine(plan.actions[i]);
+        size_t spare=maxActions>kept?maxActions-kept:0;
+        for(size_t i=0;i<plan.actionCount&&chosenCount<maxActions;++i){const F f=plan.actions[i];
+            if(mine(f))chosen[chosenCount++]=f;else if(spare){chosen[chosenCount++]=f;--spare;}}
+    } else for(size_t i=0;i<std::min(plan.actionCount,maxActions);++i)chosen[chosenCount++]=plan.actions[i];
+    for(size_t i=0;i<chosenCount&&out.count<out.fragments.size();++i)out.fragments[out.count++]=int(chosen[i]);
     out.priority=std::clamp(priorityMax,1,6);
     return out.count>=(brief?1u:2u);
 }

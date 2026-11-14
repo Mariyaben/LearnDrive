@@ -35,6 +35,12 @@ public:
     // downhill two gears above it, slow down before changing down.
     struct HillGear {int gear{};bool brakeFirst{};};
     static HillGear hillGear(const GearBands&,double gradePercent,double speedKmh) noexcept;
+    // What a bend ahead asks for at this speed, given the speed the bend is comfortable at. Up to
+    // 3 km/h over it: nothing. Up to 10 over: ease off. More: brake gently. The gear is the one
+    // the bend's speed belongs to (second or third), named only when slowing is needed and the
+    // present speed belongs to a higher gear.
+    struct BendAdvice {bool ease{},brake{};int gear{};bool any() const noexcept {return ease||brake;}};
+    static BendAdvice bendAdvice(const GearBands&,double adviseKmh,double speedKmh) noexcept;
     std::string json() const;
 private:
     struct Active {int prompt{};uint64_t id{};double until=-1;};
@@ -42,7 +48,7 @@ private:
     bool enabled_{};
     GearBands bands_{};
     int gear_{},candidateGear_{},slopeSign_{};
-    double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1,lastBendCue_=-1;
+    double candidateSince_=-1,stoppedSince_=-1,slopeClearSince_=-1,exitAt_=-1,driftLeftSince_=-1,driftRightSince_=-1,lastLaneCue_=-1,lastBendCue_=-1,lastGentleBendCue_=-1;
     // The hill last named from the map and when the car was last on it (or named it): its way and steepness.
     double hillAt_=-1;int hillSign_{};bool hillSteep_{};
     bool stopCued_{},moveOffCued_{},lastBendRight_{},routeChangeCued_{};

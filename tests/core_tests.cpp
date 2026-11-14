@@ -120,7 +120,22 @@ int main() {
         check(f.snapshot(1860*.01).braking&&!f.snapshot(1860*.01).hardBraking,"firm braking missed or called hard");});
     test("braking hysteresis releases",[]{auto f=calibrated();for(int i=502;i<=560;++i)f.imu({i*.01,{0,gravity,4},{},{0,0,4},true});check(f.snapshot(560*.01).braking,"braking missed");
         for(int i=561;i<=760;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(760*.01).braking&&!f.snapshot(760*.01).hardBraking,"braking stuck");});
-    test("stale GPS invalidates speed",[]{auto f=calibrated();check(f.gps(5.01,10,.5),"GPS rejected");for(int i=502;i<=850;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(8.5).speedValid,"stale speed valid");});
+    test("stale GPS invalidates speed; one missed fix does not",[]{auto f=calibrated();check(f.gps(5.01,10,.5),"GPS rejected");for(int i=502;i<=850;++i)f.imu({i*.01,{0,gravity,0},{},{},true});
+        check(f.snapshot(8.5).speedValid,"one fix missed under trees made the speed unknown");
+        for(int i=851;i<=980;++i)f.imu({i*.01,{0,gravity,0},{},{},true});check(!f.snapshot(9.8).speedValid,"stale speed valid");});
+    test("motion samples arriving late keep the speed, the level reference and the camera's pose",[]{auto f=calibrated();
+        for(int i=502;i<=700;++i){f.imu({i*.01,{0,gravity,0},{},{},true});if(i%100==0)check(f.gps(i*.01,10,.5),"GPS rejected");}
+        // The phone is busy for 0.6 s: no samples, then they resume. A GPS fix lands meanwhile.
+        check(f.gps(7.5,10,.5),"GPS rejected");
+        check(f.snapshot(7.55).speedValid,"a 0.55 s pause in motion samples made the speed unknown");
+        // The caller's clock was read just before a later sample arrived.
+        f.imu({7.61,{0,gravity,0},{},{},true});
+        check(f.snapshot(7.58).speedValid,"a sample 30 ms newer than the caller's clock made the speed unknown");
+        for(int i=762;i<=800;++i)f.imu({i*.01,{0,gravity,0},{},{},true});
+        check(f.snapshot(8.0).calibrated&&f.snapshot(8.0).pitchValid,"a 0.6 s pause lost the level reference");
+        check(f.cameraUp(8.0).norm()>.9,"a 0.6 s pause lost the camera's pose");
+        // A long pause (the app suspended) still loses the level reference.
+        f.imu({11.5,{0,gravity,0},{},{},true});check(!f.snapshot(11.5).calibrated,"a 3.5 s pause kept the level reference");});
     test("GPS speed converges and coasts",[]{auto f=calibrated();for(int i=502;i<=800;++i){f.imu({i*.01,{0,gravity,0},{},{},true});if(i%100==0)f.gps(i*.01,20,.5);}near(f.snapshot(8).speedKmh,72,.5);});
     test("out of order GPS and IMU ignored",[]{auto f=calibrated();check(f.gps(5.01,10,.5),"first GPS failed");check(!f.gps(5,50,.5),"old GPS accepted");f.imu({4,{0,gravity,20},{},{0,0,20},true});check(!f.snapshot(5.01).braking,"old IMU changed state");});
     test("nonfinite samples rejected",[]{auto f=calibrated();check(!f.gps(5.02,NAN,.5),"NaN GPS accepted");f.imu({NAN,{0,gravity,0},{},{},true});check(f.snapshot(5.01).pitchValid,"NaN corrupted IMU");});

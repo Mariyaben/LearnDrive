@@ -19,7 +19,7 @@ Prompt upPrompt(int g) noexcept {
 const GearBands defaultBands{};
 }
 void ControlCoach::reset() noexcept {
-    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=lastBendCue_=-1;stopCued_=moveOffCued_=lastBendRight_=false;
+    gear_=candidateGear_=slopeSign_=0;candidateSince_=stoppedSince_=slopeClearSince_=exitAt_=driftLeftSince_=driftRightSince_=lastLaneCue_=lastBendCue_=lastGentleBendCue_=-1;stopCued_=moveOffCued_=lastBendRight_=false;
     hillAt_=-1;hillSign_=0;hillSteep_=false;
     lastQuietEvent_=lastBump_=lastBend_=lastSlope_=0;active_={};
 }
@@ -120,13 +120,20 @@ void ControlCoach::observe(const WorldState& w,const ShortMemory& memory,const T
         const double mps=mapMps;
         if(w.bumpId&&w.bumpId!=lastBump_&&std::isfinite(w.bumpAheadM)&&v>5&&w.bumpAheadM>=5&&(w.bumpAheadM/mps<=7||w.bumpAheadM<=30)){
             lastBump_=w.bumpId;propose(int(Prompt::bumpAhead),now,4);}
-        if(w.hornRules&&w.bendId&&w.bendId!=lastBend_&&std::isfinite(w.bendAheadM)&&v>8&&!nearJunction&&
-           w.bendAheadM>=10&&w.bendAheadM/mps>=1.5&&(w.bendAheadM/mps<=7||w.bendAheadM<=30)){
+        // A sharp (blind) bend is always named: the horn, keep left, and the speed and gear if the
+        // learner is too fast for it. A bend that is not sharp is named only when they are too
+        // fast for it (9 s ahead when they must brake): at the right speed an instructor says
+        // nothing, and at most one such sentence in 20 s on a winding road. Until 0.8.6 only sharp
+        // bends were named, without their direction or anything about speed, and only with the
+        // horn rule on.
+        const auto need=bendAdvice(bands_,w.bendAdviseKmh,v);
+        if(w.bendId&&w.bendId!=lastBend_&&std::isfinite(w.bendAheadM)&&v>8&&!nearJunction&&(w.bendSharp||need.any())&&
+           w.bendAheadM>=10&&w.bendAheadM/mps>=1.5&&(w.bendAheadM/mps<=(need.brake?9:7)||w.bendAheadM<=30)){
             lastBend_=w.bendId;
             // The map's bend point moves as the car nears it; a same-direction bend named
             // under 8 s ago is the same bend (or one continuous curve), not a new lesson.
-            if(!(lastBendCue_>=0&&now-lastBendCue_<8&&w.bendRight==lastBendRight_)){
-                lastBendCue_=now;lastBendRight_=w.bendRight;propose(int(Prompt::bendHorn),now,4);}
+            if(!(lastBendCue_>=0&&now-lastBendCue_<8&&w.bendRight==lastBendRight_)&&(w.bendSharp||lastGentleBendCue_<0||now-lastGentleBendCue_>=20)){
+                lastBendCue_=now;lastBendRight_=w.bendRight;if(!w.bendSharp)lastGentleBendCue_=now;propose(int(Prompt::bendHorn),now,4);}
         }
     }
     // Hills from the map (elevation along the route): name the slope and what to do about 7 s
@@ -183,7 +190,7 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     case Prompt::turnExit:return v>3&&v<35;
     case Prompt::bumpAhead:return v>3&&cognition::fresh(now,w.mapTime,2.5)&&w.bumpId&&w.bumpAheadM<=80;
     case Prompt::routeChanged:return w.routeChanged;
-    case Prompt::bendHorn:return v>5&&w.hornRules&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=80&&w.bendAheadM>=5;
+    case Prompt::bendHorn:return v>5&&cognition::fresh(now,w.mapTime,2.5)&&w.bendId&&w.bendAheadM<=130&&w.bendAheadM>=5;
     case Prompt::driftLeftCentre:case Prompt::driftRightKeepLeft:return v>12&&w.laneValid&&cognition::fresh(now,w.laneTime,.6);
     case Prompt::mapDownhill:case Prompt::mapSteepDownhill:case Prompt::mapUphill:case Prompt::mapSteepUphill: {
         // On a fresh route fix, the same way: still ahead (within about 11 s), just begun, or
@@ -201,6 +208,13 @@ bool ControlCoach::evidence(const Candidate& c,const WorldState& w,double now) n
     }
     default:return v>3; // Gear changes: moving, measured speed.
     }
+}
+ControlCoach::BendAdvice ControlCoach::bendAdvice(const GearBands& b,double advise,double v) noexcept {
+    BendAdvice a;if(!std::isfinite(advise)||!std::isfinite(v)||v<0)return a;
+    a.brake=v-advise>10;a.ease=v-advise>3&&!a.brake;
+    const int bend=std::clamp(bandFor(b,advise),2,3);
+    if(a.any()&&bandFor(b,v)>bend)a.gear=bend;
+    return a;
 }
 ControlCoach::HillGear ControlCoach::hillGear(const GearBands& b,double grade,double v) noexcept {
     HillGear h;if(!std::isfinite(grade)||!std::isfinite(v)||v<0)return h;

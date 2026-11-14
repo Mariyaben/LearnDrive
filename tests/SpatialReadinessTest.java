@@ -8,8 +8,11 @@ public final class SpatialReadinessTest {
         double r12=Math.toRadians(12),r25=Math.toRadians(25),r5=Math.toRadians(5),r15=Math.toRadians(15);
         check(SpatialReadiness.mountAdvice(1,0,0)==null,"level landscape mount flagged");
         check(SpatialReadiness.mountAdvice(Math.cos(r5),0,Math.sin(r5))==null,"slightly downward camera flagged");
-        check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r12),0,-Math.sin(r12))).contains("too high"),"camera 12 degrees up not flagged");
-        check(String.valueOf(SpatialReadiness.mountAdvice(0,Math.cos(r12),-Math.sin(r12))).contains("too high"),"portrait camera up not flagged");
+        // Leaning back 12 degrees puts the horizon mid-image in the part of the frame the coach
+        // reads: fine. Leaning back 25 degrees squeezes the road into the bottom of it.
+        check(SpatialReadiness.mountAdvice(Math.cos(r12),0,-Math.sin(r12))==null,"camera 12 degrees up flagged: that is the ideal aim");
+        check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r25),0,-Math.sin(r25))).contains("too high"),"camera 25 degrees up not flagged");
+        check(String.valueOf(SpatialReadiness.mountAdvice(0,Math.cos(r25),-Math.sin(r25))).contains("too high"),"portrait camera up not flagged");
         check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r25),0,Math.sin(r25))).contains("too low"),"camera 25 degrees down not flagged");
         check(String.valueOf(SpatialReadiness.mountAdvice(Math.cos(r15),Math.sin(r15),0)).contains("sideways"),"rolled mount not flagged");
         check(SpatialReadiness.mountAdvice(0,0,0)==null,"missing gravity produced advice");

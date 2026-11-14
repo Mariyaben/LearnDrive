@@ -93,11 +93,11 @@ double RiskCoach::lastSeen(uint64_t optical) const noexcept {
     double seen=-1;for(const auto& m:motions_)if(m.id&&std::find(m.opticals.begin(),m.opticals.end(),optical)!=m.opticals.end())seen=std::max(seen,m.last);
     return seen;
 }
-bool RiskCoach::masked(double center,double foot) const noexcept {
+bool RiskCoach::masked(double center,double foot,double bonnet) const noexcept {
     if(maskFrames_<60)return false;
     const int cx=std::clamp(int(center*maskW),0,maskW-1),cy=std::clamp(int(foot*maskH),0,maskH-1);
     // Never mask the lane straight ahead above the bonnet: a lead vehicle at a steady gap lives there.
-    if(center>.38&&center<.62&&foot<.85)return false;
+    if(center>.38&&center<.62&&foot<std::max(.85,bonnet))return false;
     return maskHits_[size_t(cy*maskW+cx)]>maskFrames_*.35;
 }
 void RiskCoach::learnMask(const WorldState& w,double v) noexcept {
@@ -186,13 +186,18 @@ RiskCoach::Episode* RiskCoach::episode(uint64_t id,double now) noexcept {
 }
 void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const ObjectTracker& tracks,const EventLedger& ledger,uint64_t source,int support,LearnerRecord* learner) noexcept {
     proposal_=0;urgent_=false;count_=0;withHistory_=0;top_={};hold_={};brief_=false;proposalPathFirst_=false;
-    if(!enabled_||!w.active||!cognition::fresh(w.now,w.captureTime))return;
+    if(!enabled_||!w.active||w.geometryUnknown||!cognition::fresh(w.now,w.captureTime))return;
     const double now=w.now;
     const bool speedKnown=cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh);
     const double v=speedKnown?w.telemetry.speedKmh:-1;
     const bool pitchKnown=w.telemetry.calibrated&&w.telemetry.pitchValid&&std::isfinite(w.telemetry.pitchDegrees);
     // Physics, not fixed thresholds: can the learner stop in time on THIS slope?
     const double stopping=speedKnown?stoppingSeconds(v,pitchKnown?w.telemetry.pitchDegrees:0):2.5;
+    // The latest moment braking must begin to stop short of something standing in the road: the
+    // reaction time plus HALF the braking time (while it slows, the car covers half the distance
+    // its speed would). `stopping` is the whole time to a standstill; as the limit on time to
+    // contact it called "Brake now" 4.9 s from contact at 40 km/h, where 3.1 s is the latest.
+    const double brakeBy=1.2+.5*(stopping-1.2);
     // Measured deceleration over the last ~1 s (the learner's response, from speed history).
     double decel=0;
     if(speedKnown){const MemorySample* old=nullptr;for(const auto& sm:memory.samples())
@@ -218,7 +223,15 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     const bool straight=speedKnown&&v>=15&&w.yawKnown&&std::isfinite(w.yawRate)&&std::abs(w.yawRate)<.03&&std::abs(meanYaw(now-1.2,now))<.03;
     auto Y=[&](double y){return .5+(y-cam.cy)*ky;};
     // Image geometry is relative to the measured horizon (a level camera puts it at the optical centre).
-    const double shift=std::isfinite(w.horizon)?std::clamp(Y(w.horizon),.25,.85)-.5:0;
+    // (Up to 0.97 of the canonical frame: a phone leaning back 20-25 degrees on a dashboard mount
+    // puts the horizon four fifths of the way down the preview. The limit used to be 0.85; below
+    // it every distance came out two to five times too short, nothing could read as farther than
+    // 23 m, and buses 30-60 m away got "Vehicle ahead. Brake now" - Nov 12, horizon at 0.82.)
+    const double shift=std::isfinite(w.horizon)?std::clamp(Y(w.horizon),.25,.97)-.5:0;
+    // Where the learner's own bonnet or dashboard begins in the image: 0.8 of the way down with a
+    // level camera. With the phone tilted back the horizon itself is that low, and what stands just
+    // under it is on the road, not on the bonnet: half-way from the horizon to the bottom edge.
+    const double bonnet=std::max(.8,w.horizonMeasured&&std::isfinite(w.horizon)?.5*(w.horizon+1):.8);
     const double stopM=stoppingDistance(speedKnown?v:15);
     // "You first": is the learner's measured speed falling right now (>= 2 km/h over the last
     // 1-2.5 s, or sustained braking)? Speed only; pedals and eyes are not measured.
@@ -254,7 +267,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // image row (the bonnet, the frame edge and the learned mask are image facts).
         const double ax=X(a.x),aw=a.w*kx,ah=a.h*ky;
         r.center=ax+aw*.5;r.foot=a.y+a.h;r.left=r.center<.5;
-        if(masked(a.x+a.w*.5,r.foot))continue; // Part of the learner's own car.
+        if(masked(a.x+a.w*.5,r.foot,bonnet))continue; // Part of the learner's own car.
         // Clipped at the left/right image edge near the bottom: alongside, being passed.
         if((a.x<.01f||a.x+a.w>.99f)&&r.foot>.9)continue;
         // Motion over the last ~0.3-1.2 s of this road user's own remembered history.
@@ -295,7 +308,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             // Fixed in the frame while the car moves, low in the image: part of the
             // learner's own car (dashboard ornament, mount, bonnet), not a road user.
             // (Fixed in the IMAGE: it turns with the car, so its raw image motion is used.)
-            attached=v>5&&r.foot>.8&&dt>=.5&&std::abs(imageLateral)<.015&&std::abs(r.expansion)<.05;
+            attached=v>5&&r.foot>bonnet&&dt>=.5&&std::abs(imageLateral)<.015&&std::abs(r.expansion)<.05;
             // ...or at the side edge of the frame at any height: a phone mount arm or a pillar.
             if(v>5&&dt>=.5&&(a.x<.02f||a.x+a.w>.98f)&&std::abs(imageLateral)<.012&&std::abs(r.expansion)<.04)attached=true;
         }
@@ -330,7 +343,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // top meets this box's bottom. Then the box bottom is not where it stands, so the two
         // "standing on the road" tests below do not apply: a pedestrian about to step out from
         // behind a parked car must never be dropped as a billboard.
-        bool footHidden=r.foot>.8;double behindFoot=-1;
+        bool footHidden=r.foot>bonnet;double behindFoot=-1;
         for(size_t k=0;k<std::min(w.actorCount,w.actors.size())&&!footHidden;++k) {
             const auto& b=w.actors[k];
             if(k==i||b.identity.space!=IdentitySpace::Optical||(b.category!=2&&b.category!=3&&b.category!=5&&b.category!=7)||!cognition::fresh(now,b.captureTime))continue;
@@ -377,7 +390,13 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // A "person" coming toward us faster than anyone walks or jogs (its own approach, after
         // removing ours, > 3.5 m/s) is a rider whose bike the detector missed (head-on riders
         // often show only the body): oncoming traffic, not a pedestrian to brake for.
-        if(r.category==0&&r.expansion>0&&std::isfinite(sizeM)&&speedKnown&&sizeM*r.expansion-std::max(0.,v)/3.6>3.5)r.category=3;
+        // (On two looks running: a walker's growth that is fast on one frame is noise, and called a
+        // rider coming toward the learner they got "Oncoming two-wheeler. Keep left" - Nov 8, 15:56.)
+        {
+            const double before=motion&&motion->loomNowAt>=0&&a.captureTime>motion->loomNowAt&&a.captureTime-motion->loomNowAt<=.45?1/motion->loomNow:0;
+            const double growth=std::min(r.expansion,before);
+            if(r.category==0&&growth>0&&std::isfinite(sizeM)&&speedKnown&&sizeM*growth-std::max(0.,v)/3.6>3.5)r.category=3;
+        }
         // ...and so is a "person" ahead in the lane travelling the learner's way faster than anyone
         // runs: a scooter rider seen from behind shows only the body (Nov 8, 6:34: "Person ahead"
         // for a rider). Someone standing D metres ahead grows by v*T/D in T seconds; this one's
@@ -396,6 +415,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         }
         // Far away the ground cue is fragile (a fraction of a degree of horizon error); where
         // both cues agree, their geometric mean is the distance.
+        const double groundM=r.distanceM;
         if(std::isfinite(sizeM)&&std::isfinite(r.distanceM)&&r.distanceM>15)r.distanceM=std::sqrt(r.distanceM*sizeM);
         // Flow-based TTC only for road users close enough for it to be plausible.
         // "Close" is measured from the horizon: with the phone pitched up (Nov 8: horizon 0.70 of the
@@ -404,8 +424,16 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // A small, distant box's growth is too noisy to time a collision for "Brake now" (Nov 4
         // and 6: far vehicles, a person 24 m ahead); it may still ask the learner to slow down.
         const double looming=r.expansion>.08?1/r.expansion:std::numeric_limits<double>::infinity();
-        if(ah>.12||foot>.75)r.ttc=std::min(r.ttc,looming);
-        const double slowTtc=ah>.05?std::min(r.ttc,looming):r.ttc;
+        // ...and one frame's box a little larger than the last is not something closing: the growth
+        // must show on two looks running (within 0.45 s). A bus followed at a steady 20-25 m got
+        // "Vehicle ahead. Brake now" five times in a minute, each from a single frame (Nov 12).
+        double sustained=std::numeric_limits<double>::infinity();
+        if(motion) {
+            if(a.captureTime>motion->loomNowAt){motion->loomPrev=motion->loomNow;motion->loomPrevAt=motion->loomNowAt;motion->loomNow=looming;motion->loomNowAt=a.captureTime;}
+            if(motion->loomPrevAt>=0&&motion->loomNowAt-motion->loomPrevAt<=.45)sustained=std::max(motion->loomNow,motion->loomPrev);
+        }
+        if(ah>.12||foot>.75)r.ttc=std::min(r.ttc,sustained);
+        const double slowTtc=ah>.05?std::min(r.ttc,sustained):r.ttc;
         const double edge=std::max(0.,std::abs(r.center-.5)-aw*.5),half=corridor(foot);
         // The learner's path in metres where the distance is known: the car's half-width (~0.85 m)
         // plus a margin, widening slowly for a road that bends. The image-fraction corridor was
@@ -430,7 +458,10 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // Two independent cues must agree before braking advice: ground contact below the
         // horizon (fragile near the horizon) and apparent size (unusable when clipped).
         const double confirmM=std::isfinite(sizeM)?std::max(r.distanceM,sizeM):r.distanceM;
-        const bool brakeRange=confirmM<=1.5*stopM+6,slowRange=confirmM<=3*stopM+12;
+        // (Firm braking is needed within the stopping distance and a little more: 45 m at 40 km/h,
+        // 18 m at 20. It was half as far again; with the braking time above that is what made "Brake
+        // now" the coach's commonest road-user sentence on Nov 12.)
+        const bool brakeRange=confirmM<=1.2*stopM+4,slowRange=confirmM<=3*stopM+12;
         // 2. Classify the conflict.
         // Keep-left traffic: a vehicle right of the path centre that is closing fast
         // is oncoming traffic passing on the right, not a lead vehicle to brake for.
@@ -444,6 +475,22 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // up): up close the size cue is noisy, and then the image rule decides. Its own lane counts,
         // up to 3 m beyond the path (Nov 6: a scooter 3.9 m right lost its "keep left").
         const bool clear=std::isfinite(ownApproach)&&std::abs(ownApproach)>1.5;
+        // How fast the gap to it is closing: its distance (by the ground where that is near enough to
+        // trust, else by its size) times its growth. Something standing in the road closes at the
+        // learner's own speed; a vehicle driving the learner's way, slower; one coming the other way,
+        // much faster. Braking does not help with that last one, so it is never "Vehicle ahead.
+        // Brake..."; and catching up a moving vehicle is a matter of the gap, not of stopping.
+        // (From the growth seen on two looks running, as for braking: one noisy frame must not
+        // decide that a vehicle standing in the road is coming toward the learner.)
+        const double closing=std::isfinite(sustained)&&ah>.045?(std::isfinite(groundM)&&groundM<=25?groundM:std::isfinite(sizeM)?sizeM:groundM)/sustained:
+            std::numeric_limits<double>::quiet_NaN();
+        // Coming toward the learner: closing at least 60 % faster than their own speed (a vehicle
+        // driving toward them at over half their speed). A distance off by a quarter, which a
+        // horizon error of a degree makes at 25 m, must not turn a vehicle standing in the road into
+        // one coming the other way.
+        const bool approaching=r.category!=0&&speedKnown&&std::isfinite(closing)&&closing>std::max(mps+2.5,1.6*mps);
+        const bool movingAhead=r.category!=0&&speedKnown&&v>15&&std::isfinite(closing)&&closing<.6*mps;
+        const bool heavy=r.category==5||r.category==7,weak=vulnerable(r.category);
         // While the learner's own car is turning left (a measured 0.06 rad/s or more: a bend, or a
         // left turn at a junction) its path is an arc, not the line it points along now: at this
         // road user's distance the path lies R - sqrt(R^2 - d^2) to the left (R = speed / turn
@@ -460,7 +507,16 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             const double radius=mps/turn,arcLeftM=r.distanceM<radius?radius-std::sqrt(radius*radius-r.distanceM*r.distanceM):std::numeric_limits<double>::infinity();
             roundBend=(r.center-.5)/.72*r.distanceM+arcLeftM>1.;
         }
-        const bool oncoming=r.category!=0&&near&&v>5&&(clear?
+        // Where the learner's own path is at this road user's distance: it curves with the measured
+        // turn rate (+ left of the line the car points along now). Something coming toward the learner
+        // more than half a metre LEFT of that path is not traffic keeping to its own side: "keep left"
+        // would steer toward it (Nov 8, 15:56: a man walking on the left edge of a bend, taken for a
+        // rider, got "Oncoming two-wheeler. Keep left"). It is judged as what it is, in the path or
+        // beside it.
+        double pathLeftM=0;
+        if(turn>.01&&speedKnown&&v>5&&metric){const double R=mps/turn;pathLeftM=r.distanceM<R?R-std::sqrt(R*R-r.distanceM*r.distanceM):R;}
+        const bool leftOfPath=metric&&(r.center-.5)/.72*r.distanceM+pathLeftM<-.5;
+        const bool oncoming=r.category!=0&&near&&v>5&&!leftOfPath&&(clear?
             ownApproach>1.5&&(roundBend?r.center>.35:r.inwardRate<.20&&r.center>.45)&&(metric?edgeM<pathM+3.:edge<half+.12):
             r.inwardRate<.20&&rightSide&&r.expansion>.25&&edge<half+.12);
         // Crossing: the actor's own lateral motion is TOWARD/through the path (not
@@ -476,16 +532,34 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // margin, by the farther of the two distance cues); farther away, "brake gently, be ready to
         // stop". Up to 0.8.2 the urgent range was twice the stopping distance (~78 m at 40 km/h):
         // seeing further (0.8.3) turned cars crossing junctions 50-80 m ahead into "Brake now" (Nov 8).
-        if(!roundBend&&!fromAlongside&&near&&steady&&growing&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=confirmM<=1.2*stopM+5?3:2;}
-        // Head-on and closing within stopping time: urgent "keep left, ease off" (Nov 6: a rider in
-        // the middle of a narrow road).
-        else if(oncoming) {r.kind=RiskKind::Oncoming;r.level=collision&&r.ttc<stopping+.5?3:2;}
-        // Heavy vehicles stop and swerve slowly: give them extra margin.
+        if(!roundBend&&!fromAlongside&&near&&steady&&growing&&r.inwardRate>.10&&r.rawInward>.05&&r.expansion>-.1&&(r.inPath||r.enterSeconds<2.5)) {r.kind=RiskKind::Crossing;r.level=confirmM<=stopM+3?3:2;}
+        else if(oncoming) {
+            r.kind=RiskKind::Oncoming;
+            // Worth saying: a bus or truck, which takes more than its lane and is named early, as far
+            // off as it is seen; or a car or two-wheeler that will pass close, its near edge within
+            // 2 m of the learner's line, judged within 50 m where that can be measured. Ordinary
+            // traffic keeping to the other lane of a road wide enough for both needs no words: on
+            // Nov 12 it was a third of everything the coach said (27 of 84 sentences).
+            const bool tight=metric&&r.distanceM<=50&&edgeM<2.;
+            // Head-on, close and closing: urgent "keep left" (Nov 6: a rider in the middle of a
+            // narrow road). Only where that can be measured: at 60 m a vehicle in the other lane
+            // and one in the learner's own are a couple of pixels apart.
+            const bool headOn=collision&&metric&&r.distanceM<=35&&r.ttc<2.5;
+            // About to pass (its box growing as something under 1.5 s away does): it will be gone
+            // before "keep left" can be heard.
+            const bool passing=r.expansion>1/1.5;
+            r.level=headOn?3:(heavy||tight)&&!passing?2:0;
+        }
+        // Heavy vehicles stop and swerve slowly: give them extra margin; people and riders, more.
         // ...unless the learner is already braking hard enough to stop short of it
         // (needed deceleration for a stationary hazard at this TTC: v / (2*TTC)).
-        else if(collision&&near&&brakeRange&&r.ttc<stopping+(r.category==5||r.category==7?.5:0)&&v>5&&!(decel>.5&&decel>=.9*(v/3.6)/(2*r.ttc)))
+        // ("Brake now" is never held back by a judgement of how fast the gap closes: on a collision
+        // course, within range and that close in time, braking is right whatever is coming.)
+        else if(collision&&near&&brakeRange&&r.ttc<brakeBy+(weak?1.:.6)+(heavy?.5:0)&&v>5&&!(decel>.5&&decel>=.9*(v/3.6)/(2*r.ttc)))
             {r.kind=RiskKind::InPath;r.level=3;}
-        else if(squarely&&near&&slowRange&&slowTtc<stopping+2.5+(r.category==5||r.category==7?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
+        // "Brake gently, be ready to stop", early, for what stands in the road or is weak (as far
+        // ahead as before); for a vehicle moving the learner's way only when the gap is closing fast.
+        else if(!approaching&&squarely&&near&&slowRange&&slowTtc<(movingAhead?brakeBy+1.:stopping+2.5)+(heavy?1:0)&&v!=0) {r.kind=RiskKind::InPath;r.level=2;}
         // Crawling up to a vulnerable road user right in front: be ready to stop.
         else if(squarely&&foot>.62&&vulnerable(r.category)&&v>3&&v<15) {r.kind=RiskKind::InPath;r.level=2;}
         // A person at the edge of the path or beside it: give them space.
@@ -593,8 +667,10 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     const bool gapRecent=gapCue&&lastGapCue_>=0&&now-lastGapCue_<15;
     // "Keep left" for passing traffic is for the occasional close car, not every car on a busy road
     // (Nov 4: seven in 75 s): a routine one waits 20 s; a bus, a truck or an urgent one still speaks.
-    const bool oncomingCue=top_.kind==RiskKind::Oncoming&&top_.level<3&&top_.category!=5&&top_.category!=7;
-    const bool oncomingRecent=oncomingCue&&lastOncomingCue_>=0&&now-lastOncomingCue_<20;
+    // (0.8.6: every 30 s for a car or two-wheeler passing close, every 20 s for buses and trucks,
+    // which used to be exempt: three "Oncoming truck. Keep left" in 18 s on Nov 12.)
+    const bool oncomingCue=top_.kind==RiskKind::Oncoming&&top_.level<3;
+    const bool oncomingRecent=oncomingCue&&lastOncomingCue_>=0&&now-lastOncomingCue_<(top_.category==5||top_.category==7?20:30);
     if(!settling&&!gapRecent&&!oncomingRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category))) {
         auto* e=episode(top_.id,now);
         // Give the learner time to respond to what was just said about this road
@@ -603,7 +679,10 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // Rising to the very same words about the same road user within 3 s adds nothing: it would
         // only cut off the sentence just started (Nov 5: "Left turn ahead. Oncoming vehicle..." then
         // "Oncoming vehicle. Keep left..." 0.1 s later).
-        const bool sameWords=e->spokenAt>=0&&now-e->spokenAt<3&&e->spokenPrompt==int(actionFor(top_,v,speedKnown,top_.level>=3));
+        // Rising to urgent is never "the same words": "Brake now" after "Brake gently" is the warning
+        // that the gentle braking is not enough (on the instruction id they are the same).
+        const bool sameWords=e->spokenAt>=0&&now-e->spokenAt<3&&e->spokenPrompt==int(actionFor(top_,v,speedKnown,top_.level>=3))&&
+            !(top_.level>=3&&e->spokenLevel<3);
         // ...or the conflict is now of another kind: someone spoken about as passing by (oncoming,
         // at the roadside) who is now in the way needs the other instruction, at the same level.
         const bool turnedInto=e->spokenAt>=0&&top_.level>=2&&top_.level==e->spokenLevel&&e->spokenKind!=top_.kind&&

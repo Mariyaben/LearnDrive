@@ -31,6 +31,13 @@ public final class SpatialReadiness {
      * camera looks along -z). Pointing up wastes the frame on sky and shrinks distant road
      * users; on the 2026-11-04/05 drives about 75% of each frame was sky and trees.
      * Returns null when the mount is fine. Adjust only when parked.
+     *
+     * Since 0.8.1 the coach reads the lower part of the frame (the preview fills its panel), where
+     * a level camera's horizon is only a third of the way down: a phone leaning back 10-15 degrees
+     * puts it mid-image, which is ideal. "Too high" therefore starts at 17 degrees, where the
+     * horizon is two thirds of the way down and the road is squeezed below it (at the old 6
+     * degrees the warning stood for a whole drive on a perfectly usable view). "Too low" starts
+     * where the far road leaves the top of the picture.
      */
     public static String mountAdvice(double x, double y, double z) {
         double norm = Math.sqrt(x*x + y*y + z*z);
@@ -38,8 +45,8 @@ public final class SpatialReadiness {
         double pitchUp = Math.toDegrees(Math.atan2(-z, Math.hypot(x, y)));
         double roll = Math.toDegrees(Math.atan2(Math.abs(x), Math.abs(y)));
         double tilt = Math.min(roll, 90 - roll); // landscape or portrait: deviation from level
-        if (pitchUp > 6) return "Camera points too high · tilt it down when parked";
-        if (pitchUp < -20) return "Camera points too low · tilt it up when parked";
+        if (pitchUp > 17) return "Camera points too high · tilt it down when parked";
+        if (pitchUp < -10) return "Camera points too low · tilt it up when parked";
         if (tilt > 8) return "Camera is tilted sideways · level it when parked";
         return null;
     }

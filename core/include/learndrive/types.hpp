@@ -82,11 +82,14 @@ enum class Fragment : int { none=0,
     roundaboutFirst,roundaboutSecond,roundaboutThird,roundaboutFourth,roundaboutEnter,destinationAhead,
     leftTurnHere,rightTurnHere,thenLeft,thenRight,giveWayRight,pullOver,mergeCarefully=66,
     // Hills ahead (map elevation along the route), and how to drive them.
-    downhillAhead=67,steepDownhillAhead,uphillAhead,steepUphillAhead,noNeutral,controlSpeedBrake,downOneGear=73 };
-constexpr int fragmentCount=73;
+    downhillAhead=67,steepDownhillAhead,uphillAhead,steepUphillAhead,noNeutral,controlSpeedBrake,downOneGear=73,
+    // Bends ahead on the route (from its line on the map): which way, and whether sharp.
+    leftBendAhead=74,rightBendAhead,sharpLeftBendAhead,sharpRightBendAhead=77 };
+constexpr int fragmentCount=77;
 inline bool isSlopeAheadFragment(Fragment f){return int(f)>=67&&int(f)<=70;}
+inline bool isBendAheadFragment(Fragment f){return int(f)>=74&&int(f)<=77;}
 inline bool isNavigationFragment(Fragment f){return int(f)>=45&&int(f)<=66;}
-inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext||isNavigationFragment(f);}
+inline bool isContextFragment(Fragment f){return (int(f)>=1&&int(f)<=21)||f==Fragment::bumpAheadContext||isNavigationFragment(f)||isBendAheadFragment(f);}
 inline const char* fragmentText(Fragment f) {
     switch(f) {
     case Fragment::downhill:return "Downhill.";case Fragment::steepDownhill:return "Steep downhill.";case Fragment::uphill:return "Uphill.";
@@ -129,6 +132,8 @@ inline const char* fragmentText(Fragment f) {
     case Fragment::uphillAhead:return "Uphill ahead.";case Fragment::steepUphillAhead:return "Steep uphill ahead.";
     case Fragment::noNeutral:return "Do not coast in neutral.";case Fragment::controlSpeedBrake:return "Control your speed with the brake.";
     case Fragment::downOneGear:return "Change down a gear.";
+    case Fragment::leftBendAhead:return "Left bend ahead.";case Fragment::rightBendAhead:return "Right bend ahead.";
+    case Fragment::sharpLeftBendAhead:return "Sharp left bend ahead.";case Fragment::sharpRightBendAhead:return "Sharp right bend ahead.";
     default:return "";
     }
 }

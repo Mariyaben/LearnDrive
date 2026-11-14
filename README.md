@@ -1,6 +1,28 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.8.5 (experimental, host-tested only).** The rest of what the Nov 8
+**Current Android candidate: 0.8.6 (experimental, host-tested only).** A coach that speaks when
+the learner has something to do, not about everything it sees
+([what 0.8.6 changes](docs/coach/NOV12_FIXES.md)). On the Nov 12 drive 0.8.5 spoke 84 times in 14
+minutes, 27 of them about traffic in the other lane, and said "Brake now" 11 times, mostly for
+vehicles that were far away or being followed.
+
+- **Distances are right with the phone leaning back.** At about 22 degrees of lean the horizon
+  sits lower in the picture than the code allowed, and every distance came out two to five times
+  too short.
+- **"Brake now" only when hard braking is needed:** the right braking time, growth seen on two
+  frames running, and never for a vehicle coming the other way.
+- **Traffic coming the other way** is spoken about on a close pass; buses and trucks are still
+  named early, but not one after another.
+- **A budget:** at most three routine road-user sentences a minute, and shorter sentences. Turn
+  instructions and emergencies are outside it.
+- **Bends from Google's route:** which way and how sharp, with the speed and gear only when the
+  learner is too fast for the bend.
+- **The horizon and the speed reading** survive motion readings that arrive late.
+
+Road users are still seen as far ahead as in 0.8.3–0.8.5, and people, riders and anything standing
+in the path are still spoken about as early. Not yet tried on the phone.
+
+**Previously, 0.8.5 (experimental, host-tested only).** The rest of what the Nov 8
 drive showed ([what 0.8.5 fixes](docs/coach/NOV8_FIXES.md)), and a coach that says less as the
 learner needs less ([you first](docs/coach/YOU_FIRST.md)).
 

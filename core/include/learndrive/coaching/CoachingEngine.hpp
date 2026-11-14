@@ -95,6 +95,10 @@ struct WorldState {
     double slopeAheadM=infinity,slopeGrade{},slopeLengthM{};uint64_t slopeId{};
     uint64_t bumpId{},bendId{};
     bool bendRight{};
+    // Sharp (blind: horn, keep left; always named) or not (named only when the learner is too fast
+    // for it), and the speed the bend is comfortable at. Without the route's own line: sharp, 20.
+    bool bendSharp=true;
+    double bendAdviseKmh=20;
     // Indian road practice: horn at blind bends, junction entry and when passing.
     bool hornRules=true;
     // Navigation says the learner is pulling up at the destination: a stop here is the
@@ -108,6 +112,10 @@ struct WorldState {
     // pointing up puts the horizon low in the image; image geometry is relative to it.
     double horizon=.5;
     bool horizonMeasured{};
+    // The phone's camera, but where its horizon is has never been measured this session (no motion
+    // samples yet). Nothing is said about road users until it is: against a guessed horizon a bus
+    // 60 m away can read as 3 m away.
+    bool geometryUnknown{};
     // The analysed image's optics (after the preview crop): box positions and sizes are angles
     // only through it. Defaults: the uncropped 4:3 frame the coach was tuned on.
     CameraModel camera{};

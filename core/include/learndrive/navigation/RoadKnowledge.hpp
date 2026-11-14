@@ -54,6 +54,8 @@ struct RouteAhead {
     double fixTime=-std::numeric_limits<double>::infinity(),progressM{};
     double bendDistanceM=std::numeric_limits<double>::infinity(),bendAngle{};
     uint64_t bendId{};bool bendRight{};
+    // Sharp (blind: the horn), and the speed its tightest stretch is comfortable at (km/h).
+    bool bendSharp{};double bendAdviseKmh=std::numeric_limits<double>::infinity();
     double bumpDistanceM=std::numeric_limits<double>::infinity();
     uint64_t bumpId{};bool bumpLearned{};
     // The road's grade here from the provider's elevation along this route (percent, + uphill,
@@ -70,6 +72,8 @@ struct RouteAhead {
 // are found on the route the car will actually take. A bend at one of the provider's own
 // maneuvers is that turn, not a bend; bends are reported only while the maneuver positions
 // are fresh, so a turn is never announced as a bend.
+// Since 0.8.6 also the bends that are not sharp but still want the right speed (35 degrees or
+// more within 40 m), and for every bend the speed its tightest 20 m is comfortable at.
 class RouteLine {
 public:
     static constexpr uint64_t bendFlag=uint64_t(1)<<62;
@@ -101,7 +105,7 @@ public:
     bool matched() const noexcept {return matched_;}
 private:
     struct Point {double x{},y{},s{};};
-    struct Bend {double s{},angle{};uint64_t id{};};
+    struct Bend {double s{},angle{};uint64_t id{};bool sharp=true;double adviseKmh=20;};
     Point at(double s) const noexcept;
     double heading(double s) const noexcept;
     double gradeAt(double s) const noexcept;

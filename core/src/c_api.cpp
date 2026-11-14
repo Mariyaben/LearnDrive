@@ -69,6 +69,9 @@ struct ld_engine {
     double laneTime=-ld::infinity;float laneLeft=-1,laneRight=-1;bool laneValid{}; // Lane model (marked roads)
     bool hornRules=true; // Indian road practice (horn at blind bends, junctions, passing)
     double horizonOverride=std::numeric_limits<double>::quiet_NaN(); // Replays of filmed video
+    // The phone's last measured horizon. A mounted phone does not move between two frames, so a
+    // moment without a pose (motion samples arriving late on a busy or warm phone) keeps it.
+    double heldHorizon=std::numeric_limits<double>::quiet_NaN();
     // The analysed image's optics (after the preview crop): where the level horizon is and how
     // many image heights a radian spans. Defaults: the uncropped 4:3 frame.
     ld::CameraModel camera{};
@@ -89,15 +92,19 @@ struct ld_engine {
 // phone's measured pitch (a camera pointing up puts the horizon low in the image), else mid-image.
 // The level horizon is at the optical centre (cy) and moves fy image heights per unit tangent of
 // the pitch: with the 0.8.1 fill-the-panel preview crop that is ~0.31 + 1.23 tan(pitch), not
-// 0.5 + 0.96 tan(pitch). Limits: the old [0.25, 0.85] of a 4:3 frame, in this image's units.
+// 0.5 + 0.96 tan(pitch). Limits: [0.25, 0.97] of a 4:3 frame, in this image's units. The upper
+// limit was 0.85 (0.754 of the preview): a phone leaning back 22 degrees on its mount has its
+// horizon at 0.82, and held at 0.754 every distance was two to five times too short (Nov 12).
 static double horizonFromPitch(const ld::CameraModel& c,double pitch) {
-    const double k=c.fy/.96;return std::clamp(c.cy+c.fy*std::tan(pitch),c.cy-.25*k,c.cy+.35*k);
+    const double k=c.fy/.96;return std::clamp(c.cy+c.fy*std::tan(pitch),c.cy-.25*k,c.cy+.47*k);
 }
 static double horizonAt(const ld_engine& e,double time) {
     if(std::isfinite(e.horizonOverride))return e.horizonOverride;
     if(e.sourceKind==LD_SOURCE_CAMERA) {
         const auto up=e.fusion.cameraUp(time);
         if(up.norm()>.9)return horizonFromPitch(e.camera,std::atan2(-up.z,std::hypot(up.x,up.y)));
+        // No pose at this instant: where it last was (see coachingCurrent).
+        if(std::isfinite(e.heldHorizon))return e.heldHorizon;
     }
     return e.camera.cy;
 }
@@ -343,7 +350,12 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
         // Rear camera looks along -z: its pitch above level from gravity "up" in phone axes.
         const auto up=e.fusion.cameraUp(now);
-        if(up.norm()>.9){w.horizon=horizonFromPitch(e.camera,std::atan2(-up.z,std::hypot(up.x,up.y)));w.horizonMeasured=true;}
+        if(up.norm()>.9){w.horizon=horizonFromPitch(e.camera,std::atan2(-up.z,std::hypot(up.x,up.y)));w.horizonMeasured=true;e.heldHorizon=w.horizon;}
+        // No pose at this instant: the horizon is where it last was. The optical centre is never
+        // put in its place. With the phone tilted back that is half the image above the real
+        // horizon, and against it a bus 60 m away stands "3 m ahead": Brake now.
+        else if(std::isfinite(e.heldHorizon)){w.horizon=e.heldHorizon;w.horizonMeasured=true;}
+        else w.geometryUnknown=true;
     }
     if(std::isfinite(e.yawOverride)&&now>=e.yawOverrideTime&&now-e.yawOverrideTime<.5){w.yawRate=e.yawOverride;w.yawKnown=true;}
     else if(e.sourceKind==LD_SOURCE_CAMERA) {
@@ -361,7 +373,8 @@ static ld::coaching::WorldState coachingCurrent(ld_engine& e,double now) {
             if(line.gradeKnown){w.mapGradeKnown=true;w.mapGradePercent=line.gradePercent;
                 w.gradeBand=ld::slopeBand(std::atan(line.gradePercent/100)*180/3.14159265358979323846);}
             w.slopeAheadM=line.slopeDistanceM;w.slopeGrade=line.slopeGradePercent;w.slopeLengthM=line.slopeLengthM;w.slopeId=line.slopeId;
-            if(line.bendsKnown){w.bendAheadM=line.bendDistanceM;w.bendId=line.bendId;w.bendRight=line.bendRight;}
+            if(line.bendsKnown){w.bendAheadM=line.bendDistanceM;w.bendId=line.bendId;w.bendRight=line.bendRight;
+                if(line.bendId){w.bendSharp=line.bendSharp;w.bendAdviseKmh=line.bendAdviseKmh;}}
             else if(ahead.matched){w.bendAheadM=ahead.bendDistanceM;w.bendId=uint64_t(std::max<int64_t>(0,ahead.bendNode));w.bendRight=ahead.bendRight;}
         } else if(ahead.matched) {
             w.mapTime=ahead.fixTime;w.bumpAheadM=ahead.bumpDistanceM;w.bumpId=uint64_t(std::max<int64_t>(0,ahead.bumpNode));
