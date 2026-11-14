@@ -155,7 +155,11 @@ try {
         'Steep uphill ahead.',
         'Do not coast in neutral.',
         'Control your speed with the brake.',
-        'Change down a gear.')
+        'Change down a gear.',
+        'Left bend ahead.',
+        'Right bend ahead.',
+        'Sharp left bend ahead.',
+        'Sharp right bend ahead.')
     if ($Fragments -or $FragmentIds.Count -gt 0 -or $PromptIds.Count -eq 0) {
         for ($index = 0; $index -lt $fragmentTexts.Length; $index++) {
             if ($FragmentIds.Count -gt 0 -and ($index + 1) -notin $FragmentIds) { continue }

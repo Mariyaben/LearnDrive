@@ -31,6 +31,11 @@ open class DetectionOverlay(context:Context):View(context) {
             canvas.drawText(road.status,maxOf(dx,0f)+8,maxOf(dy,0f)+labels.textSize+8,labels)
         }
         for(box in frame.detections) {
+            // The learner's own dashboard, bonnet or phone mount is not a road user: a box that ends
+            // at the bottom edge and is very wide, or sits in a bottom corner. The coach ignores
+            // these already; drawing "Car 46%" on the dashboard only made it look as if it did not.
+            val bottom=box.y+box.height>.97f
+            if(bottom&&(box.width>.42f||box.x<.01f||box.x+box.width>.99f))continue
             val left=dx+box.x*w;val top=dy+box.y*h
             canvas.drawRect(left,top,left+box.width*w,top+box.height*h,boxes)
             canvas.drawText("${names[box.category]?:"Object"} ${(box.score*100).toInt()}%",left,(top-labels.textSize*.2f).coerceAtLeast(labels.textSize),labels)

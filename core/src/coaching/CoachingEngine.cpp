@@ -372,8 +372,15 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     // The same encounter getting worse ("ease off" -> "brake, be ready to stop") is not paced as new chatter.
     if(scheduled)for(const auto& e:ledger_.entries())if(e.used&&e.sourceId==source_&&e.identity==c.identity&&e.acceptedAt>=0&&
         priority(c.prompt)>priority(e.acceptedPrompt)){spacing=std::min(spacing,2.);break;}
-    // A risk instruction about a developing conflict is not paced like routine chatter.
-    if(scheduled&&c.origin==7)spacing=std::min(spacing,priority(c.prompt)>=4?3.:priority(c.prompt)>=3?6.:interval());
+    // A risk instruction about a developing conflict is not paced like routine chatter: braking
+    // for something in the path may follow other speech after 6 s. "Keep left" for traffic passing
+    // by and "give them space" are not developing conflicts; they wait longer. (Up to 0.8.5 all of
+    // these could follow anything after 3 s: on Nov 12 the coach spoke every 10 s for 14 minutes.)
+    // Something crossing the path waits 3 s, as before; braking for a vehicle, and the first word
+    // about a person or rider in the path, 6 s (a person standing in the lane 60 m ahead must not
+    // wait out the routine 12 s and be named only at 30 m); someone at the roadside, 8 s.
+    if(scheduled&&c.origin==7)spacing=std::min(spacing,c.prompt==Prompt::oncomingKeepLeft?interval():priority(c.prompt)>=5?3.:
+        priority(c.prompt)>=4||c.prompt==Prompt::personEaseCover||c.prompt==Prompt::riderEaseCover?6.:priority(c.prompt)>=3?8.:interval());
     // ...and braking for a person or two-wheeler in the path waits only for the key words of
     // what was just said about someone else (Nov 8, 2:42).
     if(scheduled&&c.origin==7&&c.pathFirst)spacing=std::min(spacing,1.5);
@@ -385,6 +392,22 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
         // episode spacing applies instead. Unrelated routine cues keep the interval.
         const double lead=task_.progress().leadSeconds,close=c.lessonStep==1?actByLateLimit:c.lessonStep==2?actByApproachClose:actByEntryClose;
         if(lead>=0&&lead-std::max(0.,interval()-(w.now-lastOrdinary_))<close+minimumUsefulWindow)spacing=std::min(interval(),actByStepSpacing);
+    }
+    // At most three routine road-user sentences a minute (four when guided, two when minimal),
+    // each about a different road user. In traffic the coach must not become a commentary the
+    // learner stops hearing. The budget is for what passes by: traffic coming the other way, people
+    // at the roadside, a vehicle ahead to keep a gap from. Whatever is in the path or crossing it is
+    // never held back by it, however far ahead it is seen: noticing those early is the point of
+    // seeing 70 m and more (0.8.3).
+    const bool passingBy=c.prompt==Prompt::oncomingKeepLeft||c.prompt==Prompt::personLeftSpace||
+        c.prompt==Prompt::personRightSpace||c.prompt==Prompt::vehicleEaseGap;
+    if(scheduled&&ordinary&&c.origin==7&&passingBy) {
+        int recent=0;bool same=false;
+        for(const auto& e:ledger_.entries())if(e.used&&e.sourceId==source_&&e.identity.space==IdentitySpace::Optical&&e.kind==EventKind::Attention&&
+            e.acceptedAt>=0&&w.now-e.acceptedAt<60){if(e.identity==c.identity)same=true;else ++recent;}
+        if(!same&&recent>=(profile_==Profile::Minimal?2:profile_==Profile::Guided?4:3)) {
+            decision_={};decision_.blocked=Block::Cooldown;policyReason_="ROAD_USER_BUDGET";return decision_;
+        }
     }
     if(choice.mode==Mode::DEFER||(ordinary&&w.now-lastOrdinary_<spacing)||(!ordinary&&w.now-lastWarning_<.25)) {
         decision_.mode=Mode::DEFER;decision_.blocked=Block::Cooldown;event.state=EventState::Deferred;

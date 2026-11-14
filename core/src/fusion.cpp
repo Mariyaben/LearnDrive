@@ -98,7 +98,11 @@ void SensorFusion::imu(const ImuSample& s) {
     if(!std::isfinite(s.time)||s.time<0||!s.acceleration.finite()||!s.gyro.finite()||
        (s.hasLinear&&!s.linear.finite())||s.time<=lastImu_) return;
     double dt=lastImu_<0?0:s.time-lastImu_;
-    if(dt>.2){restartCalibration("Motion data paused; normalize the phone plane again");poseCursor_=poseCount_=0;liveCount_=0;}
+    // Samples arrive late, in a burst, when the phone is busy or warm. Its mount has not moved
+    // meanwhile: only a long pause (the app suspended, the phone taken out) loses the level reference
+    // and the camera's pose. A short one skips its own stretch of integration and nothing else.
+    // Up to 0.8.5 any pause over 0.2 s dropped both; for the next 0.2 s there was no horizon.
+    if(dt>2){restartCalibration("Motion data paused; normalize the phone plane again");poseCursor_=poseCount_=0;liveCount_=0;}
     lastImu_=s.time;
     if(!calibrated_) {
         calibrate(s);
@@ -184,8 +188,14 @@ Telemetry SensorFusion::snapshot(double t) const {
     out.time=t; out.speedKmh=velocity_*3.6; out.pitchDegrees=pitch_-pitchBias_;
     out.longitudinalAcceleration=longitudinalFiltered_; out.calibrationProgress=calibrationProgress_;
     out.calibrated=calibrated_;
-    bool fresh=std::isfinite(t)&&lastImu_>=0&&t>=lastImu_&&t-lastImu_<.25;
-    out.speedValid=fresh&&lastGps_>=0&&t>=lastGps_&&t-lastGps_<3;
+    // `t` is the caller's clock, read a moment before this runs: a motion sample or a GPS fix can
+    // land in between and carry a slightly later time. That is fresh, not "from the future".
+    const bool fresh=std::isfinite(t)&&lastImu_>=0&&t-lastImu_<.25&&lastImu_-t<.5;
+    // Speed is anchored by GPS once a second; motion samples only carry it between fixes. A late
+    // burst of them, or one fix missed under trees, does not make the speed unknown (Nov 12:
+    // "Speed unavailable" 54 times in 14 minutes, a second each time).
+    const bool carried=std::isfinite(t)&&lastImu_>=0&&t-lastImu_<1.5&&lastImu_-t<.5;
+    out.speedValid=carried&&lastGps_>=0&&t-lastGps_<4.5&&lastGps_-t<1.5;
     out.pitchValid=fresh&&calibrated_;
     out.braking=fresh&&t<brakeUntil_; out.hardBraking=fresh&&t<hardUntil_;
     out.shock=fresh&&t<shockUntil_;

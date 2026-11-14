@@ -109,6 +109,36 @@ int main(){try{
         std::vector<double> g;for(int i=0;i<=40;++i){const double h=i*10*std::sin(15*pi/180*std::min(1.,i/20.));g.push_back(lat(i*10.));g.push_back(lon(h*.3));}
         RouteLine c;check(c.load(g.data(),g.size()/2)&&c.bendCount()==0,"gentle curve became a sharp bend");
         check(!c.load(nullptr,0)&&!c.loaded(),"empty line not cleared");});
+    test("route line: a bend that is not sharp is found with the speed it is comfortable at; a gentle curve and a wobbly line are not bends",[]{
+        // North 200 m, a 50-degree bend to the left on a 60 m radius (52 m of road), then straight on.
+        std::vector<double> ll;
+        for(int i=0;i<=20;++i){ll.push_back(lat(i*10.));ll.push_back(lon(0));}
+        const double R=60,total=50*pi/180;
+        for(int k=1;k<=10;++k){const double a=k*total/10;ll.push_back(lat(200+R*std::sin(a)));ll.push_back(lon(-(R-R*std::cos(a))));}
+        const double ex=-(R-R*std::cos(total)),ny=200+R*std::sin(total);
+        for(int i=1;i<=30;++i){ll.push_back(lat(ny+i*10*std::cos(total)));ll.push_back(lon(ex-i*10*std::sin(total)));}
+        RouteLine r;check(r.load(ll.data(),ll.size()/2)&&r.bendCount()==1,"a 50-degree bend on a 60 m radius was not found, or found twice");
+        BumpMap none;for(int k=0;k<3;++k)r.fix(1+k,lat(60+k*8.),lon(0),5,0,true,30);
+        r.maneuvers(3.2,nullptr,0);
+        const auto a=r.ahead(3.3,none);
+        std::cout<<"    50 degrees on a 60 m radius: "<<a.bendDistanceM<<" m ahead, "<<(a.bendRight?"right":"left")<<(a.bendSharp?", sharp":", not sharp")<<", comfortable at "<<a.bendAdviseKmh<<" km/h"<<std::endl;
+        check(a.bendId&&!a.bendRight&&!a.bendSharp,"the bend's direction or kind is wrong");
+        check(a.bendDistanceM>105&&a.bendDistanceM<140,"the bend is not placed where the road starts turning");
+        check(a.bendAdviseKmh>28&&a.bendAdviseKmh<40,"the bend's comfortable speed is off (60 m radius: about 34 km/h)");
+        // A sharp one (90 degrees on a 12 m radius) is found once, marked sharp, with a second-gear speed.
+        std::vector<double> s;for(int i=0;i<=30;++i){s.push_back(lat(i*10.));s.push_back(lon(0));}
+        for(int k=1;k<=4;++k){const double b=k*pi/10;s.push_back(lat(300+12*std::sin(b)));s.push_back(lon(12-12*std::cos(b)));}
+        for(int i=1;i<=30;++i){s.push_back(lat(312.));s.push_back(lon(12+i*10.));}
+        RouteLine q;check(q.load(s.data(),s.size()/2)&&q.bendCount()==1,"a sharp bend was counted twice or lost");
+        for(int k=0;k<3;++k)q.fix(1+k,lat(100+k*8.),lon(0),5,0,true,30);
+        q.maneuvers(3.2,nullptr,0);
+        const auto b=q.ahead(3.3,none);check(b.bendSharp&&b.bendRight&&b.bendAdviseKmh<=22,"a sharp bend is not marked sharp, or its speed is too high");
+        // A long gentle curve (25 degrees over 100 m) and a straight road drawn with a wobble are not bends.
+        std::vector<double> g;{double x=0,y=0;for(int i=0;i<=40;++i){g.push_back(lat(y));g.push_back(lon(x));
+            const double h=std::clamp((i-10)/10.,0.,1.)*25*pi/180;x+=10*std::sin(h);y+=10*std::cos(h);}}
+        RouteLine c;check(c.load(g.data(),g.size()/2)&&c.bendCount()==0,"a gentle curve became a bend");
+        std::vector<double> z;for(int i=0;i<=60;++i){z.push_back(lat(i*10.));z.push_back(lon(i%2?.6:-.6));}
+        RouteLine d;check(d.load(z.data(),z.size()/2)&&d.bendCount()==0,"a wobble in the line became a bend");});
     test("C API: a bump felt on two passes is warned about on the route ahead on the third",[]{
         std::unique_ptr<ld_engine,decltype(&ld_destroy)> e(ld_create(),ld_destroy);
         check(ld_guidance_begin(e.get(),1,LD_SOURCE_CAMERA,0),"camera source");

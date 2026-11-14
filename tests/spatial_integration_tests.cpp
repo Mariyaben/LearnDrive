@@ -30,6 +30,10 @@ int main(){
         for(int i=0;i<=600;++i)fusion.imu({i*.01,{0,gravity,0},{},{},true});
         check(fusion.cameraUp(5.98).norm()>.9,"capture-time IMU pose was discarded when newer sensor samples existed");
         check(fusion.cameraUp(4.9).norm()==0&&fusion.cameraUp(6.3).norm()==0,"expired camera pose accepted");
+        // Motion samples pause for 0.6 s (a busy phone) and resume: the pose is there at once,
+        // not after a new 0.2 s warm-up.
+        fusion.imu({6.6,{0,gravity,0},{},{},true});fusion.imu({6.61,{0,gravity,0},{},{},true});
+        check(fusion.cameraUp(6.61).norm()>.9,"a short pause in motion samples dropped the camera pose");
         const Matrix3 identity{1,0,0,0,1,0,0,0,1};
         const auto warp=supercomboWarp(k,{0,gravity,0});
         for(size_t i=0;i<9;++i)check(std::abs(warp[i]-identity[i])<1e-8,"canonical warp is not identity");

@@ -157,6 +157,33 @@ bool RouteLine::load(const double* latLon,size_t count) {
             s+=bendWindowM+20;
         } else s+=2;
     }
+    // The road's direction over 8 m of it (a kink in the line is not a bend), and how much it turns
+    // in the tightest 20 m of a stretch. A comfortable bend for a learner pulls about 1.5 m/s^2
+    // sideways: its speed is sqrt(1.5 x radius), the radius being 20 m over that turn.
+    const auto chord=[&](double a){const auto p=at(std::clamp(a,0.,total)),q=at(std::clamp(a+8,0.,total));
+        return std::fmod(std::atan2(q.x-p.x,q.y-p.y)*180/pi+360.,360.);};
+    const auto tightest=[&](double from,double to){double worst=0;
+        for(double p=std::max(0.,from);p<=to;p+=2)worst=std::max(worst,std::abs(turn(chord(p),chord(p+20))));return worst;};
+    const auto comfortable=[&](double degrees){const double radius=20/std::max(.05,degrees*pi/180);
+        return std::clamp(3.6*std::sqrt(1.5*radius),15.,45.);};
+    // A sharp bend is taken in second gear whatever the line makes of its radius.
+    for(auto& b:bends_)b.adviseKmh=std::min(22.,comfortable(tightest(b.s-8,b.s+bendWindowM-12)));
+    // Bends that are not sharp but still want the right speed: 35 degrees or more within 40 m.
+    // Where a sharp bend stands (from 45 m before it to 25 m past its end) it is that bend.
+    const size_t sharp=bends_.size();
+    for(double s=18;s<total-48;) {
+        const double h0=chord(s-8),change=turn(h0,chord(s+32));
+        if(std::abs(change)>=35) {
+            double start=s;
+            for(double p=s;p<s+40;p+=1)if(std::abs(turn(h0,chord(p)))>=10){start=p;break;}
+            start=std::max(s,start-3);
+            bool taken=false;
+            for(size_t i=0;i<sharp;++i)taken|=start>=bends_[i].s-45&&start<=bends_[i].s+bendWindowM+25;
+            if(!taken)bends_.push_back({start,change,bendFlag|(generation_<<20)|(++index&0xFFFFF),false,comfortable(tightest(start-8,start+28))});
+            s+=60;
+        } else s+=2;
+    }
+    std::sort(bends_.begin(),bends_.end(),[](const Bend& a,const Bend& b){return a.s<b.s;});
     return true;
 }
 // The road's grade from elevation samples along the line. Elevation models are several metres
@@ -319,7 +346,8 @@ RouteAhead RouteLine::ahead(double now,const BumpMap& bumps) const noexcept {
                 if((b.s>=t-50&&b.s<=t+30)||(t>=b.s&&t<=b.s+bendWindowM)){turnHere=true;break;}
             }
             if(turnHere)continue;
-            out.bendDistanceM=b.s-progress_;out.bendAngle=b.angle;out.bendId=b.id;out.bendRight=b.angle>0;break;
+            out.bendDistanceM=b.s-progress_;out.bendAngle=b.angle;out.bendId=b.id;out.bendRight=b.angle>0;
+            out.bendSharp=b.sharp;out.bendAdviseKmh=b.adviseKmh;break;
         }
     }
     // Bumps on the route itself, up to 400 m ahead.

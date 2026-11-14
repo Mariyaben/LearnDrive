@@ -315,6 +315,7 @@ int main(int argc,char** argv){try {
         for(double z=60;z>6;z-=8.33*.1,t+=.1){auto w=road(t);w.yawKnown=true;w.yawRate=yaw;w.horizonMeasured=true;w.horizon=.5;
             place(w,id,category,z,lateralM,category==0?1.7:1.5,category==0?.5:1.7,turned);
             const auto d=f.decide(w);
+            if(std::getenv("LD_TRACE")&&id==2101){const auto& q=f.e->risk().top();std::cout<<"      z="<<z<<" kind="<<int(q.kind)<<" L"<<q.level<<" d="<<q.distanceM<<" ttc="<<q.ttc<<" exp="<<q.expansion<<(d.eligible?" SPOKE ":" ")<<(d.eligible?int(d.ticket.candidate.prompt):0)<<(d.eligible&&d.ticket.candidate.urgent?" urgent":"")<<" blk="<<int(d.blocked)<<std::endl;}
             if(r.sideAt12<0&&z<=12&&f.e->risk().riskCount())r.sideAt12=f.e->risk().riskAt(0).center;
             if(!d.eligible)continue;
             const auto& c=d.ticket.candidate;p.push_back(int(c.prompt));r.urgent|=c.urgent;
@@ -341,6 +342,7 @@ int main(int argc,char** argv){try {
         check(!p.empty()&&!edge.urgent&&std::abs(edge.sideAt12-truth)<.015,"with the heading learned, a person at the road edge was misplaced or got 'Brake now'");
         // ...and someone standing in the car's line is still braked for, urgently when it comes to it.
         p.clear();const auto line=pass(f,t,2101,0,0,p);
+        if(std::getenv("LD_TRACE")){std::cout<<"      in the line:";for(int q:p)std::cout<<' '<<q;std::cout<<" urgent="<<line.urgent<<" side="<<line.sideAt12<<std::endl;}
         check(has(p,Prompt::brakeReadyStop)&&line.urgent&&std::abs(line.sideAt12-.5)<.015,"a person in the car's line was not braked for with the learned heading");
         // Control, as on Nov 8: with nothing learned, the turned camera puts the person at the edge
         // a metre nearer the car's line than they are (0.5 m from it instead of 1.5 m).
@@ -540,6 +542,67 @@ int main(int argc,char** argv){try {
             check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");}
         std::cout<<"    'Vehicle crossing' at "<<at<<" s, the truck "<<-side<<" m left of the learner's line"<<std::endl;
         check(has(p,Prompt::vehicleCrossingWait)&&side<0,"a truck crossing from a side road was not called crossing before it reached the learner's line");});
+    test("long range with the phone leaning back: hazards 70-100 m ahead are acted on early",[&]{
+        // The Nov 12 mount: leaning back about 22 degrees, the 0.8.1 preview crop (focal 0.665 image
+        // widths and 1.228 heights, optical centre a third of the way down), horizon at 0.82. The
+        // learner holds 40 km/h. Each hazard is placed with that camera's own geometry.
+        const double fx=.665,fy=1.228,H=.82;
+        auto put=[&](WorldState& w,uint64_t id,int category,double z,double X,double tall,double wide){
+            ActorObservation a;a.identity={IdentitySpace::Optical,id,0};a.captureTime=w.now;a.confidence=.8;a.relevant=true;a.category=category;
+            a.h=float(fy*tall/z);a.w=float(fx*wide/z);a.x=float(.5+fx*X/z)-a.w*.5f;a.y=float(H+fy*1.25/z)-a.h;w.actors[w.actorCount++]=a;};
+        // When the first road-user sentence about it was said, and how far away it was then.
+        auto first=[&](int category,double z0,double X,double tall,double wide,double ownMps,const char* words){
+            Fixture f(1);double at=-1;std::string what;
+            for(int i=5;i<=200&&at<0;++i){const double t=i/10.,z=z0-(11.1+ownMps)*(t-.5);if(z<4)break;
+                auto w=road(t);w.telemetry.speedKmh=40;w.horizon=H;w.horizonMeasured=true;w.camera=CameraModel{fx,fy,.5,.306,true};
+                put(w,960+uint64_t(category),category,z,X,tall,wide);
+                const auto d=f.decide(w);if(!d.eligible)continue;
+                const auto& c=d.ticket.candidate;std::string s;
+                if(const auto* u=f.e->utterance(CoachingEngine::spokenId(c)))for(size_t k=0;k<u->count;++k){s+=fragmentText(static_cast<Fragment>(u->fragments[k]));s+=' ';}
+                else s=promptText(c.prompt);
+                check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+                if(riskMayUse(c.prompt)){at=z;what=s;}}
+            std::cout<<"    "<<words<<": first said at "<<at<<" m: "<<what<<std::endl;
+            return std::make_pair(at,what);};
+        // A bus coming the other way in its own lane (2.8 m right of the learner's line) at 36 km/h.
+        const auto bus=first(5,100,2.8,3.1,2.5,10,"oncoming bus");
+        check(bus.first>=35&&bus.second.find("Oncoming bus")!=std::string::npos,"an oncoming bus seen from 100 m was not named while still 35 m away");
+        // A person standing in the learner's lane.
+        const auto person=first(0,90,-.3,1.7,.5,0,"person in the lane");
+        check(person.first>=40&&person.second.find("Person ahead")!=std::string::npos,"a person standing in the lane 90 m ahead was not spoken about while still 40 m away");
+        // A lorry stopped in the learner's lane.
+        const auto lorry=first(7,100,0,3.2,2.5,0,"stopped lorry in the lane");
+        check(lorry.first>=35&&(lorry.second.find("Truck ahead")!=std::string::npos||lorry.second.find("Vehicle ahead")!=std::string::npos),
+            "a lorry stopped in the lane 100 m ahead was not spoken about while still 35 m away");
+        // A motorcycle stopped in the lane (waiting to turn).
+        const auto bike=first(3,80,.2,1.5,.8,0,"stopped two-wheeler in the lane");
+        check(bike.first>=30&&bike.second.find("Two-wheeler ahead")!=std::string::npos,"a two-wheeler stopped in the lane 80 m ahead was not spoken about while still 30 m away");});
+    test("the speech budget never holds back a person in the path, however busy the road",[&]{
+        // Three buses coming the other way have just been spoken about, one every 21 s (the
+        // minute's budget is full); then a person is standing in the lane 60 m ahead at 40 km/h.
+        Fixture f(1);int keepLeft=0;double personAt=-1;
+        for(int i=5;i<=600&&personAt<0;++i){const double t=i/10.;auto w=road(t);w.telemetry.speedKmh=40;
+            for(int k=0;k<3;++k){const double z=90-(11.1+10)*(t-(1+21*k));if(t>=1+21*k&&z>6)place(w,970+uint64_t(k),5,z,2.8,3.1,2.5);}
+            if(t>=50){const double z=60-11.1*(t-50);if(z>5)place(w,975,0,z,.1,1.7,.5);}
+            const auto d=f.decide(w);if(!d.eligible)continue;
+            const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+            if(c.prompt==Prompt::oncomingKeepLeft)++keepLeft;
+            else if(t>=50&&(c.prompt==Prompt::personEaseCover||c.prompt==Prompt::brakeReadyStop))personAt=60-11.1*(t-50);}
+        std::cout<<"    'keep left' "<<keepLeft<<" time(s); then the person in the lane told about at "<<personAt<<" m"<<std::endl;
+        check(keepLeft>=3,"control: the three buses were not all spoken about, so the budget was not full");
+        check(personAt>=45,"after a busy minute the person in the lane was told about late, or not at all");});
+    test("something coming toward the learner on their left is never told 'keep left'",[&]{
+        // A motorcycle comes toward the learner at 25 km/h on a straight road, 2 m to the LEFT of
+        // their line (riding the wrong way along the edge, or a man walking there taken for one);
+        // the learner holds 30 km/h. Control: the same 2 m to the right is a close pass, "keep left".
+        auto run=[&](double side){Fixture f(1);std::vector<int> p;
+            for(int i=5;i<=80;++i){const double t=i/10.,z=55-(8.33+6.94)*(t-.5);if(z<5)break;auto w=road(t);
+                place(w,980,3,z,side,1.6,.7);said(f,w,p);}
+            return p;};
+        const auto left=run(-2.),right=run(2.);
+        std::cout<<"    on the left:";for(int q:left)std::cout<<' '<<q;std::cout<<"\n    on the right:";for(int q:right)std::cout<<' '<<q;std::cout<<std::endl;
+        check(has(right,Prompt::oncomingKeepLeft),"control: a two-wheeler passing close on the right got no 'keep left'");
+        check(!has(left,Prompt::oncomingKeepLeft),"'keep left' was said about a road user on the learner's left");});
     test("a person and a rider standing together are told about once",[&]{
         // Someone standing at the edge of the lane and a rider stopped beside them, 3 m further on.
         Fixture f(1);int braking=0,urgent=0;double last=-1,gap=1e9;
@@ -555,10 +618,12 @@ int main(int argc,char** argv){try {
         // Nov 5, 5:15: two people on either side of a narrow lane come into view 9 m ahead at
         // 15 km/h; the detector loses the first of them after half a second.
         Fixture f(1);std::vector<double> urgent;
-        for(int i=5;i<=30;++i){const double t=i/10.,z=9-4.17*(t-.5);if(z<3.5)break;auto w=road(t);w.telemetry.speedKmh=15;
+        for(int i=5;i<=30;++i){const double t=i/10.,z=9-4.17*(t-.5);if(z<2.5)break;auto w=road(t);w.telemetry.speedKmh=15;
             if(t<1.1)place(w,946,0,z,-.5,1.7,.5);
             place(w,947,0,z+.5,.6,1.7,.5);
-            const auto d=f.decide(w);if(!d.eligible)continue;
+            const auto d=f.decide(w);
+            if(std::getenv("LD_TRACE")){const auto& r=f.e->risk().top();std::cout<<"      t="<<t<<" z="<<z<<" top id="<<r.id<<" kind="<<int(r.kind)<<" L"<<r.level<<" d="<<r.distanceM<<" ttc="<<r.ttc<<" exp="<<r.expansion<<" n="<<f.e->risk().riskCount()<<(d.eligible?" SPOKE":"")<<(d.eligible&&d.ticket.candidate.urgent?" urgent":"")<<std::endl;}
+            if(!d.eligible)continue;
             const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
             if(c.urgent)urgent.push_back(t);}
         std::cout<<"    'Brake now' at:";for(double t:urgent)std::cout<<' '<<t;std::cout<<std::endl;
@@ -697,7 +762,31 @@ int main(int argc,char** argv){try {
         auto [bump,bend,said]=run(true);std::cout<<"    "<<said<<std::endl;
         check(bump==1,"speed bump not named exactly once");check(bend==1,"sharp bend not named exactly once");
         check(said.find("horn")!=std::string::npos,"no horn at a sharp bend on Indian roads");
-        auto [bump2,bend2,said2]=run(false);check(bump2==1&&bend2==0&&said2.find("horn")==std::string::npos,"horn advice without horn rules");});
+        // Without the horn rule the bend is still named: it is the horn that is left out.
+        auto [bump2,bend2,said2]=run(false);std::cout<<"    "<<said2<<std::endl;
+        check(bump2==1&&bend2==1&&said2.find("horn")==std::string::npos&&said2.find("Keep left")!=std::string::npos,"horn advice without horn rules, or no bend without them");});
+    test("bends from the map: which way, how sharp, and what this speed needs; a bend taken at the right speed gets no words",[&]{
+        // A bend 150 m ahead, approached at a steady speed: everything said about it.
+        auto drive=[&](bool sharp,bool right,double advise,double kmh,bool horn=true){Fixture f(1);std::string said;
+            for(int i=10;i<=400;++i){const double t=i/10.,ahead=150-(t-1)*kmh/3.6;if(ahead<-10)break;auto w=road(t);w.telemetry.speedKmh=kmh;w.hornRules=horn;w.mapTime=t;
+                if(ahead>0){w.bendId=91;w.bendAheadM=ahead;w.bendRight=right;w.bendSharp=sharp;w.bendAdviseKmh=advise;}
+                const auto text=speak(f,w);if(!text.empty()&&text.find("bend")!=std::string::npos)said+=text+"|";}
+            return said;};
+        const auto slowSharp=drive(true,false,20,18),fastSharp=drive(true,true,20,40),easeSharp=drive(true,false,20,26);
+        const auto rightSpeed=drive(false,true,32,30),easeGentle=drive(false,false,32,38),fastGentle=drive(false,true,30,45),noHorn=drive(true,true,20,18,false);
+        std::cout<<"    sharp at 18 km/h: "<<slowSharp<<"\n    sharp at 40: "<<fastSharp<<"\n    sharp at 26: "<<easeSharp<<"\n    32 km/h bend at 30: "<<rightSpeed
+                 <<"\n    32 km/h bend at 38: "<<easeGentle<<"\n    30 km/h bend at 45: "<<fastGentle<<"\n    sharp, no horn rule: "<<noHorn<<std::endl;
+        const auto has=[](const std::string& s,const char* words){return s.find(words)!=std::string::npos;};
+        check(has(slowSharp,"Sharp left bend ahead.")&&has(slowSharp,"Sound the horn.")&&has(slowSharp,"Keep left.")&&!has(slowSharp,"Brake")&&!has(slowSharp,"Ease"),
+            "a sharp bend at the right speed: direction, horn and keep left, and nothing about speed");
+        check(has(fastSharp,"Sharp right bend ahead.")&&has(fastSharp,"Brake gently.")&&has(fastSharp,"Change down to second.")&&has(fastSharp,"Sound the horn."),
+            "a sharp bend at 40 km/h: brake, second gear and the horn");
+        check(has(easeSharp,"Ease off the accelerator.")&&has(easeSharp,"Change down to second.")&&has(easeSharp,"Sound the horn."),"a sharp bend a little too fast: ease off, second gear, horn");
+        check(rightSpeed.empty(),"a bend taken at the right speed was announced");
+        check(has(easeGentle,"Left bend ahead.")&&has(easeGentle,"Ease off the accelerator.")&&!has(easeGentle,"horn")&&!has(easeGentle,"Sharp"),"a bend a little too fast: its direction and ease off, no horn");
+        check(has(fastGentle,"Right bend ahead.")&&has(fastGentle,"Brake gently.")&&has(fastGentle,"Change down to third."),"a bend far too fast: brake gently and third gear");
+        check(has(noHorn,"Sharp right bend ahead.")&&!has(noHorn,"horn")&&has(noHorn,"Keep left."),"without the horn rule a sharp bend lost more than the horn");
+        for(const auto* s:{&slowSharp,&fastSharp,&easeSharp,&easeGentle,&fastGentle,&noHorn})check(std::count(s->begin(),s->end(),'|')==1,"a bend was named twice");});
     test("map knowledge: a bend is named about 7 s ahead, once even as its map point moves, never mid-bend, no change-up into it",[&]{
         Fixture f(2);std::vector<std::pair<double,std::string>> said;
         for(int i=10;i<=200;++i){const double t=i/10.;auto w=road(t);w.mapTime=t;
@@ -710,7 +799,8 @@ int main(int argc,char** argv){try {
             if(s.find("bend")!=std::string::npos){++bends;at=t;}
             const double ahead=110-(t-1)*10;if(s.find("Change up")!=std::string::npos){if(ahead>0)upNear=true;else upAfter=true;}}
         check(bends==1,"bend not named exactly once as its map point moved");
-        const double lead=(110-(at-1)*10)/10.;check(lead>=3&&lead<=7.5,"bend named too late or too early");
+        // (9 s ahead rather than 7 when the learner must brake for it: here 40 km/h into a second-gear bend.)
+        const double lead=(110-(at-1)*10)/10.;check(lead>=3&&lead<=9.5,"bend named too late or too early");
         check(!upNear,"change-up advice into a sharp bend");check(upAfter,"held change-up never given after the bend");});
     // A climb or descent from the route's elevation, `start` m ahead at t=1, approached at a
     // steady speed; the mount has sagged so the phone's tilt reads `pitch` all the way.

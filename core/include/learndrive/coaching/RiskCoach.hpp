@@ -87,6 +87,8 @@ private:
     // user keeps one identity and motion history when detector IDs change.
     struct Motion {uint64_t id{},optical{};int group=-1;size_t count{},cursor{};double last=-1;std::array<uint64_t,4> opticals{};size_t opticalCursor{};
         mutable double headAt=-1,farAt=-1; // When this road user last gave a heading sample.
+        // Time to contact by its growth on the last two looks (infinite: not closing), and when.
+        mutable double loomNow=std::numeric_limits<double>::infinity(),loomPrev=std::numeric_limits<double>::infinity(),loomNowAt=-1,loomPrevAt=-1;
         std::array<double,10> t{};std::array<float,10> x{},y{},w{},h{};};
     const Motion* associate(uint64_t optical,int category,float x,float y,float w,float h,double capture) noexcept;
     Episode* episode(uint64_t id,double now) noexcept;
@@ -102,7 +104,7 @@ private:
     static constexpr int maskW=16,maskH=12;
     std::array<uint16_t,maskW*maskH> maskHits_{};
     uint32_t maskFrames_{};double maskCapture_=-1;
-    bool masked(double center,double foot) const noexcept;
+    bool masked(double center,double foot,double bonnet=.85) const noexcept;
     void learnMask(const WorldState&,double v) noexcept;
     uint64_t nextMotion_=1;
     int proposal_{},proposalLevel_{};bool urgent_{},proposalClosing_{},proposalPathFirst_{};uint64_t proposalId_{};double proposalCapture_=-1,lastGapCue_=-1;

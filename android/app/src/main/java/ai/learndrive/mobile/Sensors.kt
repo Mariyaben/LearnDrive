@@ -22,6 +22,7 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
     private val manager = context.getSystemService(SensorManager::class.java)
     private val locations = context.getSystemService(LocationManager::class.java)
     private var thread: HandlerThread? = null
+    private var gpsThread: HandlerThread? = null
     private var gpsRequested=false
     private val gyro = DoubleArray(3)
     private val linear = DoubleArray(3)
@@ -48,10 +49,14 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
             motionAvailable=accelerometerReady&&gyroReady
             motionStatus=if(motionAvailable)"Phone motion sensors ready" else "Phone slope unavailable: accelerometer or gyroscope missing"
         }
-        val worker=thread?:return
+        if(thread==null)return
         // Permission can arrive after IMU startup. Subscribe then as well.
+        // Position fixes get a thread of their own. Handling one (matching it to the route line, the
+        // road fetcher) takes time, and on the motion thread that held back the 100 Hz samples behind
+        // it: the speed read "unavailable" and the camera's pose went missing for that moment.
         if(!gpsRequested&&ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED && locations.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            locations.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000L,0f,this,worker.looper)
+            val fixes=gpsThread?:HandlerThread("gps-1hz").also {it.start();gpsThread=it}
+            locations.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000L,0f,this,fixes.looper)
             gpsRequested=true
         }
     }
@@ -82,5 +87,5 @@ class Sensors(private val context: Context, private val core: NativeCore) : Sens
             core.gps(location.elapsedRealtimeNanos/1e9,location.speed.toDouble(),location.speedAccuracyMetersPerSecond.toDouble().coerceAtLeast(.5))
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) = Unit
-    override fun close() {manager.unregisterListener(this);locations.removeUpdates(this);gpsRequested=false;thread?.quitSafely();thread=null}
+    override fun close() {manager.unregisterListener(this);locations.removeUpdates(this);gpsRequested=false;thread?.quitSafely();thread=null;gpsThread?.quitSafely();gpsThread=null}
 }
