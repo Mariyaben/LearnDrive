@@ -1,6 +1,44 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.8.6 (experimental, host-tested only).** A coach that speaks when
+**Current Android candidate: 0.9.7 (experimental, host-tested only).** As 0.9.6, and the parked
+screen no longer locks up after a drive. The destination, Setup and the start button lock only once
+the car has done 6 km/h or more for 1.5 s, and unlock after 3 s below 3 km/h (or without a speed).
+Up to 0.9.6 any reading over 1 km/h locked them at once: a parked phone reads 1-4 km/h for seconds
+at a time (GPS under a roof or beside buildings, engine vibration, a hand holding the phone), so the
+screen locked and unlocked many times a minute and the keyboard kept disappearing while typing a
+destination.
+
+0.9.6: someone at the
+roadside who only seems to be crossing (the car's own turning moves them in the image) gets the
+warning too, never "Stop and wait", until they are in front of the car; a person warned about who
+does step in front of it gets the braking advice at once, cutting the warning off.
+
+0.9.5: a person beside the car's
+track (on the verge, or walking along the edge of a narrow road) gets a warning, "Person on the
+left. Ease off. Give them space.", never "brake" or "stop": braking advice is for someone in front
+of the car or stepping into its path. People are detected from 30 % (they often score 30-40 % at the
+road edge far ahead); the coach only warns about those, once seen steadily, and the screen still
+draws boxes from 40 %.
+
+0.9.4: road users in the learner's
+path are named earlier, with what to do: a person or rider far ahead whom the detector is only
+40-45 % sure of now brings "ease off, cover the brake" once seen steadily (never "Brake now"), and
+in Balanced a vehicle ahead that the learner is catching up with brings "ease off, keep a safe gap"
+about 7 s before the gap closes (one keeping its distance still says nothing). Detection boxes are
+drawn through CameraX's own frame-to-preview mapping, so they stay on the road user (Nov 17 they
+had drifted up and left after a camera stall). From the Nov 14 and Nov 17 drives.
+
+0.9.3: the coach speaks English and
+Malayalam in a recorded voice built into the app (169 and 167 takes, cleaned of room noise, about
+4 MB as Opus; kept out of this repository: see `tools/import_voice_pack.py`). A phrase the recorded
+voice has no take of, such as one added later, is said by the artificial voice; a missing take
+never stops a build. Record my voice, the one-time tool used to record it, is gone again.
+
+0.9.0: a new drive screen (the next turn, the coach's one instruction, the road camera), the
+coach's voice in Malayalam (the phone's own Google voice), and the camera keeps running under the
+Setup panel.
+
+0.8.6: a coach that speaks when
 the learner has something to do, not about everything it sees
 ([what 0.8.6 changes](docs/coach/NOV12_FIXES.md)). On the Nov 12 drive 0.8.5 spoke 84 times in 14
 minutes, 27 of them about traffic in the other lane, and said "Brake now" 11 times, mostly for

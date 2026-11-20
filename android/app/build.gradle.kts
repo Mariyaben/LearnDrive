@@ -20,8 +20,8 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 47
-        versionName = "0.8.6"
+        versionCode = 55
+        versionName = "0.9.7"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         manifestPlaceholders["ELEVATION_API_KEY"] = elevationApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
@@ -39,6 +39,9 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     androidResources { noCompress += "onnx" }
+    // The coach's recorded voice (tools/import_voice_pack.py): kept out of the public repository,
+    // packed into the app when present; without it the earlier voices speak.
+    sourceSets.getByName("main").assets.srcDir("src/voice/assets")
     packaging { jniLibs { pickFirsts += "**/libonnxruntime.so" } }
     buildTypes { release { isMinifyEnabled = false } }
 }

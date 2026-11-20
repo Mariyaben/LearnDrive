@@ -872,7 +872,14 @@ void ld_coaching_junction_lesson(ld_engine* e,int enabled){if(e)e->coaching.enab
 void ld_coaching_automatic(ld_engine* e,int enabled){if(e)e->coaching.enableAutomaticCoaching(enabled!=0);}
 void ld_coaching_task_scheduling(ld_engine* e,int enabled){if(e)e->coaching.enableTaskScheduling(enabled!=0);}
 const char* ld_coaching_drive_json(ld_engine* e){
-    if(!e)return "{}";try{e->intelligenceContext=e->coaching.drive().json(e->coaching.task());return e->intelligenceContext.c_str();}catch(...){return "{}";}
+    if(!e)return "{}";
+    try{
+        // ...and the gear the vehicle-control coach advises for the measured speed (0: none). Advice
+        // from speed bands, never the gear the car is in (that is not measured).
+        std::string s=e->coaching.drive().json(e->coaching.task());
+        if(!s.empty()&&s.back()=='}'){s.pop_back();s+=",\"advised_gear\":"+std::to_string(e->coaching.control().enabled()?e->coaching.control().advisedGear():0)+"}";}
+        e->intelligenceContext=s;return e->intelligenceContext.c_str();
+    }catch(...){return "{}";}
 }
 void ld_learner_waiting(ld_engine* e,int enabled){if(e)e->coaching.learner().enableWaiting(enabled!=0);}
 void ld_learner_new_drive(ld_engine* e){if(e)e->coaching.learner().newDrive();}

@@ -125,7 +125,12 @@ internal class GoogleDestinationSearch(private val activity:Activity,
     fun restoreLabel(label:String) {
         settingText=true;search.setText(label,false);settingText=false
     }
-    fun requestFocus() {if(search.isEnabled){search.requestFocus();activity.getSystemService(InputMethodManager::class.java)?.showSoftInput(search,InputMethodManager.SHOW_IMPLICIT)}}
+    fun requestFocus() {
+        if(!search.isEnabled)return
+        search.requestFocus()
+        // The page holding the box has often only just been shown: ask for the keyboard once it is laid out.
+        search.post {if(!closed&&search.isEnabled&&search.hasFocus())activity.getSystemService(InputMethodManager::class.java)?.showSoftInput(search,InputMethodManager.SHOW_IMPLICIT)}
+    }
     fun setKeyboardVisible(visible:Boolean) {
         if(keyboardVisible==visible)return
         keyboardVisible=visible

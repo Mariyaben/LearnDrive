@@ -185,7 +185,7 @@ RiskCoach::Episode* RiskCoach::episode(uint64_t id,double now) noexcept {
     *slot={};slot->id=id;return slot;
 }
 void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const ObjectTracker& tracks,const EventLedger& ledger,uint64_t source,int support,LearnerRecord* learner) noexcept {
-    proposal_=0;urgent_=false;count_=0;withHistory_=0;top_={};hold_={};brief_=false;proposalPathFirst_=false;
+    proposal_=0;urgent_=false;count_=0;withHistory_=0;top_={};hold_={};brief_=false;proposalPathFirst_=false;proposalSteppedIn_=false;
     if(!enabled_||!w.active||w.geometryUnknown||!cognition::fresh(w.now,w.captureTime))return;
     const double now=w.now;
     const bool speedKnown=cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&std::isfinite(w.telemetry.speedKmh);
@@ -245,7 +245,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     for(size_t i=0;i<std::min(w.actorCount,w.actors.size())&&count_<risks_.size();++i) {
         const auto& a=w.actors[i];
         if(a.identity.space!=IdentitySpace::Optical||!roadUser(a.category)||!cognition::fresh(now,a.captureTime)||
-           !std::isfinite(a.confidence)||a.confidence<.45||egoVehicle(a.x,a.y,a.w,a.h))continue;
+           !std::isfinite(a.confidence)||a.confidence<(a.category==0?.3:.4)||egoVehicle(a.x,a.y,a.w,a.h))continue;
         (void)tracks;
         const Motion* motion=associate(a.identity.id,a.category,a.x,a.y,a.w,a.h,a.captureTime);
         ActorRisk r;r.id=motion?motion->id:a.identity.id;r.category=a.category;
@@ -490,6 +490,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         // one coming the other way.
         const bool approaching=r.category!=0&&speedKnown&&std::isfinite(closing)&&closing>std::max(mps+2.5,1.6*mps);
         const bool movingAhead=r.category!=0&&speedKnown&&v>15&&std::isfinite(closing)&&closing<.6*mps;
+        r.leading=movingAhead;if(movingAhead&&std::isfinite(sustained)&&sustained>0)r.gapSeconds=sustained;
         const bool heavy=r.category==5||r.category==7,weak=vulnerable(r.category);
         // While the learner's own car is turning left (a measured 0.06 rad/s or more: a bend, or a
         // left turn at a junction) its path is an arc, not the line it points along now: at this
@@ -566,6 +567,18 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         else if(r.category==0&&!squarely&&(metric?edgeM<pathM+1.5:edge<half+.15)&&r.distanceM<=std::max(24.,5*mps)&&foot>.52&&v>12) {r.kind=RiskKind::Roadside;r.level=1;}
         else if(r.inPath&&r.distanceM<=std::max(15.,.8*reach)&&foot>.52&&v>5) {r.kind=RiskKind::InPath;r.level=1;}
         else if(r.inPath&&foot>.58&&!speedKnown) {r.kind=RiskKind::InPath;r.level=1;} // Awareness only (see actionFor).
+        // A person beside the car's own track (on the verge, or walking along the edge of a narrow
+        // road, not in front of the car) gets a warning, "Person on the left. Ease off. Give them
+        // space.", never braking: braking advice is for someone in front of the car (their box
+        // within ~0.9 m of the car's line, the car's own half-width) or stepping into its path.
+        // (User, Nov 20: "just give a warning ... when they're not even on the road"; Nov 14, 4:34:
+        // "Person ahead. Brake now." for people walking along the left edge.)
+        // The same for someone who seems to be crossing but is not yet in front of the car: a warning
+        // until they are, and then the crossing or braking advice at once (steppedIn, below). A walker
+        // at the road edge whose sideways motion in the image is the car's own turning was told
+        // "Person crossing. Stop and wait." (Nov 17, 0:59 in replay).
+        if(r.category==0&&(r.kind==RiskKind::InPath||r.kind==RiskKind::Crossing)&&r.level>=1&&metric&&edgeM>=.9)
+            {r.kind=RiskKind::Roadside;r.level=1;}
         // About to be passed: a pedestrian the car is closing on (the box growing as fast as
         // something under 2.5 s away does) and less than 1.2 s ahead at this speed, or under 1.5 s
         // by that growth, who is not on a collision course, will be behind the car before a
@@ -577,6 +590,15 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
         double span=0;if(motion)for(size_t k=0;k<motion->count;++k)span=std::max(span,a.captureTime-motion->t[k]);
         const size_t seen=motion?motion->count:0;
         if(r.level>=3?seen<2:(seen<3||span<.3))r.level=0;
+        // A box the detector is unsure of (40-45 %, as a person or rider far ahead usually is) may
+        // bring "ease off, cover the brake" early once it has been seen steadily for half a second,
+        // never "Brake now". (Nov 14, 4:45: a person ahead scored 41-47 % for 7 s and was named
+        // only 3 s before the car reached them; the coach had ignored everything under 45 %.)
+        if(a.confidence<.45){if(r.level>=3)r.level=2;if(seen<4||span<.5)r.level=0;}
+        // A person the detector only half sees (30-40 %: someone walking at the road edge far ahead,
+        // against hedges and shadow) brings a warning once seen steadily for 0.6 s, never braking
+        // advice (Nov 14, 4:30: people walking along the left edge were first boxed ~10 m away).
+        if(a.confidence<.4){if(r.level>1)r.level=1;if(r.kind==RiskKind::Crossing)r.kind=RiskKind::Roadside;if(seen<5||span<.6)r.level=0;}
         r.score=r.level*10+vulnerability(r.category)+2*std::clamp(r.foot,0.,1.)+(std::isfinite(r.ttc)?std::min(5.,5/r.ttc):0);
         risks_[count_++]=r;
         if(auto* e=episode(r.id,now)){e->lastSeen=now;e->kind=r.kind;e->group=group(r.category);if(r.kind==RiskKind::Crossing)e->crossing=true;
@@ -661,7 +683,12 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     const bool pathFirst=top_.kind==RiskKind::InPath&&top_.level>=2&&vulnerable(top_.category)&&top_.id!=lastId&&
         (lastKind==RiskKind::Oncoming||lastKind==RiskKind::Roadside)&&now-lastAt>=1.5;
     // Within 1.5 s of the last instruction only an urgent (level 3) risk may cut in.
-    const bool settling=sameAgain||(lastAt>=0&&!pathFirst&&((now-lastAt<3&&top_.level<=lastLevel)||(now-lastAt<1.5&&top_.level<3)));
+    // A person warned about at the roadside who is now in front of the car (stepped in, or the road
+    // narrowed): the braking advice cannot wait for the warning to settle.
+    bool steppedIn=false;
+    for(const auto& ep:episodes_)if(ep.id&&ep.id==top_.id&&ep.spokenAt>=0&&ep.spokenKind==RiskKind::Roadside&&top_.level>=2&&
+        (top_.kind==RiskKind::InPath||top_.kind==RiskKind::Crossing))steppedIn=true;
+    const bool settling=!steppedIn&&(sameAgain||(lastAt>=0&&!pathFirst&&((now-lastAt<3&&top_.level<=lastLevel)||(now-lastAt<1.5&&top_.level<3))));
     // "Vehicle ahead, keep a gap" for non-closing traffic at most every 15 s.
     const bool gapCue=top_.kind==RiskKind::InPath&&top_.level==1&&!vulnerable(top_.category)&&!(std::isfinite(top_.ttc)&&top_.ttc<10);
     const bool gapRecent=gapCue&&lastGapCue_>=0&&now-lastGapCue_<15;
@@ -671,11 +698,16 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
     // which used to be exempt: three "Oncoming truck. Keep left" in 18 s on Nov 12.)
     const bool oncomingCue=top_.kind==RiskKind::Oncoming&&top_.level<3;
     const bool oncomingRecent=oncomingCue&&lastOncomingCue_>=0&&now-lastOncomingCue_<(top_.category==5||top_.category==7?20:30);
-    if(!settling&&!gapRecent&&!oncomingRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category))) {
+    // Balanced keeps quiet about a vehicle that is simply ahead, not about one the learner is closing
+    // on: "ease off, keep a safe gap" is the moment to act, well before braking is needed (Nov 17,
+    // 5:22-5:31: the gap to a car ahead shrank for 9 s and it was named only 2 s away).
+    // Only a vehicle going the learner's way: one crossing ahead gets "Vehicle crossing" instead.
+    const bool closingIn=top_.kind==RiskKind::InPath&&top_.leading&&top_.gapSeconds<8;
+    if(!settling&&!gapRecent&&!oncomingRecent&&top_.level>=minimum&&!(support==1&&top_.level==1&&!vulnerable(top_.category)&&!closingIn)) {
         auto* e=episode(top_.id,now);
         // Give the learner time to respond to what was just said about this road
         // user before escalating, unless contact is truly imminent.
-        const bool reacting=e->spokenAt>=0&&now-e->spokenAt<2&&!(std::isfinite(top_.ttc)&&top_.ttc<1.5);
+        const bool reacting=e->spokenAt>=0&&now-e->spokenAt<2&&!(std::isfinite(top_.ttc)&&top_.ttc<1.5)&&!steppedIn;
         // Rising to the very same words about the same road user within 3 s adds nothing: it would
         // only cut off the sentence just started (Nov 5: "Left turn ahead. Oncoming vehicle..." then
         // "Oncoming vehicle. Keep left..." 0.1 s later).
@@ -738,6 +770,7 @@ void RiskCoach::observe(const WorldState& w,const ShortMemory& memory,const Obje
             proposal_=int(actionFor(speak,v,speedKnown,urgent_));proposalId_=optical;proposalCapture_=w.captureTime;
             proposalLevel_=speak.level;proposalClosing_=std::isfinite(speak.ttc)&&speak.ttc<10;
             proposalPathFirst_=speak.kind==RiskKind::InPath&&speak.level>=2&&vulnerable(speak.category);
+            proposalSteppedIn_=steppedIn;
             if(gapCue)lastGapCue_=now;
             if(speak.kind==RiskKind::Oncoming)lastOncomingCue_=now;
             ++counts_[size_t(speak.kind)];
@@ -756,7 +789,7 @@ size_t RiskCoach::proposals(const WorldState& w,Candidate* out,size_t capacity) 
     c.kind=urgent_?EventKind::Approach:EventKind::Attention;c.urgent=urgent_;c.captureTime=proposalCapture_;c.maxAge=maxVisionAgeSeconds;
     c.expiresAt=c.captureTime+c.maxAge;c.supported=true;c.confidence=.9;c.tti=top_.ttc;
     c.evidenceKind=proposalLevel_*2+(proposalClosing_?1:0); // Risk level and closing, for ranking.
-    c.brief=brief_;c.pathFirst=proposalPathFirst_;
+    c.brief=brief_;c.pathFirst=proposalPathFirst_;c.steppedIn=proposalSteppedIn_;
     if(c.urgent&&!std::isfinite(c.tti))c.tti=2.5;
     // "It has passed" is its own event about the same road user, not a repeat of "wait".
     if(c.prompt==Prompt::crossedLookAgain){c.kind=EventKind::Status;c.identity.scope=1;}
@@ -768,7 +801,7 @@ bool RiskCoach::evidence(const Candidate& c,const WorldState& w,double now) noex
     if(!cognition::fresh(now,w.captureTime))return false; // Perception must be live.
     if(c.prompt==Prompt::crossedLookAgain)return cognition::fresh(now,w.telemetry.time,.15)&&w.telemetry.speedValid&&w.telemetry.speedKmh<=3;
     for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i){const auto& a=w.actors[i];
-        if(a.identity==c.identity)return cognition::fresh(now,a.captureTime)&&std::isfinite(a.confidence)&&a.confidence>=.4&&!egoVehicle(a.x,a.y,a.w,a.h);}
+        if(a.identity==c.identity)return cognition::fresh(now,a.captureTime)&&std::isfinite(a.confidence)&&a.confidence>=(a.category==0?.3:.4)&&!egoVehicle(a.x,a.y,a.w,a.h);}
     return false;
 }
 std::string RiskCoach::json() const {

@@ -14,6 +14,11 @@ open class DetectionOverlay(context:Context):View(context) {
             if(field===value)return
             field=value;invalidate()
         }
+    /** Analysed-frame pixels to this view's pixels (CameraX's own mapping); null: assume FILL_END. */
+    var transform:android.graphics.Matrix?=null
+        set(value){if(field==value)return;field=value;invalidate()}
+    private val rect=android.graphics.RectF()
+    private val point=FloatArray(2)
     private val boxes=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.rgb(64,240,184);style=Paint.Style.STROKE;strokeWidth=2*resources.displayMetrics.density}
     private val labels=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;textSize=13*resources.displayMetrics.scaledDensity;setShadowLayer(3f,1f,1f,Color.BLACK)}
     private val names=mapOf(0 to "Person",1 to "Bicycle",2 to "Car",3 to "Motorcycle",5 to "Bus",7 to "Truck")
@@ -25,20 +30,30 @@ open class DetectionOverlay(context:Context):View(context) {
         // crops the top of the picture (sky), a tall one its left side.
         val scale=maxOf(width.toFloat()/frame.width,height.toFloat()/frame.height)
         val w=frame.width*scale;val h=frame.height*scale;val dx=width-w;val dy=height-h
+        val mapping=transform
+        // A point of the analysed frame (fractions of its width and height) on this view.
+        fun at(x:Float,y:Float):FloatArray {
+            if(mapping==null){point[0]=dx+x*w;point[1]=dy+y*h}
+            else {point[0]=x*frame.width;point[1]=y*frame.height;mapping.mapPoints(point)}
+            return point
+        }
         frame.road?.takeIf {it.valid&&it.points.isNotEmpty()}?.let {road ->
-            val path=Path();road.points.forEachIndexed {i,p->if(i==0)path.moveTo(dx+p.x*w,dy+p.y*h) else path.lineTo(dx+p.x*w,dy+p.y*h)}
+            val path=Path();road.points.forEachIndexed {i,p->val q=at(p.x,p.y);if(i==0)path.moveTo(q[0],q[1]) else path.lineTo(q[0],q[1])}
             canvas.drawPath(path,roadPaint)
             canvas.drawText(road.status,maxOf(dx,0f)+8,maxOf(dy,0f)+labels.textSize+8,labels)
         }
         for(box in frame.detections) {
+            // Faint boxes (people at 30-40 %) inform the coach's early warnings; the screen keeps to 40 %.
+            if(box.score<.4f)continue
             // The learner's own dashboard, bonnet or phone mount is not a road user: a box that ends
             // at the bottom edge and is very wide, or sits in a bottom corner. The coach ignores
             // these already; drawing "Car 46%" on the dashboard only made it look as if it did not.
             val bottom=box.y+box.height>.97f
             if(bottom&&(box.width>.42f||box.x<.01f||box.x+box.width>.99f))continue
-            val left=dx+box.x*w;val top=dy+box.y*h
-            canvas.drawRect(left,top,left+box.width*w,top+box.height*h,boxes)
-            canvas.drawText("${names[box.category]?:"Object"} ${(box.score*100).toInt()}%",left,(top-labels.textSize*.2f).coerceAtLeast(labels.textSize),labels)
+            if(mapping==null)rect.set(dx+box.x*w,dy+box.y*h,dx+(box.x+box.width)*w,dy+(box.y+box.height)*h)
+            else {rect.set(box.x*frame.width,box.y*frame.height,(box.x+box.width)*frame.width,(box.y+box.height)*frame.height);mapping.mapRect(rect)}
+            canvas.drawRect(rect,boxes)
+            canvas.drawText("${names[box.category]?:"Object"} ${(box.score*100).toInt()}%",rect.left,(rect.top-labels.textSize*.2f).coerceAtLeast(labels.textSize),labels)
         }
     }
 }

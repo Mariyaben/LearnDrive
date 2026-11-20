@@ -62,6 +62,9 @@ struct Candidate {
     // Braking for a person or two-wheeler in the path: not kept waiting behind what was just said
     // about someone else.
     bool pathFirst{};
+    // A person just warned about at the roadside who is now in front of the car: the braking advice
+    // follows half a second after the warning, cutting it off.
+    bool steppedIn{};
     int actorCategory=-1,evidenceKind{};
     float x{},y{},w{},h{};
     int lessonStep{}; // Native task action, zero for the existing candidate producers.

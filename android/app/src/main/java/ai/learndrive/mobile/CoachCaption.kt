@@ -3,15 +3,16 @@ package ai.learndrive.mobile
 /** Short-lived accepted coaching cue. Voice submission is independent. */
 class CoachCaption {
     private data class Entry(val text:String,val source:Long,val acceptedAt:Double,val expiresAt:Double,
-        val route:Long?,val eventProgress:Double?,val origin:Int)
-    data class Presentation(val text:String,val context:String)
+        val route:Long?,val eventProgress:Double?,val origin:Int,val prompt:Int)
+    /** [prompt] is the instruction id (>= 1000 for a sentence composed from fragments), [origin] who proposed it. */
+    data class Presentation(val text:String,val context:String,val prompt:Int=0,val origin:Int=0,val ageSeconds:Int=0)
     private var entry:Entry?=null
 
-    fun accept(text:String,source:Long,time:Double,duration:Double,navigation:DoubleArray?=null,origin:Int=0) {
+    fun accept(text:String,source:Long,time:Double,duration:Double,navigation:DoubleArray?=null,origin:Int=0,prompt:Int=0) {
         if(text.isBlank()||!time.isFinite()||!duration.isFinite()){clear();return}
         val route=navigation?.takeIf {it.size>=17&&it[10]!=0.0}?.get(0)?.toLong()
         val progress=if(route!=null&&navigation!![5].isFinite()&&navigation[6].isFinite())navigation[5]+navigation[6] else null
-        entry=Entry(text,source,time,time+(duration+2).coerceIn(5.0,12.0),route,progress,origin)
+        entry=Entry(text,source,time,time+(duration+2).coerceIn(5.0,12.0),route,progress,origin,prompt)
     }
     fun visible(time:Double,source:Long,active:Boolean,navigation:DoubleArray?=null):String? =
         presentation(time,source,active,navigation)?.text
@@ -31,7 +32,7 @@ class CoachCaption {
             1->"road scene";2->"driving";3->"road preparation";4->"camera";5->"navigation";else->"coach"
         }
         val seconds=(time-value.acceptedAt).toInt()
-        return Presentation(value.text,"Recent $evidence cue · ${seconds}s ago")
+        return Presentation(value.text,"Recent $evidence cue · ${seconds}s ago",value.prompt,value.origin,seconds)
     }
     fun clear(){entry=null}
     fun clearNavigation(){if(entry?.route!=null)clear()}

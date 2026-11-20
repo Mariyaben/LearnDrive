@@ -202,7 +202,7 @@ Block SafetyValidator::validate(const Candidate& c,const WorldState& w,double no
         const ActorObservation* selected=nullptr;
         for(size_t i=0;i<std::min(w.actorCount,w.actors.size());++i)if(w.actors[i].identity==c.identity){selected=&w.actors[i];break;}
         if(!selected||!selected->relevant||!fresh(now,selected->captureTime))return Block::Unsupported;
-        if(!std::isfinite(selected->confidence)||selected->confidence<.4||selected->confidence>1||
+        if(!std::isfinite(selected->confidence)||selected->confidence<(selected->category==0?.3:.4)||selected->confidence>1||
            !std::isfinite(selected->x)||!std::isfinite(selected->y)||!std::isfinite(selected->w)||!std::isfinite(selected->h)||
            selected->x<0||selected->y<0||selected->w<=0||selected->h<=0||selected->x+selected->w>1.001||selected->y+selected->h>1.001)return Block::Unsupported;
         if(c.origin==4&&c.prompt!=Prompt::pedestrianSpace&&c.prompt!=Prompt::riderSpace&&c.prompt!=Prompt::vehicleSpace&&
@@ -338,8 +338,9 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
             candidate.tti<=event.acceptedTti-std::max(.75,event.acceptedTti*.25))||
             // One escalation per encounter: "ease off" may become "brake, be ready to stop".
             (scheduling_&&drive_.enabled()&&priority(candidate.prompt)>priority(event.acceptedPrompt)&&event.acceptances<2);
+        // (Not for a person warned about at the roadside who has stepped in front of the car.)
         if(event.acceptedAt>=0&&!event.retryable&&severity(candidate)<=event.acceptedSeverity&&
-           (!worsened||w.now-event.acceptedAt<2)) {duplicate=true;continue;}
+           (!worsened||(w.now-event.acceptedAt<2&&!candidate.steppedIn))) {duplicate=true;continue;}
         safe.candidates[safe.candidateCount++]=candidate;
     }
     const PolicyContext context{safe,memory_,&interpreter_.scene(),&ledger_};
@@ -384,6 +385,8 @@ Decision CoachingEngine::decide(const WorldState& input,uint64_t sequence) noexc
     // ...and braking for a person or two-wheeler in the path waits only for the key words of
     // what was just said about someone else (Nov 8, 2:42).
     if(scheduled&&c.origin==7&&c.pathFirst)spacing=std::min(spacing,1.5);
+    // ...and for the person just warned about at the roadside who is now in front of the car, at once.
+    if(scheduled&&c.origin==7&&c.steppedIn)spacing=std::min(spacing,.5);
     // Consecutive vehicle-control instructions (e.g. second then third gear) are one sequence.
     if(scheduled&&c.origin==6&&lastOrdinaryOrigin_==6)spacing=std::min(interval(),4.);
     if(scheduling_&&c.lessonStep&&!followUp) {

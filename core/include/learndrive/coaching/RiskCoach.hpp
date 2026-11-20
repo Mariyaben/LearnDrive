@@ -18,6 +18,10 @@ struct ActorRisk {
     // Ground distance (m) from the contact row relative to the horizon; a coarse estimate.
     double distanceM=std::numeric_limits<double>::infinity();
     bool inPath{},left{};
+    // A vehicle going the learner's way (closing slower than the learner's own speed, above 15 km/h),
+    // and the seconds until the gap to it closes at the rate it is closing now (from its growth).
+    bool leading{};
+    double gapSeconds=std::numeric_limits<double>::infinity();
 };
 // Real-time risk reasoning over all tracked road users. Each tick it assesses
 // every fresh optical actor (ego-motion-compensated lateral motion, looming
@@ -107,7 +111,7 @@ private:
     bool masked(double center,double foot,double bonnet=.85) const noexcept;
     void learnMask(const WorldState&,double v) noexcept;
     uint64_t nextMotion_=1;
-    int proposal_{},proposalLevel_{};bool urgent_{},proposalClosing_{},proposalPathFirst_{};uint64_t proposalId_{};double proposalCapture_=-1,lastGapCue_=-1;
+    int proposal_{},proposalLevel_{};bool urgent_{},proposalClosing_{},proposalPathFirst_{},proposalSteppedIn_{};uint64_t proposalId_{};double proposalCapture_=-1,lastGapCue_=-1;
     // Recent turn rate (rad/s, left positive), to remove turning from road users' image motion.
     std::array<double,96> yawT_{},yawV_{};size_t yawCursor_{},yawCount_{};
     double lastOncomingCue_=-1;

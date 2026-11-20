@@ -125,12 +125,14 @@ ZOOM_CACHED_CANDIDATES = 256
 
 def decodable_candidates(raw, keep=ZOOM_CACHED_CANDIDATES):
     """The columns the native decoder can use: argmax over all classes is a road-user class
-    (person, bicycle, car, motorcycle, bus, truck) with score >= 0.4. It keeps at most the best
-    200 of those before NMS, so the best `keep` (>= 200) give identical boxes. Original order is
-    preserved; unused columns are zero (score 0 is never decoded)."""
+    (person, bicycle, car, motorcycle, bus, truck) with score >= 0.4, or a person with score >= 0.3
+    (as ld::decodeYolo since 0.9.5). It keeps at most the best 200 of those before NMS, so the best
+    `keep` (>= 200) give identical boxes. Original order is preserved; unused columns are zero
+    (score 0 is never decoded)."""
     scores = raw[4:84]
     best, cls = scores.max(0), scores.argmax(0)
-    useful = np.flatnonzero(np.isin(cls, (0, 1, 2, 3, 5, 7)) & (best >= np.float32(0.4)))
+    floor = np.where(cls == 0, np.float32(0.3), np.float32(0.4))
+    useful = np.flatnonzero(np.isin(cls, (0, 1, 2, 3, 5, 7)) & (best >= floor))
     useful = np.sort(useful[np.argsort(-best[useful], kind="stable")][:keep])
     out = np.zeros((raw.shape[0], keep), np.float32)
     out[:, :useful.size] = raw[:, useful]

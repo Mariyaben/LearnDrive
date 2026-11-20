@@ -31,7 +31,18 @@ data class GoogleNavigationUpdate(
     val side:Int=0,
     /** The step after this one and how far after it (memory only). */
     val nextManeuver:GoogleManeuverKind=GoogleManeuverKind.UNKNOWN,
-    val nextGapMeters:Double?=null
+    val nextGapMeters:Double?=null,
+    /**
+     * For the screen only, during this session: Google's own instruction ("Turn right onto Link SH
+     * 56"), the road of this step and the next, the road being driven, and what is left of the trip.
+     * Google's terms forbid keeping road names beyond the session: never logged, journalled or saved.
+     */
+    val instruction:String?=null,
+    val roadName:String?=null,
+    val nextRoadName:String?=null,
+    val currentRoad:String?=null,
+    val destinationMeters:Double?=null,
+    val destinationSeconds:Double?=null
 )
 
 /** LearnDrive's own maneuver codes (LD_MANEUVER_*), never Google's integers. */

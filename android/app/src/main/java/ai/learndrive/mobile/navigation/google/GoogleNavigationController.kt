@@ -291,8 +291,12 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
         stopGuidance();newSession();journey.clear()
     }
 
+    // Road names for the screen, this session only (Google's terms: never kept beyond it).
+    private var lastStepNumber:Int?=null
+    private var lastStepRoad:String?=null
+    private var drivingRoad:String?=null
     private fun newSession() {
-        sessionId=nextSessionId();routeEpoch=1;sequence=0
+        sessionId=nextSessionId();routeEpoch=1;sequence=0;lastStepNumber=null;lastStepRoad=null;drivingRoad=null
         lastFeedAt=Double.NEGATIVE_INFINITY;publishPhase(GoogleNavigationPhase.STOPPED)
     }
 
@@ -325,6 +329,11 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
         } else null
         // The step after this one: back-to-back turns are said together.
         val next=if(step!=null)info.remainingSteps.orEmpty().firstOrNull {it.stepNumber==null||it.stepNumber!=step.stepNumber} else null
+        // The road being driven is the one the last step turned onto (memory only, this session).
+        val stepRoad=step?.let {it.fullRoadName?.takeIf(String::isNotBlank)?:it.simpleRoadName?.takeIf(String::isNotBlank)}
+        val number=step?.stepNumber
+        if(number!=null&&lastStepNumber!=null&&number>lastStepNumber!!)drivingRoad=lastStepRoad
+        if(number!=null){lastStepNumber=number;lastStepRoad=stepRoad}
         val update=GoogleNavigationUpdate(sessionId,routeEpoch,++sequence,receivedAt,phase,
             step?.stepNumber?.takeIf {it>=0},step?.let {normalizeGoogleManeuver(it.maneuver)}?:GoogleManeuverKind.UNKNOWN,
             if(step!=null)info.distanceToCurrentStepMeters?.takeIf {it>=0}?.toDouble() else null,
@@ -332,7 +341,11 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
             step?.roundaboutTurnNumber?.takeIf {it>0},ahead,
             step?.let {googleManeuverSide(it.maneuver)}?:0,
             next?.let {normalizeGoogleManeuver(it.maneuver)}?:GoogleManeuverKind.UNKNOWN,
-            next?.distanceFromPrevStepMeters?.takeIf {it>=0}?.toDouble())
+            next?.distanceFromPrevStepMeters?.takeIf {it>=0}?.toDouble(),
+            step?.fullInstructionText?.takeIf(String::isNotBlank),stepRoad,
+            next?.let {it.fullRoadName?.takeIf(String::isNotBlank)?:it.simpleRoadName?.takeIf(String::isNotBlank)},drivingRoad,
+            if(phase==GoogleNavigationPhase.ENROUTE)info.distanceToFinalDestinationMeters?.takeIf {it>=0}?.toDouble() else null,
+            if(phase==GoogleNavigationPhase.ENROUTE)info.timeToFinalDestinationSeconds?.takeIf {it>=0}?.toDouble() else null)
         lastUpdate=update;onUpdate(update)
         updateState(state.copy(status=when(phase) {
             GoogleNavigationPhase.ENROUTE->if(step==null)"Google navigation active · turn information unavailable" else "Google navigation active"

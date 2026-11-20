@@ -67,7 +67,7 @@ class RouteElevation(
             count=points.size/2;wasRefused=refused
         }
         when {
-            line==null->status(State.NO_ROUTE,"Choose a destination: hills ahead come from Google's elevation")
+            line==null->status(State.NO_ROUTE,CHOOSE_TEXT)
             key.isBlank()->status(State.UNAVAILABLE,"No Google key · the phone's tilt is used")
             count<2->status(State.NO_ROUTE,"Route too short to read its elevation")
             found>=0->status(State.READY,summary(found,count))
@@ -182,6 +182,8 @@ class RouteElevation(
         private const val PER_REQUEST=500
         private const val AHEAD=4000.0
         private const val MAX_ROUTE=100_000.0
+        /** No route line yet: nothing to read heights along. */
+        const val CHOOSE_TEXT="Choose a destination: hills ahead come from Google's elevation"
         private const val DENIED_TEXT="Elevation API not enabled for this key · the phone's tilt is used"
 
         /** Points every [STEP] m along [line] (lat, lon pairs), up to [MAX_ROUTE]. */

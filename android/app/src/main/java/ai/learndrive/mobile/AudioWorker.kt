@@ -1,6 +1,10 @@
 package ai.learndrive.mobile
 
+import ai.learndrive.mobile.audio.CoachVoice
+import ai.learndrive.mobile.audio.Pcm
 import ai.learndrive.mobile.audio.PhoneVoice
+import ai.learndrive.mobile.audio.VoiceClips
+import ai.learndrive.mobile.audio.VoicePhrases
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -58,7 +62,7 @@ internal object AudioClips {
 class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,private val clipCount:Int,
     private val priority:(Int)->Int={Int.MAX_VALUE},private val fragmentCount:Int=0,
     private val fragments:(Int)->IntArray={IntArray(0)},private val fragmentText:(Int)->String={""},
-    private val promptText:(Int)->String={""},private val phoneVoice:PhoneVoice?=null,
+    private val promptText:(Int)->String={""},voice:CoachVoice?=null,
     private val status:(String)->Unit): AutoCloseable {
     private class Clip(val bytes:ByteArray,val sampleRate:Int,val channels:Int) {
         val frames get()=bytes.size/(2*channels)
@@ -71,27 +75,50 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     private val natural=ConcurrentHashMap<String,Clip>()
     /** Speak with the phone's own natural voice once every phrase is rendered (the setting). */
     @Volatile var naturalVoice=true
+    @Volatile private var voices:List<CoachVoice> = listOfNotNull(voice)
+    /** The coach's voice language ([VoicePhrases]); any but English needs the phone's voice for it. */
+    @Volatile var language=voice?.language?:VoicePhrases.ENGLISH;private set
+    fun useVoice(voice:CoachVoice?)=useVoices(listOfNotNull(voice))
+    /** Speak with the first of [voices] that has the words, in order (a recorded voice, then the
+     * phone's artificial one); what none of them has, the bundled recordings say. Clips of earlier
+     * voices are dropped. */
+    fun useVoices(voices:List<CoachVoice>) {
+        this.voices=voices;language=voices.firstOrNull()?.language?:VoicePhrases.ENGLISH
+        natural.clear();composed.keys.removeAll {it.startsWith("natural:")}
+    }
     private fun clipFor(id:Int):Clip? {
-        val voice=phoneVoice?.takeIf {naturalVoice&&it.complete}
-        if(voice!=null)naturalClip(id,voice)?.let {return it}
+        for(voice in voices) {
+            // The "natural phone voice" setting covers the phone's English voice only.
+            if(!voice.complete||(voice is PhoneVoice&&!naturalVoice&&voice.language==VoicePhrases.ENGLISH))continue
+            naturalClip(id,voice)?.let {return it}
+        }
         return bundledClip(id)
     }
+    /** Every voice at the coach's one loudness (VoiceClips.loud): recorded, phone and built-in alike. */
+    private fun spoken(c:Clip):Clip=VoiceClips.loud(Pcm(c.bytes,c.sampleRate,c.channels)).let {Clip(it.bytes,it.sampleRate,it.channels)}
     private fun bundledClip(id:Int):Clip? {
         cache[id]?.let {return it}
         if(id<1000||fragmentCount<=0)return null
         val parts=fragments(id);if(parts.isEmpty())return null
         return composed.getOrPut(parts.joinToString(",")) {join(parts.map {fragmentClips[it]?:return null},parts)?:return null}
     }
-    private fun naturalClip(id:Int,voice:PhoneVoice):Clip? {
-        fun clip(text:String)=voice.clip(text)?.let {p->natural.getOrPut(text) {Clip(p.bytes,p.sampleRate,p.channels)}}
-        if(id<1000)return clip(promptText(id))
-        // A composed sentence rendered whole keeps natural intonation; until that render exists
-        // (requested by this lookup) its phrases are joined.
-        clip(promptText(id))?.let {return it}
+    private fun naturalClip(id:Int,voice:CoachVoice):Clip? {
+        val language=voice.language
+        // Each voice keeps its own clips: one sentence is never joined from two voices.
+        val tag=Integer.toHexString(System.identityHashCode(voice))
+        fun clip(text:String)=voice.clip(text)?.let {p->natural.getOrPut("$tag|$text") {spoken(Clip(p.bytes,p.sampleRate,p.channels))}}
+        // The words in the voice's language; none (no translation) leaves the bundled recording to speak.
+        fun said(english:String)=VoicePhrases.spoken(language,english)
+        if(id<1000)return said(promptText(id))?.let(::clip)
         val parts=fragments(id);if(parts.isEmpty())return null
-        val key="natural:"+parts.joinToString(",")
+        val words=parts.map {said(fragmentText(it))?:return null}
+        // A composed sentence rendered whole keeps natural intonation; until that render exists
+        // (requested by this lookup) its phrases are joined. The core's English sentence is its
+        // phrases joined by spaces, and so is every translation.
+        clip(if(language==VoicePhrases.ENGLISH)promptText(id) else words.joinToString(" "))?.let {return it}
+        val key="natural:$tag:"+parts.joinToString(",")
         composed[key]?.let {return it}
-        return join(parts.map {clip(fragmentText(it))?:return null},parts)?.also {composed[key]=it}
+        return join(words.map {clip(it)?:return null},parts)?.also {composed[key]=it}
     }
     /** Phrases joined like speech: each trimmed to its sound, then a short breath after a comma
      * (about 0.19 s in all) or a sentence pause after a full stop (about 0.31 s). The old join
@@ -133,8 +160,8 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     init {
         worker.execute {
             try {
-                for(id in 1..clipCount)cache[id]=readWave(context.assets.open("audio/prompt-$id.wav").use {it.readBytes()})
-                for(id in 1..fragmentCount)fragmentClips[id]=readWave(context.assets.open("audio/fragment-$id.wav").use {it.readBytes()})
+                for(id in 1..clipCount)cache[id]=spoken(readWave(context.assets.open("audio/prompt-$id.wav").use {it.readBytes()}))
+                for(id in 1..fragmentCount)fragmentClips[id]=spoken(readWave(context.assets.open("audio/fragment-$id.wav").use {it.readBytes()}))
                 val clip=cache.getValue(1)
                 check((cache.values+fragmentClips.values).all {it.sampleRate==clip.sampleRate&&it.channels==clip.channels}) {"Voice formats differ between prompts"}
                 val channel=if(clip.channels==1)AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO

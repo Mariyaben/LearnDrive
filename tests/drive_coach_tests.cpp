@@ -577,6 +577,89 @@ int main(int argc,char** argv){try {
         // A motorcycle stopped in the lane (waiting to turn).
         const auto bike=first(3,80,.2,1.5,.8,0,"stopped two-wheeler in the lane");
         check(bike.first>=30&&bike.second.find("Two-wheeler ahead")!=std::string::npos,"a two-wheeler stopped in the lane 80 m ahead was not spoken about while still 30 m away");});
+    test("a person far ahead whom the detector is unsure of (42 %) is named early, never with 'Brake now'",[&]{
+        // Nov 14, 4:45: a person ahead scored 41-47 % for 7 s; the coach ignored everything under
+        // 45 % and named them 3 s before the car reached them. The learner holds 40 km/h toward a
+        // person standing in the lane 70 m ahead, and the detector stays that unsure all the way.
+        Fixture f(1);double at=-1;bool brakeNow=false;
+        for(int i=5;i<=80;++i){const double t=i/10.,z=70-11.1*(t-.5);if(z<4)break;auto w=road(t);w.telemetry.speedKmh=40;
+            place(w,990,0,z,-.2,1.7,.5);w.actors[w.actorCount-1].confidence=.42f;
+            const auto d=f.decide(w);if(!d.eligible)continue;
+            const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+            if(!riskMayUse(c.prompt))continue;
+            if(at<0)at=z;
+            if(const auto* u=f.e->utterance(CoachingEngine::spokenId(c)))for(size_t k=0;k<u->count;++k)brakeNow|=u->fragments[k]==int(Fragment::brakeNow);}
+        std::cout<<"    an unsure person in the lane first named at "<<at<<" m; 'Brake now' "<<(brakeNow?"said":"never said")<<std::endl;
+        check(at>=40,"a person in the lane the detector was 42 % sure of was not named while still 40 m away");
+        check(!brakeNow,"'Brake now' was said about a road user the detector was unsure of");});
+    test("balanced: a car ahead the learner is catching up with is 'ease off, keep a safe gap' early; one keeping its distance is not",[&]{
+        // Nov 17, 5:22-5:31: the gap to a car ahead shrank for 9 s and it was named only 2 s away
+        // (Balanced said nothing about a vehicle simply ahead). The learner holds 40 km/h; the car
+        // ahead goes the same way at 25 km/h from 45 m (closing 4.2 m/s). Control: at 40 km/h, 30 m ahead.
+        auto run=[&](double z0,double otherMps){Fixture f(1);double at=-1;
+            for(int i=5;i<=150;++i){const double t=i/10.,z=z0-(11.1-otherMps)*(t-.5);if(z<6)break;auto w=road(t);w.telemetry.speedKmh=40;
+                place(w,995,2,z,0,1.5,1.8);
+                const auto d=f.decide(w);
+                if(!d.eligible)continue;
+                const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+                if(c.prompt==Prompt::vehicleEaseGap&&at<0)at=z;}
+            return at;};
+        const double closing=run(45,6.94),steady=run(30,11.1);
+        std::cout<<"    catching up: 'ease off, keep a safe gap' at "<<closing<<" m; keeping its distance: "<<(steady<0?"nothing":"named")<<std::endl;
+        check(closing>=20,"a car ahead the learner was catching up with was not named while still 20 m away");
+        check(steady<0,"a car keeping its distance ahead was named in Balanced");});
+    // What a risk sentence asks for: braking or stopping (any of its phrases), or only a warning.
+    auto asksToBrake=[&](Fixture& f,const Candidate& c){bool b=false;
+        if(const auto* u=f.e->utterance(CoachingEngine::spokenId(c)))for(size_t k=0;k<u->count;++k){const int g=u->fragments[k];
+            b|=g==int(Fragment::brakeNow)||g==int(Fragment::brakeGently)||g==int(Fragment::readyToStop)||g==int(Fragment::stopAndWait);}
+        else b=c.prompt==Prompt::brakeReadyStop||c.prompt==Prompt::personCrossingStop||c.prompt==Prompt::clutchHoldBrake||c.prompt==Prompt::brake;
+        return b;};
+    test("a person walking along the edge of the road is warned about, never told to brake or stop",[&]{
+        // Nov 14, 4:34, and the user (Nov 20): people walking along the left edge of a narrow road got
+        // "Person ahead. Brake now." They are beside the car's track, not on it: a warning is enough.
+        // The learner holds 30 km/h; a person walks the same way 1.4 m left of the car's line.
+        // Control: a person standing in the lane, on the car's line, still needs braking advice.
+        auto run=[&](double side,double walk){Fixture f(1);bool braking=false,warned=false;
+            for(int i=5;i<=120;++i){const double t=i/10.,z=50-(8.33-walk)*(t-.5);if(z<3)break;auto w=road(t);w.telemetry.speedKmh=30;
+                place(w,996,0,z,side,1.7,.5);
+                const auto d=f.decide(w);if(!d.eligible)continue;
+                const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+                if(!riskMayUse(c.prompt))continue;
+                warned=true;braking|=asksToBrake(f,c);}
+            return std::make_pair(warned,braking);};
+        const auto edge=run(-1.4,1.2),lane=run(0,0);
+        std::cout<<"    at the edge: "<<(edge.first?"warned":"not warned")<<", "<<(edge.second?"told to brake":"never told to brake")
+            <<"; in the lane: "<<(lane.second?"told to brake":"never told to brake")<<std::endl;
+        check(edge.first&&!edge.second,"a person walking along the road edge was told to brake or stop, or not warned at all");
+        check(lane.second,"control: a person standing in the lane was never given braking advice");});
+    test("a person stepping off the verge is warned first, then told to brake as soon as they are in front of the car",[&]{
+        // The other side of "just a warning at the roadside": someone who then steps into the road must
+        // get the braking advice at once, not after the warning has settled. The learner holds 30 km/h;
+        // a person 2.4 m left of the car's line, 30 m ahead, steps out across the road at 1.4 m/s.
+        Fixture f(1);double warnedAt=-1,brakeAt=-1,enteredAt=-1;
+        for(int i=5;i<=60;++i){const double t=i/10.,z=30-8.33*(t-.5),X=-2.4+1.4*(t-.5);if(z<4)break;auto w=road(t);w.telemetry.speedKmh=30;
+            place(w,998,0,z,X,1.7,.5);
+            if(enteredAt<0&&std::abs(X)-.25<.9)enteredAt=t;
+            const auto d=f.decide(w);if(!d.eligible)continue;
+            const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+            if(!riskMayUse(c.prompt))continue;
+            if(asksToBrake(f,c)){if(brakeAt<0)brakeAt=t;}else if(warnedAt<0&&brakeAt<0)warnedAt=t;}
+        std::cout<<"    warned at "<<warnedAt<<" s; in front of the car from "<<enteredAt<<" s; braking advice at "<<brakeAt<<" s"<<std::endl;
+        check(brakeAt>=0&&brakeAt<=enteredAt+.6,"a person who stepped in front of the car was not given braking advice at once");
+        check(warnedAt<0||warnedAt<brakeAt,"braking advice came before the person was in front of the car");});
+    test("a person at the road edge whom the detector only half sees (35 %) is warned about early, never with braking",[&]{
+        // Nov 14, 4:30: people walking along the left edge were first boxed ~10 m away. The learner
+        // holds 40 km/h toward a person walking 1.6 m left of the car's line, seen at 35 % all the way.
+        Fixture f(1);double at=-1;bool braking=false;
+        for(int i=5;i<=100;++i){const double t=i/10.,z=60-(11.1-1.2)*(t-.5);if(z<4)break;auto w=road(t);w.telemetry.speedKmh=40;
+            place(w,997,0,z,-1.6,1.7,.5);w.actors[w.actorCount-1].confidence=.35f;
+            const auto d=f.decide(w);if(!d.eligible)continue;
+            const auto& c=d.ticket.candidate;check(f.e->accept(f.seq,CoachingEngine::spokenId(c),w,w.now,false),"accept");
+            if(!riskMayUse(c.prompt))continue;
+            if(at<0)at=z;braking|=asksToBrake(f,c);}
+        std::cout<<"    a half-seen person at the edge first warned about at "<<at<<" m; "<<(braking?"told to brake":"never told to brake")<<std::endl;
+        check(at>=20,"a person at the road edge seen at 35 % was not warned about while still 20 m away");
+        check(!braking,"a person the detector only half saw brought braking advice");});
     test("the speech budget never holds back a person in the path, however busy the road",[&]{
         // Three buses coming the other way have just been spoken about, one every 21 s (the
         // minute's budget is full); then a person is standing in the lane 60 m ahead at 40 km/h.

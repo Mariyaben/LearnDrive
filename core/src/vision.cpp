@@ -229,7 +229,9 @@ std::vector<Box> decodeYolo(const float* v,size_t count,int channels,int n,bool 
         float score=0; int cls=-1;
         // Select across ALL classes first, to avoid reclassifying a non-road object.
         for(int c=0;c<80;++c) if(at(c+4,i)>score) { score=at(c+4,i); cls=c; }
-        if(score<.4f||!std::isfinite(score)||(cls!=0&&cls!=1&&cls!=2&&cls!=3&&cls!=5&&cls!=7)) continue;
+        // People from 30 %: someone walking at the road edge far ahead often scores 30-40 % (the
+        // coach only warns about those, once seen steadily); everything else from 40 %.
+        if(score<(cls==0?.3f:.4f)||!std::isfinite(score)||(cls!=0&&cls!=1&&cls!=2&&cls!=3&&cls!=5&&cls!=7)) continue;
         float factor=normalized?float(tr.size):1.f;
         float cx=at(0,i)*factor,cy=at(1,i)*factor,w=at(2,i)*factor,h=at(3,i)*factor;
         if(!std::isfinite(cx)||!std::isfinite(cy)||!std::isfinite(w)||!std::isfinite(h)||w<=0||h<=0) continue;

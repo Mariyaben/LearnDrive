@@ -28,3 +28,7 @@ __pycache__/
 *.pfx
 between-us/
 outputs/
+
+# Recorded coach voices (the user's own recordings): kept on this PC, out of the public repository.
+voice/
+android/app/src/voice/
