@@ -27,6 +27,13 @@ class LearningRecordStore(private val preferences:SharedPreferences) {
         val saved=JSONArray();for(i in maxOf(0,old.length()-19) until old.length())saved.put(old.get(i));saved.put(row)
         preferences.edit().putString("sessions",saved.toString()).apply()
     }
+    /** One saved drive for Progress: when it ended (ms), how long it lasted, and whether it was cut short. */
+    data class Drive(val at:Long,val seconds:Double,val interrupted:Boolean)
+    /** The saved drives (the last 20), newest first. */
+    @Synchronized fun drives():List<Drive> {
+        val rows=runCatching {JSONArray(preferences.getString("sessions","[]"))}.getOrDefault(JSONArray())
+        return (rows.length()-1 downTo 0).mapNotNull {i->rows.optJSONObject(i)?.let {Drive(it.optLong("at"),it.optDouble("duration_seconds",0.0),it.optBoolean("interrupted"))}}
+    }
     companion object {const val FOCUS="focus"}
     fun text(automatic:Boolean=false):String {
         val rows=runCatching {JSONArray(preferences.getString("sessions","[]"))}.getOrDefault(JSONArray())

@@ -1,7 +1,24 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.9.9 (experimental, host-tested only).** As 0.9.8, and each drive
-has one focus: hills, bends, turns or road users. Parked, a few seconds after Start, once the route
+**Current Android candidate: 0.10.0 (experimental, host-tested only).** As 0.9.9, with a parked
+screen a new learner can follow; the drive screen is unchanged. First open asks six things, one per
+screen: what LearnDrive is (with a licensed driver beside you; silence never means the road is
+clear), the coach's language (English or Malayalam, with a sample to hear), the learner's name, a
+manual or automatic car, how much they have driven (Just starting: Guided, Some practice:
+Balanced, Nearly test-ready: Minimal), and mounting the phone, where the camera and location are
+asked for. The sheet's Get ready page shows, with nothing folded away: the coaching level (three
+buttons and what each means), the coach's voice with Hear it, today's focus, and the readiness
+checks, each tappable for its fix; the learner is named at the top of the sheet and, with two or
+more learners, asked first before a drive. "More setup options" and the lab panel are gone:
+Progress (each skill's last result, the "You first" record, saved drives, a hint after three good
+drives at one level that less coaching may suit), Settings (learners, coach, voice, the car, hills
+without a destination, maps, location) and About (what the app is and cannot see, safety, privacy,
+credits) open from the foot of Get ready. Developer tools (test sources, diagnostics, experiments)
+show only after the version in About is tapped seven times. The start check is a short list; without
+a destination, Start drives without hill coaching unless the phone already knows level ground, and
+"Hills too" learns it first. The review opens by itself after End.
+
+0.9.9: each drive has one focus: hills, bends, turns or road users. Parked, a few seconds after Start, once the route
 has been read, the coach says it in about 20 seconds in the voice language, with what the route
 holds of it and how to drive it ("Today's focus is hills. Your route has two climbs and a descent.
 Before a climb, change down while the road is still flat..."), and the coach card shows it. It is

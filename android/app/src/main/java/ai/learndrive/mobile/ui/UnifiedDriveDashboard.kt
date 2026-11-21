@@ -137,7 +137,17 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
     val setupContentHost=FrameLayout(context)
     val setupActionHost=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL}
     val prepareTab=action("Get ready").apply {tag="prepare-tab";isSelected=true;CoachStyle.styleTab(this)}
-    val destinationTab=action("Destination").apply {tag="destination-tab";CoachStyle.styleTab(this)}
+    val destinationTab=action("Where to?").apply {tag="destination-tab";CoachStyle.styleTab(this)}
+    /** Who is driving, at the top of the sheet: tapping it changes the learner (parked only). */
+    val learnerChip=action("").apply {tag="change-learner";contentDescription="Who's driving";textSize=14f;maxLines=1;ellipsize=TextUtils.TruncateAt.END
+        maxWidth=dp(150);compoundDrawablePadding=dp(6);setPadding(dp(12),0,dp(12),0)
+        setCompoundDrawablesRelativeWithIntrinsicBounds(CoachStyle.icon(context,"person",CoachStyle.text),null,null,null)}
+    /** First-open questions and the Progress, Settings and About pages: above the sheet and the drive screen. */
+    val overlayHost=FrameLayout(context).apply {tag="parked-overlays";elevation=dp(16).toFloat()}
+    /** A tap on a readiness check (0 camera, 1 voice, 2 speed, 3 hills): what can be done about it. */
+    var onReadiness:((Int)->Unit)?=null
+    /** The left column's width (0 before layout): first open's last question sits over it. */
+    val leftColumnWidth:Int get()=leftColumn.width
     val closeSetupButton=action("").apply {contentDescription="Close setup";tag="setup-close"
         setCompoundDrawablesRelativeWithIntrinsicBounds(CoachStyle.icon(context,"close"),null,null,null);setPadding(dp(12),0,dp(12),0)}
     private val sheetHeading=label("Before you drive",24f).apply {typeface=CoachStyle.display}
@@ -204,17 +214,24 @@ class UnifiedDriveDashboard(context:Context,roadView:View):FrameLayout(context) 
             override fun onTextChanged(s:CharSequence?,a:Int,b:Int,c:Int)=Unit
             override fun afterTextChanged(s:Editable?){val v=if(s.isNullOrBlank())GONE else VISIBLE;if(roadStatus.visibility!=v)roadStatus.visibility=v}
         })
-        // Setup sheet
-        val sheet=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(16),dp(20),dp(16))}
-        sheetHeader.addView(sheetHeading,LinearLayout.LayoutParams(0,-2,1f));sheetHeader.addView(closeSetupButton,LinearLayout.LayoutParams(dp(48),dp(48)));sheet.addView(sheetHeader,LinearLayout.LayoutParams(-1,dp(48)))
+        // Setup sheet: the two tabs, who is driving and close in one row (more of the page shows on
+        // a landscape phone), then the page, then the actions.
+        val sheet=LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(14),dp(20),dp(14))}
         tabs.addView(prepareTab,LinearLayout.LayoutParams(0,dp(44),1f));tabs.addView(destinationTab,LinearLayout.LayoutParams(0,dp(44),1f).apply {marginStart=dp(4)})
-        sheet.addView(tabs,LinearLayout.LayoutParams(-1,dp(52)).apply {topMargin=dp(6);bottomMargin=dp(14)})
+        sheetHeader.addView(tabs,LinearLayout.LayoutParams(0,dp(52),1f))
+        sheetHeader.addView(learnerChip,LinearLayout.LayoutParams(-2,dp(48)).apply {marginStart=dp(8)})
+        sheetHeader.addView(closeSetupButton,LinearLayout.LayoutParams(dp(48),dp(48)).apply {marginStart=dp(4)})
+        sheet.addView(sheetHeader,LinearLayout.LayoutParams(-1,dp(52)).apply {bottomMargin=dp(12)})
         val pages=FrameLayout(context).apply {addView(setupContentHost,LayoutParams(-1,-1));addView(destinationHost,LayoutParams(-1,-1))}
         sheet.addView(pages,LinearLayout.LayoutParams(-1,0,1f));sheet.addView(setupActionHost,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(10)})
         setupHost.addView(sheet,LayoutParams(-1,-1));addView(setupHost,LayoutParams(dp(440),-1,Gravity.END))
-        for((kind,title) in listOf("camera" to "Camera","voice" to "Voice","location" to "GPS · optional","hill" to "Hills ahead")) {
+        addView(overlayHost,LayoutParams(-1,-1))
+        for((index,item) in listOf("camera" to "Camera","voice" to "Voice","location" to "Speed · GPS","hill" to "Hills").withIndex()) {
+            val (kind,title)=item
             val symbol=icon(kind,CoachStyle.muted);val heading=label(title,14f).apply {typeface=CoachStyle.medium};val detail=label("Checking…",12f,CoachStyle.muted).apply {maxLines=1;ellipsize=TextUtils.TruncateAt.END}
-            readiness.addView(LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(6),dp(12),dp(6));background=CoachStyle.panel(context,CoachStyle.raised,12,Color.TRANSPARENT)
+            readiness.addView(LinearLayout(context).apply {gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(6),dp(12),dp(6))
+                background=android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(40,56,189,248)),CoachStyle.panel(context,CoachStyle.raised,12,Color.TRANSPARENT),null)
+                isClickable=true;isFocusable=true;setOnClickListener {onReadiness?.invoke(index)}
                 addView(symbol,LinearLayout.LayoutParams(dp(24),dp(24)).apply {marginEnd=dp(14)})
                 addView(LinearLayout(context).apply {orientation=LinearLayout.VERTICAL;addView(heading);addView(detail,LinearLayout.LayoutParams(-1,-2).apply {topMargin=dp(3)})},LinearLayout.LayoutParams(0,-2,1f))},LinearLayout.LayoutParams(-1,dp(54)).apply {bottomMargin=dp(6)})
             checks.add(Check(detail,symbol))
