@@ -78,6 +78,8 @@ EXPORT void replay_camera_yaw(Replay* r,double time,double rate){ld_camera_yaw(r
 // Google's route line and the elevation along it, for replays of drives with a route.
 EXPORT int replay_route_line(Replay* r,const double* latLon,size_t count){return ld_route_line(r->engine,latLon,count);}
 EXPORT int replay_route_elevation(Replay* r,const double* latLonElev,size_t count){return ld_route_elevation(r->engine,latLonElev,count);}
+EXPORT void replay_route_maneuvers(Replay* r,double time,const double* aheadM,size_t count){if(r)ld_route_maneuvers(r->engine,time,aheadM,count);}
+EXPORT int replay_route_features(Replay* r,double now,double* out,size_t capacity){return r?ld_route_features(r->engine,now,out,capacity):0;}
 // The phone's audio rule: may instruction `next` interrupt the one playing (`current`)?
 EXPORT int replay_prompt_may_interrupt(int next,int current){return ld_prompt_may_interrupt(next,current);}
 // The app's detector mosaic for the frame (same YUV layout as replay_prepare); 2 = zoom band.

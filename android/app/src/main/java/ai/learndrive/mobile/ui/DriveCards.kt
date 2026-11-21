@@ -137,6 +137,8 @@ object DriveCards {
     /** An instruction left unsaid because the learner had already slowed ("you first"). */
     fun held(caption:String):CoachCard=CoachCard("YOU FIRST",CoachTone.CALM,caption,"The coach has seen it. Keep watching.","check",emptyList(),sentence=true)
     fun parked(message:String,hint:String):CoachCard=CoachCard("PARKED",CoachTone.PARKED,message,hint,"coach",emptyList(),sentence=true)
+    /** The drive's one focus, while it is briefed at the start (instructions still take the card). */
+    fun focus(title:String,detail:String):CoachCard=CoachCard("TODAY'S FOCUS",CoachTone.CALM,title,detail,"coach",emptyList(),sentence=true)
 
     private fun categoryOf(origin:Int)=when(origin){5->"ROUTE";6->"VEHICLE CONTROL";7,4->"ROAD USER";3->"ROAD AHEAD";else->"COACH"}
     private fun source(origin:Int,contexts:List<Int>)=when {

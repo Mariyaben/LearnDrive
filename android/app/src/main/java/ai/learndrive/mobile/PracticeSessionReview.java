@@ -42,6 +42,13 @@ public final class PracticeSessionReview {
             roadCues = road; navigationCues = navigation; voiceSubmissions = voice;
             this.cues = Collections.unmodifiableList(cues);
         }
+        /** The drive in one line, under a review of its focus: how long, and how much of it had current camera evidence. */
+        public String summary() {
+            String out = "Drive: " + duration(durationSeconds);
+            if (durationSeconds >= .1)
+                out += " · camera available " + (int)Math.floor(100 * currentSeconds / durationSeconds + 1e-9) + "% of it";
+            return out + ".";
+        }
         public String text() {
             StringBuilder out = new StringBuilder("Duration: ").append(duration(durationSeconds));
             out.append("\n\nEstimated camera availability: ");

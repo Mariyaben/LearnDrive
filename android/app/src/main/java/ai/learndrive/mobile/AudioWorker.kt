@@ -201,14 +201,27 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
     /** The optional onset gate acquires the native lock before taking this worker's
      * monitor. Calling it outside this monitor preserves core -> audio lock order. */
     fun submit(id:Int,onset:AudioPlaybackGate?=null):Boolean=submitClip(id,onset,false)
+    /** The drive's spoken brief (0.9.9, [DriveFocus]): it starts only when nothing else is being said,
+     * and any instruction replaces it at once. Same loudness as every other voice. */
+    fun submitBrief(pcm:Pcm):Boolean {
+        if(pcm.channels!=1||pcm.bytes.size<2)return false
+        return submitClip(BRIEF,null,false,spoken(Clip(pcm.bytes,pcm.sampleRate,pcm.channels)))
+    }
+    /** Ends the brief at its next natural pause (the car has moved off), if it is what is being said. */
+    fun finishBrief():Boolean=cancelIfPrompt {it==BRIEF}
+    val briefPlaying:Boolean get()=active==BRIEF||pending==BRIEF
     /** Only NativeCore calls this after pending(seq,prompt) validates the exact
      * source/revision and native mode. Test voice has no warning-authority flag. */
     internal fun submitCoaching(id:Int,validatedWarning:Boolean,onset:AudioPlaybackGate):Boolean=
         submitClip(id,onset,validatedWarning)
-    @Synchronized private fun submitClip(id:Int,onset:AudioPlaybackGate?,validatedWarning:Boolean):Boolean {
-        val clip=clipFor(id)?:return false
-        fun canReplace(current:Int,warning:Boolean)=AudioInterruptionPolicy.mayReplace(validatedWarning,warning,
-            priority(current),mayInterrupt(id,current))
+    @Synchronized private fun submitClip(id:Int,onset:AudioPlaybackGate?,validatedWarning:Boolean,given:Clip?=null):Boolean {
+        val clip=given?:clipFor(id)?:return false
+        // The brief gives way to anything, and never interrupts anything.
+        fun canReplace(current:Int,warning:Boolean)=when {
+            current==BRIEF->true
+            id==BRIEF->current==0
+            else->AudioInterruptionPolicy.mayReplace(validatedWarning,warning,priority(current),mayInterrupt(id,current))
+        }
         if(!voiceEnabled||!ready||!canReplace(active,activeWarning)||!canReplace(pending,pendingWarning))return false
         if(requestFocus()!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {status("Audio focus unavailable; retry Test voice");return false}
         val token=generation.incrementAndGet();pending=id;pendingWarning=validatedWarning;stopNow()
@@ -312,5 +325,9 @@ class AudioWorker(context:Context,private val mayInterrupt:(Int,Int)->Boolean,pr
         closed=true;pcmReady=false;cancel()
         worker.execute {synchronized(this){track?.release();track=null}}
         worker.shutdown()
+    }
+    companion object {
+        /** What is playing when it is the drive's brief (prompt ids start at 1; 0 is nothing). */
+        const val BRIEF=-1
     }
 }

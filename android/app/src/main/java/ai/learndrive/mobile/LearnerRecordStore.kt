@@ -9,9 +9,9 @@ import java.io.File
  * instruction, after it, or not at all), per kind of situation, kept between drives in
  * app-private storage only. Never exported with diagnostics; removed with the app's data or
  * [forget]. The native rule decides from it how the coach speaks (ld_learner_* in c_api.h).
+ * One file per learner ([Learners.Storage.recordPath]); the native record holds one learner at a time.
  */
-class LearnerRecordStore(dir:File,private val core:NativeCore) {
-    private val file=File(dir,"learner-record.json")
+class LearnerRecordStore(private val file:File,private val core:NativeCore) {
 
     fun load() {
         val json=runCatching {JSONObject(file.readText())}.getOrNull()?:return
@@ -30,6 +30,7 @@ class LearnerRecordStore(dir:File,private val core:NativeCore) {
             val list=JSONArray();for(k in 1 until values.size)list.put(values[k])
             skills.put(JSONObject().put("drives",if(values.isEmpty())0 else values[0]).put("outcomes",list))
         }
+        file.parentFile?.mkdirs()
         val tmp=File(file.parentFile,file.name+".tmp")
         tmp.writeText(JSONObject().put("version",1).put("skills",skills).toString())
         if(!tmp.renameTo(file)){file.delete();tmp.renameTo(file)}

@@ -1,7 +1,32 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.9.7 (experimental, host-tested only).** As 0.9.6, and the parked
-screen no longer locks up after a drive. The destination, Setup and the start button lock only once
+**Current Android candidate: 0.9.9 (experimental, host-tested only).** As 0.9.8, and each drive
+has one focus: hills, bends, turns or road users. Parked, a few seconds after Start, once the route
+has been read, the coach says it in about 20 seconds in the voice language, with what the route
+holds of it and how to drive it ("Today's focus is hills. Your route has two climbs and a descent.
+Before a climb, change down while the road is still flat..."), and the coach card shows it. It is
+said only while the car is still parked, gives way to any instruction, and ends at its next pause
+when the car moves off. The coach picks the focus from the route and the learner's last drives (the
+same again when last time more went wrong than right, else a skill not yet practised, else the one
+that went least well), or Setup › Drive focus fixes it where the route has it. The review after the
+drive is about that focus alone, a line per climb, descent, bend or turn from the measured speed
+(slowed before a bend or in it, speed held or built on a descent, slowed in good time for a turn),
+one thing for next time, and Whole drive for every cue as before. Hills, bends and turns need a
+Google route; road users come from "You first". Kept per learner: the focus and how many of each
+outcome, never the route. The brief's audio is not stored.
+
+0.9.8: each learner
+who practises with the phone has their own "You first" record, practice records and coach settings
+(level, voice, voice language, "You first"), so one learner's record never decides how the coach
+speaks to another. Setup shows "Learner: <name>" with Change learner, which lists the learners and
+adds, renames or removes one; it works only parked, and with two or more learners the start dialog
+names who is driving. The learner who practised before 0.9.8 keeps their data where it was, so the
+update moves nothing; removing a learner deletes their records from the phone. Learned speed bumps,
+offline maps and the car's gear and slope settings stay shared. A subscription check before each
+drive is built in but switched off (`SUBSCRIPTION_REQUIRED`) until Google Play billing exists; it is
+asked only parked, before a drive, so a lapsed payment or a lost signal never stops a drive under way.
+
+0.9.7: the parked screen no longer locks up after a drive. The destination, Setup and the start button lock only once
 the car has done 6 km/h or more for 1.5 s, and unlock after 3 s below 3 km/h (or without a speed).
 Up to 0.9.6 any reading over 1 km/h locked them at once: a parked phone reads 1-4 km/h for seconds
 at a time (GPS under a roof or beside buildings, engine vibration, a hand holding the phone), so the

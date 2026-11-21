@@ -103,6 +103,14 @@ public:
     // The car's distance along the line at its last matched fix (m).
     double progress() const noexcept {return progress_;}
     bool matched() const noexcept {return matched_;}
+    // This load of the line (1, 2, ... for each route loaded; 0 before the first) and its length (m).
+    uint64_t generation() const noexcept {return generation_;}
+    double length() const noexcept {return points_.empty()?0:points_.back().s;}
+    // Everything this route holds for the drive's one focus (0.9.9): where the car is along it, the
+    // climbs and descents and the bends where they start, and the provider's turns. Memory only, like
+    // the line. Layout in ld_route_features (c_api.h). Returns the values written: 13 (the header
+    // alone) when `capacity` holds no more, 0 when it is under 13.
+    size_t features(double now,double* out,size_t capacity) const noexcept;
 private:
     struct Point {double x{},y{},s{};};
     struct Bend {double s{},angle{};uint64_t id{};bool sharp=true;double adviseKmh=20;};

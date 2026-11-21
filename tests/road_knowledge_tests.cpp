@@ -255,6 +255,45 @@ int main(){try{
         check(out[12]>180&&out[12]<230&&std::abs(out[13]+8)<1.5&&out[14]>250&&out[15]==2,"next hill");
         ld_route_elevation_cover(e.get(),cover);check(std::abs(cover[2]-300)<5,"progress");
         check(!ld_route_elevation(e.get(),nullptr,0)&&ld_road_knowledge(e.get(),4,out,16)&&out[10]==0&&!std::isfinite(out[12]),"cleared profile still used");});
+    test("C API: the route's climbs, descents, bends and turns for the drive's focus",[&]{
+        std::unique_ptr<ld_engine,decltype(&ld_destroy)> e(ld_create(),ld_destroy);
+        check(ld_guidance_begin(e.get(),1,LD_SOURCE_CAMERA,0),"camera source");
+        double h[13]{};
+        check(ld_route_features(e.get(),1,h,13)==13&&h[0]==1&&h[1]==0&&h[2]==0&&h[4]==-1&&h[10]==0,"no line: an empty header");
+        check(ld_route_features(e.get(),1,h,12)==0,"written into a buffer too small for the header");
+        // North 2 km (the descent and climb of `profile`), then a sharp right bend: 90 degrees on a
+        // 12 m radius, and 300 m east.
+        auto ll=northLine();
+        for(int k=1;k<=4;++k){const double b=k*pi/10;ll.push_back(lat(2000+12*std::sin(b)));ll.push_back(lon(12-12*std::cos(b)));}
+        for(int i=1;i<=30;++i){ll.push_back(lat(2012.));ll.push_back(lon(12+i*10.));}
+        check(ld_route_line(e.get(),ll.data(),ll.size()/2),"route line");
+        const auto v=samples(profile,0,2000);check(ld_route_elevation(e.get(),v.data(),v.size()/3)==1,"elevation");
+        std::vector<double> f(200);
+        int n=ld_route_features(e.get(),1,f.data(),f.size());
+        std::cout<<"    "<<f[10]<<" climbs/descents, "<<f[11]<<" bends on "<<f[2]<<" m; descent "<<f[13]<<"-"<<f[14]<<" m at "<<f[15]
+                 <<" %, climb "<<f[17]<<"-"<<f[18]<<" m at "<<f[19]<<" %, bend at "<<f[21]<<" m ("<<f[22]<<" deg, "<<f[24]<<" km/h)"<<std::endl;
+        check(n==13+2*4+5&&f[1]>=1&&f[2]>2300&&f[3]==0&&f[4]==-1&&f[5]==1&&f[6]<1&&f[7]>1980,"header");
+        check(f[8]==0&&f[9]==0&&f[10]==2&&f[11]==1&&f[12]==0,"counts (the provider's turns are not known yet)");
+        check(f[13]>440&&f[13]<560&&f[14]>740&&f[14]<860&&std::abs(f[15]+8)<1.5&&f[16]<0,"the descent");
+        check(f[17]>1140&&f[17]<1260&&f[18]>1340&&f[18]<1460&&std::abs(f[19]-12)<2,"the climb");
+        check(f[21]>1960&&f[21]<2010&&f[22]>55&&f[23]==1&&f[24]<=22&&f[25]==0,"the sharp right bend");
+        // Driving north at 30 km/h: matched at 300 m.
+        for(int k=0;k<4;++k){const double t=1+k;ld_gps(e.get(),t,30/3.6,.5);ld_navigation_fix(e.get(),1,t,lat(276+8*k),lon(0),5,30,.5,1,0,1);}
+        n=ld_route_features(e.get(),4.5,f.data(),f.size());
+        check(n==13+2*4+5&&f[3]==1&&std::abs(f[4]-(300+30/3.6*.5))<5,"where the car is along the route");
+        // Google's one turn is where the bend is: that bend is the turn.
+        const double turn[1]={1700};ld_route_maneuvers(e.get(),4,turn,1);
+        n=ld_route_features(e.get(),4.5,f.data(),f.size());
+        check(n==13+2*4+5+1&&f[8]==1&&f[9]>2300&&f[12]==1&&std::abs(f[26]-2000)<5&&f[25]==1,"a bend at a provider turn is that turn");
+        ld_route_maneuvers(e.get(),4.2,nullptr,0);
+        n=ld_route_features(e.get(),4.5,f.data(),f.size());
+        check(n==13+2*4+5&&f[8]==1&&f[12]==0&&f[25]==0,"no turn there: a bend");
+        // Ten seconds on without a fix or a turn update: neither the car's place nor the turns are known.
+        n=ld_route_features(e.get(),14.5,f.data(),f.size());
+        check(f[3]==0&&f[4]==-1&&f[8]==0&&f[12]==0,"stale place or turns reported as current");
+        // Only what fits is written, and the counts say so.
+        check(ld_route_features(e.get(),4.5,f.data(),13+4+3)==13+4&&f[10]==1&&f[11]==0,"a partial list");
+        check(ld_route_line(e.get(),nullptr,0)==0&&ld_route_features(e.get(),4.5,f.data(),f.size())==13&&f[1]==0,"a cleared route still reported");});
     test("the road walked by the scout carries learned bumps (no destination)",[]{
         JunctionScout s;
         const int64_t ids[]={1,2,3};const double ll[]={lat(0),lon(0),lat(200),lon(0),lat(400),lon(0)};check(s.addWay(1,6,ids,ll,3),"road");

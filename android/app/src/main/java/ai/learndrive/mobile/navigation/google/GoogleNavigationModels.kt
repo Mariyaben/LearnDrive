@@ -42,8 +42,23 @@ data class GoogleNavigationUpdate(
     val nextRoadName:String?=null,
     val currentRoad:String?=null,
     val destinationMeters:Double?=null,
-    val destinationSeconds:Double?=null
+    val destinationSeconds:Double?=null,
+    /** How many of this step and the steps after it are turns a drive's focus measures
+     * ([GoogleManeuverKind.focusTurn]): a count only, memory only. */
+    val turnsAhead:Int?=null
 )
+
+/** The turn a drive's focus on turns measures for this maneuver, or null (slight turns, keep, fork,
+ * ramps, merges and straight on ask for less slowing). */
+fun GoogleManeuverKind.focusTurn():ai.learndrive.mobile.DriveFocus.Turn?=when(this) {
+    GoogleManeuverKind.LEFT_TURN->ai.learndrive.mobile.DriveFocus.Turn.LEFT
+    GoogleManeuverKind.RIGHT_TURN->ai.learndrive.mobile.DriveFocus.Turn.RIGHT
+    GoogleManeuverKind.SHARP_LEFT->ai.learndrive.mobile.DriveFocus.Turn.SHARP_LEFT
+    GoogleManeuverKind.SHARP_RIGHT->ai.learndrive.mobile.DriveFocus.Turn.SHARP_RIGHT
+    GoogleManeuverKind.U_TURN->ai.learndrive.mobile.DriveFocus.Turn.U_TURN
+    GoogleManeuverKind.ROUNDABOUT->ai.learndrive.mobile.DriveFocus.Turn.ROUNDABOUT
+    else->null
+}
 
 /** LearnDrive's own maneuver codes (LD_MANEUVER_*), never Google's integers. */
 fun GoogleManeuverKind.nativeCode():Int=when(this) {

@@ -8,7 +8,14 @@ import org.json.JSONObject
 class LearningRecordStore(private val preferences:SharedPreferences) {
     private val counters=listOf("opportunities","planning_deliveries","approach_deliveries","observed_speed_reductions","unassessed_outcomes")
     private val driveCounters=listOf("road_user_deliveries","bend_deliveries","hill_deliveries","junction_deliveries","vehicle_deliveries")
-    @Synchronized fun clear(){preferences.edit().remove("sessions").apply()}
+    @Synchronized fun clear(){preferences.edit().remove("sessions").remove(FOCUS).apply()}
+    /** The last 20 focused drives ([DriveFocus.Past]: the skill and how many of each outcome, nothing else), oldest first. */
+    @Synchronized fun focusHistory():List<DriveFocus.Past> =
+        preferences.getString(FOCUS,"").orEmpty().lines().mapNotNull {if(it.isBlank())null else DriveFocus.Past.decode(it)}
+    @Synchronized fun recordFocus(past:DriveFocus.Past) {
+        val kept=(focusHistory()+past).takeLast(20)
+        preferences.edit().putString(FOCUS,kept.joinToString("\n") {it.encode()}).apply()
+    }
     @Synchronized fun record(lesson:Boolean,duration:Double,interrupted:Boolean,before:JSONObject,after:JSONObject) {
         if(!duration.isFinite()||duration<0)return
         val old=runCatching {JSONArray(preferences.getString("sessions","[]"))}.getOrDefault(JSONArray())
@@ -20,12 +27,20 @@ class LearningRecordStore(private val preferences:SharedPreferences) {
         val saved=JSONArray();for(i in maxOf(0,old.length()-19) until old.length())saved.put(old.get(i));saved.put(row)
         preferences.edit().putString("sessions",saved.toString()).apply()
     }
+    companion object {const val FOCUS="focus"}
     fun text(automatic:Boolean=false):String {
         val rows=runCatching {JSONArray(preferences.getString("sessions","[]"))}.getOrDefault(JSONArray())
         val out=StringBuilder("Your supervised drive\n")
         out.append(if(automatic)"Coaching responds automatically to supported road-user, bend, hill and junction situations. A destination adds route context.\n\n"
             else "Review useful, missed and distracting cues with your instructor.\n\n")
         out.append("The app cannot verify mirror checks, signalling, position, pedal use or successful negotiation. Measured slowing is an observation, not a driving grade.\n\n")
+        val focus=focusHistory().takeLast(5)
+        if(focus.isNotEmpty()) {
+            out.append("Recent drive focuses\n")
+            for(p in focus.asReversed())out.append(p.topic.noun.replaceFirstChar {it.titlecase()}).append(" · ")
+                .append(if(p.measured>0)"${p.good} of ${p.measured} as the coach asks" else "nothing measured").append('\n')
+            out.append('\n')
+        }
         if(rows.length()==0)out.append("No saved practice records yet.")
         for(i in rows.length()-1 downTo maxOf(0,rows.length()-5)){
             val r=rows.optJSONObject(i)?:continue

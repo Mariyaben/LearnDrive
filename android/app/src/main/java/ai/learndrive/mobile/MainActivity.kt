@@ -38,6 +38,7 @@ import ai.learndrive.mobile.navigation.google.GoogleManeuverKind
 import ai.learndrive.mobile.navigation.google.GoogleJourneyMemory
 import ai.learndrive.mobile.navigation.google.RouteElevation
 import ai.learndrive.mobile.navigation.google.nativeCode
+import ai.learndrive.mobile.navigation.google.focusTurn
 import kotlin.math.roundToInt
 import androidx.lifecycle.ViewModelProvider
 import ai.learndrive.mobile.ui.CoachStyle
@@ -49,6 +50,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var learnedBumps:LearnedBumps
     // "You first": the learner's measured responses to road users, kept between drives.
     private lateinit var learnerRecord:LearnerRecordStore
+    // Who is driving: each learner keeps their own record, practice records and coach settings.
+    private lateinit var learners:Learners
+    // While the native coach's record is swapped for the next learner's (on evidenceIo): no drive starts.
+    @Volatile private var learnerSwitching=false
+    private var learnerDialog:android.app.Dialog?=null
+    private lateinit var learnerLine:TextView
+    private lateinit var learnerButton:android.widget.Button
+    private lateinit var youFirstSwitch:Switch
+    private lateinit var coachingProfileChoice:Spinner
+    private lateinit var coachingVoiceSwitch:Switch
+    private lateinit var naturalVoiceSwitch:Switch
+    private lateinit var voiceLanguageChoice:Spinner
     // The start dialog's own start button, and whether this start takes its hills from the map.
     private var startButtonLabel="Level ground · start"
     private var startWithMapHills=false
@@ -126,6 +139,18 @@ class MainActivity : ComponentActivity() {
     private val coachCaption=CoachCaption()
     private val practiceReview=PracticeSessionReview()
     private var lastPracticeReview:PracticeSessionReview.Review?=null
+    // One focus per drive (0.9.9, DriveFocus): chosen and briefed parked at the start, measured
+    // during the drive, the review about it after.
+    private class FocusBrief(val startedAt:Double) {var text:String?=null;var chosenAt=Double.NaN;var done=false}
+    private var focusBrief:FocusBrief?=null
+    private var focusTracker:DriveFocus.Tracker?=null
+    private var lastFocusResult:DriveFocus.Result?=null
+    private var focusRouteAt=Double.NEGATIVE_INFINITY
+    private var focusCard:Pair<String,String>?=null
+    private var focusCardUntil=Double.NEGATIVE_INFINITY
+    /** Google's turns still to come on the route (from its steps): a count, nothing else. */
+    private var googleTurnsAhead:Int?=null
+    private lateinit var driveFocusChoice:Spinner
     private lateinit var reviewSession:Button
     private var sessionReviewDialog:android.app.AlertDialog?=null
     private lateinit var physical:Switch
@@ -320,11 +345,17 @@ class MainActivity : ComponentActivity() {
         getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displayListener,main)
         volumeControlStream=AudioManager.STREAM_MUSIC;core=NativeCore();sensors=Sensors(this,core)
         learnedBumps=LearnedBumps(filesDir,core);evidenceIo.execute {runCatching {learnedBumps.load()}}
-        learnerRecord=LearnerRecordStore(filesDir,core);evidenceIo.execute {runCatching {learnerRecord.load()}}
-        core.learnerWaiting(getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("youFirst",true))
+        val learnerList=getSharedPreferences("learners",MODE_PRIVATE)
+        learners=Learners(object:Learners.KeyValue {
+            override fun get(key:String)=learnerList.getString(key,null)
+            override fun put(key:String,value:String)=learnerList.edit().putString(key,value).apply()
+            override fun remove(key:String)=learnerList.edit().remove(key).apply()
+        })
+        val record=LearnerRecordStore(learnerFile(),core);learnerRecord=record;evidenceIo.execute {runCatching {record.load()}}
+        core.learnerWaiting(learnerSettings().getBoolean("youFirst",true))
         // Junction-ahead coaching without a destination (online OpenStreetMap roads).
         roads=RoadNetwork(core) {message->android.util.Log.i("LearnDriveRoads",message);roadMapStatus=message};sensors.onFix={lat,lon->roads.onLocation(lat,lon)}
-        coachingPreferences=CoachingPreferences(getSharedPreferences("driving_advice",MODE_PRIVATE))
+        coachingPreferences=CoachingPreferences(learnerSettings())
         coachingSettings=coachingPreferences.load();core.configureCoaching(coachingSettings);core.automaticCoaching(true)
         pretrained=PretrainedShadow(this,core){message->main.post {if(::reasoningStatus.isInitialized&&!isDestroyed)reasoningStatus.setUiText(message)}}
         // Fill the road camera panel, aligned to the bottom: a wide panel crops sky, never the road
@@ -388,6 +419,14 @@ class MainActivity : ComponentActivity() {
         useGoogle=getSharedPreferences("navigation_provider",MODE_PRIVATE).getBoolean("google",true)&&googleNavigation!=null
         showNavigationProvider()
         setupPanel.addView(text("Parked, mounted, supervised.",12f).apply {setTextColor(CoachStyle.muted)})
+        // Who is driving: their own record, practice records and coach settings. Changed only parked.
+        learnerLine=text("Learner: ${learners.current.name}",14f)
+        learnerButton=button("Change learner") {chooseLearner()}.apply {tag="change-learner"}
+        setupPanel.addView(LinearLayout(this).apply {
+            gravity=android.view.Gravity.CENTER_VERTICAL
+            addView(learnerLine,LinearLayout.LayoutParams(0,-2,1f))
+            addView(learnerButton,LinearLayout.LayoutParams(-2,CoachStyle.dp(this@MainActivity,44)))
+        })
         setupPanel.addView(dashboard.readiness)
         val setupUtilities=LinearLayout(this)
         setupPanel.addView(setupUtilities)
@@ -398,50 +437,68 @@ class MainActivity : ComponentActivity() {
         val optionsToggle=button("More setup options") {}
         optionsToggle.setOnClickListener {val opening=moreOptions.visibility==View.GONE;moreOptions.visibility=if(opening)View.VISIBLE else View.GONE;optionsToggle.text=if(opening)"Hide setup options" else "More setup options"}
         setupUtilities.addView(optionsToggle,LinearLayout.LayoutParams(0,CoachStyle.dp(this,48),1f));setupPanel.addView(moreOptions)
-        learningRecords=LearningRecordStore(getSharedPreferences("learning_records",MODE_PRIVATE))
+        learningRecords=LearningRecordStore(learnerRecords())
         moreOptions.addView(text("Automatic coaching responds to the road, bends, hills and route context throughout your session. No lesson selection is needed. A destination adds junction preparation.",12f))
         moreOptions.addView(button("Practice records") {
-            if(!setup.isMonitoring()&&!knownMoving())android.app.AlertDialog.Builder(this).setTitle("Practice records")
+            if(!setup.isMonitoring()&&!knownMoving())android.app.AlertDialog.Builder(this)
+                .setTitle(if(learners.count>1)"Practice records · ${learners.current.name}" else "Practice records")
                 .setMessage(learningRecords.text(true)+"\n"+LearnerReview.status(core.learnerSummary())).setPositiveButton("Done",null)
-                .setNeutralButton("Clear saved records") {_,_->learningRecords.clear();evidenceIo.execute {runCatching {learnerRecord.forget()}}}.show()
+                .setNeutralButton("Clear saved records") {_,_->learningRecords.clear();val cleared=learnerRecord;evidenceIo.execute {runCatching {cleared.forget()}}}.show()
         })
-        moreOptions.addView(Switch(this).apply {
+        youFirstSwitch=Switch(this).apply {
             tag="you-first";text="Say less when I have already slowed";setTextColor(CoachStyle.text)
-            isChecked=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("youFirst",true)
+            isChecked=learnerSettings().getBoolean("youFirst",true)
             setOnCheckedChangeListener {_,enabled->core.learnerWaiting(enabled)
-                getSharedPreferences("driving_advice",MODE_PRIVATE).edit().putBoolean("youFirst",enabled).apply()}
-        })
+                learnerSettings().edit().putBoolean("youFirst",enabled).apply()}
+        }
+        moreOptions.addView(youFirstSwitch)
         moreOptions.addView(text("Once your record over several drives shows that you slow for road users, the coach leaves out what your speed shows you have already done: first the slowing in an instruction (\"Oncoming bus. Keep left.\"), later the whole instruction, with the road user still shown on screen. If you have not slowed you are told in full, and \"Brake now\" is never left out. Based on your measured speed only.",12f))
         moreOptions.addView(text("Coaching level",13f))
-        val coachingProfile=Spinner(this).apply {
+        coachingProfileChoice=Spinner(this).apply {
             tag="coaching-profile"
             adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,CoachingProfile.entries.map {it.label})
             setSelection(coachingSettings.profile.ordinal)
         }
-        coachingProfile.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+        coachingProfileChoice.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
                 changeCoachingSettings(CoachingProfile.entries[position],coachingSettings.voiceEnabled)
             }
             override fun onNothingSelected(parent:AdapterView<*>?)=Unit
         }
-        moreOptions.addView(coachingProfile)
-        moreOptions.addView(Switch(this).apply {
+        moreOptions.addView(coachingProfileChoice)
+        // One focus per drive: chosen by the coach, or always the learner's own choice where the route has it.
+        moreOptions.addView(text("Drive focus",13f))
+        driveFocusChoice=Spinner(this).apply {
+            tag="drive-focus"
+            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,FOCUS_CHOICES.map {it.second})
+            setSelection(focusChoiceIndex(learnerSettings()))
+        }
+        driveFocusChoice.onItemSelectedListener=object:AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent:AdapterView<*>?,view:View?,position:Int,id:Long) {
+                learnerSettings().edit().putString("driveFocus",FOCUS_CHOICES.getOrElse(position) {FOCUS_CHOICES[0]}.first).apply()
+            }
+            override fun onNothingSelected(parent:AdapterView<*>?)=Unit
+        }
+        moreOptions.addView(driveFocusChoice)
+        moreOptions.addView(text("Each drive has one focus. Parked at the start, the coach names it and what your route holds of it; the review after the drive is about that alone. The coach picks it from your route and your last drives, or it is always the one chosen here when the route has it. Hills, bends and turns need a Google route.",12f))
+        coachingVoiceSwitch=Switch(this).apply {
             tag="coaching-voice";text="Coaching voice";setTextColor(CoachStyle.text);isChecked=coachingSettings.voiceEnabled
             setOnCheckedChangeListener {_,enabled->changeCoachingSettings(coachingSettings.profile,enabled)}
-        })
-        moreOptions.addView(Switch(this).apply {
+        }
+        moreOptions.addView(coachingVoiceSwitch)
+        naturalVoiceSwitch=Switch(this).apply {
             tag="natural-voice";text="Natural phone voice";setTextColor(CoachStyle.text)
-            isChecked=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+            isChecked=learnerSettings().getBoolean("naturalVoice",true)
             setOnCheckedChangeListener {_,enabled->if(::audio.isInitialized)audio.naturalVoice=enabled
-                getSharedPreferences("driving_advice",MODE_PRIVATE).edit().putBoolean("naturalVoice",enabled).apply()}
-        })
+                learnerSettings().edit().putBoolean("naturalVoice",enabled).apply()}
+        }
+        moreOptions.addView(naturalVoiceSwitch)
         // The coach's voice language. Malayalam is spoken by the phone's own Google voice for it,
         // rendered once on the phone; the screen stays in English.
-        voiceLanguage=getSharedPreferences("driving_advice",MODE_PRIVATE).getString("voiceLanguage",null)
-            ?.takeIf(ai.learndrive.mobile.audio.VoicePhrases::supported)?:ai.learndrive.mobile.audio.VoicePhrases.ENGLISH
+        voiceLanguage=storedVoiceLanguage(learnerSettings())
         moreOptions.addView(text("Coach voice language",14f))
         val languages=ai.learndrive.mobile.audio.VoicePhrases.languages
-        val voiceLanguageChoice=Spinner(this).apply {
+        voiceLanguageChoice=Spinner(this).apply {
             tag="voice-language"
             adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,languages.map {it.second})
             setSelection(languages.indexOfFirst {it.first==voiceLanguage}.coerceAtLeast(0))
@@ -636,7 +693,7 @@ class MainActivity : ComponentActivity() {
         audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority,
             fragmentCount=core.fragmentCount(),fragments=core::promptFragments,fragmentText=core::fragmentText,
             promptText=core::promptText,voice=phoneVoice) {message->main.post {audioStatus=message}}
-        audio.naturalVoice=getSharedPreferences("driving_advice",MODE_PRIVATE).getBoolean("naturalVoice",true)
+        audio.naturalVoice=learnerSettings().getBoolean("naturalVoice",true)
         requireVoicePhrases();applyVoice()
         audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
@@ -694,9 +751,11 @@ class MainActivity : ComponentActivity() {
     private fun setVoiceLanguage(language:String) {
         if(language==voiceLanguage||!ai.learndrive.mobile.audio.VoicePhrases.supported(language))return
         voiceLanguage=language
-        getSharedPreferences("driving_advice",MODE_PRIVATE).edit().putString("voiceLanguage",language).apply()
+        learnerSettings().edit().putString("voiceLanguage",language).apply()
         restartPhoneVoice();updateSetupUi()
     }
+    private fun storedVoiceLanguage(settings:android.content.SharedPreferences)=settings.getString("voiceLanguage",null)
+        ?.takeIf(ai.learndrive.mobile.audio.VoicePhrases::supported)?:ai.learndrive.mobile.audio.VoicePhrases.ENGLISH
     /** Google's own screen for adding voice data (Malayalam is one of its downloadable voices). */
     private fun installVoiceData() {
         val google=android.content.Intent(android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).setPackage("com.google.android.tts")
@@ -705,8 +764,13 @@ class MainActivity : ComponentActivity() {
     }
     private fun changeCoachingSettings(profile:CoachingProfile,voice:Boolean) {
         if(coachingSettings.profile==profile&&coachingSettings.voiceEnabled==voice)return
+        applyCoachingSettings(profile,voice,coachingSettings.revision)
+    }
+    /** Coaching settings in force from now, saved for the learner driving. The revision rises past
+     * both [after] and the one in force, so a decision made under earlier settings never matches. */
+    private fun applyCoachingSettings(profile:CoachingProfile,voice:Boolean,after:Long) {
         synchronized(core) {
-            val updated=CoachingSettings(profile,voice,Math.addExact(coachingSettings.revision,1))
+            val updated=CoachingSettings(profile,voice,Math.addExact(maxOf(after,coachingSettings.revision),1))
             core.configureCoaching(updated);coachingSettings=updated
             // Same lock order as native delivery/onset: core, then audio.
             if(::audio.isInitialized){audio.cancel();audio.setVoiceEnabled(voice)}
@@ -789,6 +853,11 @@ class MainActivity : ComponentActivity() {
         }
         // The next stretch of the route's elevation before the car gets there.
         routeElevation?.progress(core.routeElevationCover())
+        // Google's turns still to come, and its current step for a drive focused on turns.
+        if(update.state==GoogleNavigationPhase.ENROUTE) {
+            update.turnsAhead?.let {googleTurnsAhead=it}
+            focusTracker?.turn(update.stepNumber,update.maneuver.focusTurn(),update.distanceMeters,update.receivedAtSeconds)
+        }
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.
         retirePreviousCue()
@@ -910,7 +979,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun canStartRoad():Boolean=canStartRoad(knownMoving())
     private fun canStartRoad(moving:Boolean):Boolean {
-        if(!roadSource()||setup.isMonitoring()||setup.referencePending()||!cameraRunning||moving)return false
+        if(!roadSource()||setup.isMonitoring()||setup.referencePending()||!cameraRunning||moving||learnerSwitching)return false
         val frame=lastCompletedVision?:return false;val age=now()-frame.time
         return frame.frame?.sourceId==generation.get().toLong()&&age>=0&&age<.35&&visionError==null&&cameraError==null&&!CameraVisionHealth.paused(cameraThermal)&&
             frame.spatialReadiness!=SpatialReadiness.MOUNT_UNSUPPORTED
@@ -920,8 +989,11 @@ class MainActivity : ComponentActivity() {
             if(mode!="Camera")switchMode("Camera")
             filmedVideo.isChecked=false;requestPermissions();return
         }
-        if(!resumed||knownMoving()||setup.isMonitoring()){updateSetupUi();return}
+        if(!resumed||knownMoving()||setup.isMonitoring()||learnerSwitching){updateSetupUi();return}
         if(sessionStartDialog?.isShowing==true)return
+        // The subscription is asked about here only, parked, before a drive: never during one.
+        val access=driveAccess()
+        if(!access.allowed){showSubscriptionNeeded(access);return}
         // With a Google route, hills come from the map along it (Google's elevation): the phone's
         // tilt is not used, so there is nothing to calibrate and no level ground to find. Without
         // a destination there is no route to read heights along; hills can then only come from
@@ -929,7 +1001,9 @@ class MainActivity : ComponentActivity() {
         val routed=useGoogle&&googleNavigation?.state?.let {it.routeReady||it.guiding}==true
         val mapHills=routed&&!hillsUnavailable
         startWithMapHills=mapHills;startButtonLabel=if(mapHills)"Start" else "Level ground · start"
-        val mount="Keep the phone firmly mounted, rear camera forward and road view unobstructed."
+        // With more than one learner, whose record this drive adds to.
+        val who=if(learners.count>1)"Learner: ${learners.current.name}. If someone else is driving, change it in Setup first.\n\n" else ""
+        val mount="${who}Keep the phone firmly mounted, rear camera forward and road view unobstructed."
         val builder=android.app.AlertDialog.Builder(this).setTitle("Check the mount while parked").setNegativeButton("Back",null)
         val confirmation=(if(mapHills)builder
             .setMessage("$mount\n\nNo level-ground step is needed: hills come from Google's elevation along your route. ${mapHillsNow()}\n\n${startReadinessMessage()}")
@@ -1004,6 +1078,9 @@ class MainActivity : ComponentActivity() {
         if(!setup.start(t,up[0],up[1],up[2]))return false
         levelStart.cancel();practiceReview.start(t);lessonBaseline=org.json.JSONObject(core.driveContext());sessionStartDialog?.dismiss()
         core.learnerNewDrive()
+        // The drive's one focus: chosen and briefed once the route has been read, while still parked.
+        focusTracker=null;lastFocusResult=null;focusBrief=FocusBrief(t);focusRouteAt=Double.NEGATIVE_INFINITY
+        focusCard=null;googleTurnsAhead=null
         audio.cancel();activeMap.setFollowing(true)
         if(useGoogle)googleNavigation?.startGuidance()
         startCamera();publishOptions();updateSetupUi();return true
@@ -1030,7 +1107,52 @@ class MainActivity : ComponentActivity() {
         val review=practiceReview.finish(now())
         if(review!=null&&::learningRecords.isInitialized)learningRecords.record(true,review.durationSeconds,interrupted,lessonBaseline,org.json.JSONObject(core.driveContext()))
         if(review!=null){lastLearnerSummary=core.learnerSummary();saveLearnerRecord()}
+        // The focus, settled with this drive's "You first" outcomes and kept to choose the next one by
+        // (a drive too short to have practised anything is not kept).
+        val tracker=focusTracker;focusTracker=null;focusBrief=null;focusCard=null
+        if(::audio.isInitialized)audio.finishBrief()
+        lastFocusResult=if(review!=null&&tracker!=null)tracker.finish(lastLearnerSummary).also {r->
+            if(::learningRecords.isInitialized&&(r.measured>0||review.durationSeconds>=120))learningRecords.recordFocus(r.past(System.currentTimeMillis()))
+        } else null
         return review
+    }
+    /** The drive's focus, every tick while coaching: the brief until it has been said, then the measuring. */
+    private fun driveFocusTick(t:Double,measured:Telemetry) {
+        focusBrief?.let {if(!it.done)advanceBrief(it,t)}
+        // Moving off ends the brief at its next pause: driving needs the learner's attention.
+        if(audio.briefPlaying&&knownMoving())audio.finishBrief()
+        val tracker=focusTracker?:return
+        val speedValid=measured.speedValid&&measured.speed.isFinite()
+        if(!useGoogle){tracker.sample(t,null,speedValid,measured.speed);return}
+        // The whole route now and then (a reroute replaces it); where the car is along it, every tick.
+        if(t-focusRouteAt>=1){focusRouteAt=t;DriveFocus.Route.parse(core.routeFeatures(t,true),true)?.let(tracker::route)}
+        tracker.sample(t,DriveFocus.Route.parse(core.routeFeatures(t,false),false),speedValid,measured.speed)
+    }
+    /** Waits, parked and for up to 6 s, for the route to be read (its line, Google's turns, its
+     * heights); then chooses the focus, shows it and says it once rendered, while still parked. */
+    private fun advanceBrief(b:FocusBrief,t:Double) {
+        val text=b.text?:run {
+            val routed=useGoogle&&googleNavigation?.state?.let {it.routeReady||it.guiding}==true
+            val route=if(routed)DriveFocus.Route.parse(core.routeFeatures(t,true),true) else null
+            val turns=if(routed)googleTurnsAhead else null
+            val heightsRead=when(hillsState) {
+                RouteElevation.State.READY,RouteElevation.State.DENIED,RouteElevation.State.UNAVAILABLE->true
+                RouteElevation.State.NO_ROUTE->hillsDetail!=RouteElevation.CHOOSE_TEXT // a line too short to read
+                RouteElevation.State.FETCHING->false
+            }
+            if(routed&&!(route!=null&&route.turnsKnown&&turns!=null&&heightsRead)&&t-b.startedAt<6)return
+            val offer=DriveFocus.offer(route,turns,routed)
+            val choice=DriveFocus.choose(offer,if(::learningRecords.isInitialized)learningRecords.focusHistory() else emptyList(),wantedFocus())
+            focusTracker=DriveFocus.Tracker(choice.topic,offer.count(choice.topic)).also {tracker->route?.let(tracker::route)}
+            focusRouteAt=t;b.chosenAt=t
+            focusCard=DriveFocus.card(choice,offer);focusCardUntil=t+25
+            Log.i("LearnDriveFocus","Focus ${choice.topic.key} (${choice.why})")
+            DriveFocus.brief(choice,offer,voiceLanguage).also {b.text=it}
+        }
+        // Said once, parked: on the move, or not ready in time, it stays on the screen only.
+        if(!coachingSettings.voiceEnabled||!phoneVoice.canSpeak||knownMoving()||t-b.chosenAt>12){b.done=true;phoneVoice.forget(text);return}
+        val pcm=phoneVoice.clipOnce(text)?:return
+        if(audio.submitBrief(pcm)){b.done=true;phoneVoice.forget(text);focusCardUntil=maxOf(focusCardUntil,t+pcm.bytes.size/(2.0*pcm.sampleRate)+2)}
     }
     private fun endRoadSession() {
         val review=finishPractice(false)
@@ -1045,12 +1167,153 @@ class MainActivity : ComponentActivity() {
     private fun showSessionReview() {
         if(PracticeSessionReview.access(setup.isMonitoring(),knownMoving(),lastPracticeReview!=null,true)!=PracticeSessionReview.Access.READY)return
         val review=lastPracticeReview?:return
-        presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Session review")
-            .setMessage(review.text()+"\n\n"+LearnerReview.drive(lastLearnerSummary)).setPositiveButton("Done",null).create())
+        val whole=review.text()+"\n\n"+LearnerReview.drive(lastLearnerSummary)
+        val focus=lastFocusResult
+        if(focus==null) {
+            presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Session review").setMessage(whole).setPositiveButton("Done",null).create())
+            return
+        }
+        // The drive's one focus first; the whole drive's cues one tap away.
+        val extra=if(focus.topic==DriveFocus.Topic.ROAD_USERS)LearnerReview.status(lastLearnerSummary) else null
+        presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Today's focus: ${focus.topic.noun}")
+            .setMessage(DriveFocus.review(focus,extra)+"\n\n"+review.summary()).setPositiveButton("Done",null)
+            .setNeutralButton("Whole drive") {_,_->presentSessionReviewDialog(android.app.AlertDialog.Builder(this)
+                .setTitle("Whole drive").setMessage(whole).setPositiveButton("Done",null).create())}.create())
     }
     private fun saveLearnerRecord() {
         if(!::learnerRecord.isInitialized)return
-        evidenceIo.execute {runCatching {learnerRecord.save()}}
+        // The store of the learner driving now, taken here: a save still queued when another learner
+        // takes over writes this learner's file, never theirs.
+        val record=learnerRecord
+        evidenceIo.execute {runCatching {record.save()}}
+    }
+    /** The coach settings of [id] (by default the learner driving): level, voice, language, "You first". */
+    private fun learnerSettings(id:String=learners.current.id)=getSharedPreferences(learners.storage(id).settings,MODE_PRIVATE)
+    private fun learnerRecords(id:String=learners.current.id)=getSharedPreferences(learners.storage(id).records,MODE_PRIVATE)
+    private fun learnerFile(id:String=learners.current.id)=java.io.File(filesDir,learners.storage(id).recordPath)
+    /** Setup's drive focus choices: the key kept in the learner's settings, and what they read. */
+    private val FOCUS_CHOICES=listOf("auto" to "Chosen by the coach")+DriveFocus.Topic.entries.map {it.key to it.noun.replaceFirstChar {c->c.titlecase()}}
+    private fun focusChoiceIndex(settings:android.content.SharedPreferences)=
+        FOCUS_CHOICES.indexOfFirst {it.first==settings.getString("driveFocus","auto")}.coerceAtLeast(0)
+    /** The learner's own choice of focus, or null when the coach chooses. */
+    private fun wantedFocus()=DriveFocus.Topic.of(learnerSettings().getString("driveFocus",null))
+    private fun learnerChangeAllowed()=resumed&&roadSource()&&!setup.isMonitoring()&&!knownMoving()&&!learnerSwitching
+    /** Who is driving: another learner, a new one, or renaming or removing the one driving. Parked only. */
+    private fun chooseLearner() {
+        if(!learnerChangeAllowed())return
+        val list=learners.all;val current=learners.current
+        val items=list.map {if(it.id==current.id)"${it.name} (driving now)" else it.name}.toMutableList()
+        val add=if(list.size<Learners.MAX_LEARNERS){items+="Add a learner…";items.size-1} else -1
+        items+="Rename ${current.name}…";val rename=items.size-1
+        val remove=if(list.size>1){items+="Remove ${current.name}…";items.size-1} else -1
+        learnerDialog?.dismiss()
+        learnerDialog=android.app.AlertDialog.Builder(this).setTitle("Who's driving?")
+            .setItems(items.toTypedArray()) {_,which->when(which) {
+                in list.indices->switchLearner(list[which].id)
+                add->askLearnerName("Add a learner","") {name->learners.add(name)?.also {switchLearner(it.id)}!=null}
+                rename->askLearnerName("Rename ${current.name}",current.name) {name->learners.rename(current.id,name).also {if(it)updateSetupUi()}}
+                remove->confirmRemoveLearner(current)
+            }}
+            .setNegativeButton("Close",null).show()
+    }
+    /** Asks for a learner's name; [accept] says whether it was taken (1-30 characters, no other learner's). */
+    private fun askLearnerName(title:String,initial:String,accept:(String)->Boolean) {
+        if(!learnerChangeAllowed())return
+        val input=android.widget.EditText(this).apply {
+            setText(initial);setSelection(initial.length);isSingleLine=true;hint="Name"
+            filters=arrayOf(android.text.InputFilter.LengthFilter(Learners.MAX_NAME))
+        }
+        val pad=CoachStyle.dp(this,20)
+        val box=FrameLayout(this).apply {setPadding(pad,CoachStyle.dp(this@MainActivity,8),pad,0);addView(input)}
+        val dialog=android.app.AlertDialog.Builder(this).setTitle(title).setView(box)
+            .setPositiveButton("Save",null).setNegativeButton("Cancel",null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if(!learnerChangeAllowed())dialog.dismiss()
+                else if(accept(input.text.toString()))dialog.dismiss()
+                else input.error="Use 1-${Learners.MAX_NAME} characters and a name no other learner has"
+            }
+            input.requestFocus()
+        }
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        learnerDialog=dialog;dialog.show()
+    }
+    private fun confirmRemoveLearner(learner:Learners.Learner) {
+        if(!learnerChangeAllowed())return
+        learnerDialog=android.app.AlertDialog.Builder(this).setTitle("Remove ${learner.name}?")
+            .setMessage("Their practice records, \"You first\" record and coach settings are deleted from this phone. This cannot be undone.")
+            .setNegativeButton("Cancel",null).setPositiveButton("Remove") {_,_->removeLearner(learner.id)}.show()
+    }
+    private fun removeLearner(id:String) {
+        if(!learnerChangeAllowed()||learners.count<2)return
+        if(learners.current.id==id)switchLearner(learners.all.first {it.id!=id}.id)
+        if(learners.current.id==id)return
+        val where=learners.remove(id)?:return
+        // Queued after the switch's save of their record: everything of theirs goes, then.
+        evidenceIo.execute {runCatching {deleteLearnerData(where)}}
+        updateSetupUi()
+    }
+    /** Deletes one learner's data from this phone. On evidenceIo, after anything queued for them. */
+    private fun deleteLearnerData(where:Learners.Storage) {
+        if(where.legacy) {
+            // The phone's first learner shares these files with the phone's and the car's own settings: only their keys go.
+            getSharedPreferences(where.settings,MODE_PRIVATE).edit().apply {Learners.LEGACY_SETTINGS.forEach(::remove)}.commit()
+            getSharedPreferences(where.records,MODE_PRIVATE).edit().remove("sessions").remove(LearningRecordStore.FOCUS).commit()
+            java.io.File(filesDir,where.recordPath).delete()
+        } else {
+            getSharedPreferences(where.settings,MODE_PRIVATE).edit().clear().commit()
+            deleteSharedPreferences(where.settings)
+            val dir=java.io.File(filesDir,where.recordPath).parentFile
+            if(dir?.parentFile?.name=="learners"&&dir.parentFile?.parentFile==filesDir)dir.deleteRecursively()
+        }
+    }
+    /** Another learner drives from now: their record, practice records and coach settings. Parked only. */
+    private fun switchLearner(id:String) {
+        if(id==learners.current.id||!learnerChangeAllowed()||!learners.select(id))return
+        val old=learnerRecord;val fresh=LearnerRecordStore(learnerFile(id),core);learnerRecord=fresh
+        // One queue, in order: the last learner's record is saved before the coach is given the next one's.
+        learnerSwitching=true
+        evidenceIo.execute {
+            runCatching {old.save()};runCatching {core.learnerForget()};runCatching {fresh.load()}
+            main.post {learnerSwitching=false;updateSetupUi()}
+        }
+        val settings=learnerSettings(id)
+        coachingPreferences=CoachingPreferences(settings)
+        val stored=coachingPreferences.load()
+        applyCoachingSettings(stored.profile,stored.voiceEnabled,stored.revision)
+        val youFirst=settings.getBoolean("youFirst",true);core.learnerWaiting(youFirst)
+        val natural=settings.getBoolean("naturalVoice",true);if(::audio.isInitialized)audio.naturalVoice=natural
+        learningRecords=LearningRecordStore(learnerRecords(id))
+        lastPracticeReview=null;lastLearnerSummary=null;lastFocusResult=null
+        driveFocusChoice.setSelection(focusChoiceIndex(settings))
+        val language=storedVoiceLanguage(settings)
+        if(language!=voiceLanguage){voiceLanguage=language;restartPhoneVoice()}
+        // The switches and lists show the new learner's settings; with the state set first, their listeners change nothing.
+        youFirstSwitch.isChecked=youFirst
+        coachingProfileChoice.setSelection(coachingSettings.profile.ordinal)
+        coachingVoiceSwitch.isChecked=coachingSettings.voiceEnabled
+        naturalVoiceSwitch.isChecked=natural
+        voiceLanguageChoice.setSelection(ai.learndrive.mobile.audio.VoicePhrases.languages.indexOfFirst {it.first==voiceLanguage}.coerceAtLeast(0))
+        updateSetupUi()
+    }
+    /** May the learner driving start now? Asked only parked, before a drive (see DriveAccess). When
+     * billing comes, a confirmed check also sets latestSeen to the server's time, so a phone clock
+     * once set far ahead cannot lock a learner out. */
+    private fun driveAccess():DriveAccess.Decision {
+        val wall=System.currentTimeMillis()
+        val phone=getSharedPreferences("drive_access",MODE_PRIVATE)
+        val seen=maxOf(wall,phone.getLong("latestSeen",0L))
+        phone.edit().putLong("latestSeen",seen).apply()
+        val s=learnerSettings()
+        val paid=if(s.contains("paidUntil"))DriveAccess.Paid(s.getLong("paidUntil",0L),s.getLong("paidCheckedAt",0L)) else null
+        return DriveAccess.decide(BuildConfig.SUBSCRIPTION_REQUIRED,wall,seen,paid)
+    }
+    private fun showSubscriptionNeeded(decision:DriveAccess.Decision) {
+        val name=learners.current.name
+        android.app.AlertDialog.Builder(this).setTitle("Subscription needed")
+            .setMessage(if(decision==DriveAccess.Decision.LAPSED)"$name's subscription has ended. Renew it to keep practising."
+                else "$name needs a subscription to start practising.")
+            .setPositiveButton("OK",null).show()
     }
     private fun openSessionReview() {
         val measured=core.snapshot(now())
@@ -1072,11 +1335,13 @@ class MainActivity : ComponentActivity() {
         if(!::setupPanel.isInitialized||!::filmedVideo.isInitialized)return
         val monitoring=roadSource()&&setup.isMonitoring()
         val moving=knownMoving()
-        if(monitoring||moving)sessionReviewDialog?.dismiss()
+        if(monitoring||moving){sessionReviewDialog?.dismiss();learnerDialog?.dismiss()}
         dashboard.keepScreenOn=monitoring
         dashboard.setSessionRunning(monitoring)
         dashboard.sessionStatus.setUiText(if(monitoring)"Supervised" else if(roadSource())"Parked" else "Test input")
         val editable=resumed&&roadSource()&&!monitoring&&!moving
+        learnerLine.setUiText("Learner: ${learners.current.name}")
+        learnerButton.isEnabled=editable&&!learnerSwitching
         destinationPanel.setRunning(resumed&&roadSource()&&!useGoogle)
         destinationPanel.setEditable(editable&&!useGoogle)
         googleNavigation?.setEditable(editable&&useGoogle)
@@ -1626,7 +1891,7 @@ class MainActivity : ComponentActivity() {
                 semantic?.result?.time?:-1.0,semantic?.result?.completedAt?:-1.0,cameraRunning,audio.ready,
                 cameraThermal,issue,semantic?.result?.spatialReadiness?:SpatialReadiness.ORIGINAL_CALIBRATION_UNKNOWN,
                 freshSpatial?.spatialReadiness==SpatialReadiness.READY)
-            if(roadSource()&&setup.isMonitoring())practiceReview.sample(visionNow,roadHealth.currentEvidence)
+            if(roadSource()&&setup.isMonitoring()){practiceReview.sample(visionNow,roadHealth.currentEvidence);driveFocusTick(visionNow,measured)}
             // Lab playback may retain a visibly delayed diagnostic result. The
             // road view must never put old green boxes over the current preview.
             overlay.result=when {
@@ -1786,6 +2051,8 @@ class MainActivity : ComponentActivity() {
                     else DriveCards.fromText(caption.text,caption.origin,caption.ageSeconds)
                 roadSource()&&!setup.isMonitoring()->DriveCards.parked("Your next session starts here.",
                     if(useGoogle&&googleNavigation?.state?.routeReady==true)"Route ready. Tap Get ready to start." else "Choose a destination, or practise without one.")
+                // The drive's focus while it is briefed (an instruction takes the card, above).
+                roadSource()&&focusCard!=null&&visionNow<focusCardUntil->focusCard!!.let {DriveCards.focus(it.first,it.second)}
                 // An instruction left unsaid because the learner slowed first is shown, never hidden:
                 // the coach has seen the road user (silence is not an all-clear).
                 roadSource()->core.learnerHold(visionNow).takeIf {it.size>=3&&it[0]>=0}?.let {DriveCards.held(LearnerReview.holdCaption(it[0].toInt()))}?:when(lessonUiPhase){

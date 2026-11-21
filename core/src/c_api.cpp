@@ -1065,6 +1065,7 @@ int ld_route_elevation(ld_engine* e,const double* lat_lon_elev,size_t count) {
 }
 void ld_route_elevation_cover(ld_engine* e,double* out){if(!e||!out)return;
     out[0]=e->routeLine.elevationStart();out[1]=e->routeLine.elevationEnd();out[2]=e->routeLine.matched()?e->routeLine.progress():-1;out[3]=double(e->routeLine.slopeCount());}
+int ld_route_features(ld_engine* e,double now,double* out,size_t capacity) {return e&&out?int(e->routeLine.features(now,out,capacity)):0;}
 void ld_navigation_step_detail(ld_engine* e,double received_at,int side,int roundabout_exit,int next_maneuver,double next_gap_m) {
     if(!e)return;
     e->navDetailReceipt=received_at;e->navSide=std::clamp(side,-1,1);e->navExit=std::clamp(roundabout_exit,0,8);

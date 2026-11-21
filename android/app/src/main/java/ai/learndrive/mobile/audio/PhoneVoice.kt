@@ -35,6 +35,10 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
     private val failures=ConcurrentHashMap<String,Int>()
     private val pending=ConcurrentHashMap<String,String>()
     private val required=ConcurrentHashMap.newKeySet<String>()
+    // Said once and not kept on the phone: the drive's brief, whose words come from the route. A brief
+    // given up while it renders is dropped when the render ends.
+    private val once=ConcurrentHashMap.newKeySet<String>()
+    private val dropped=ConcurrentHashMap.newKeySet<String>()
     private val counter=AtomicInteger()
     @Volatile private var tts:TextToSpeech?=null
     // The engine's init result; setup runs once both it and the engine exist (Android may report
@@ -86,6 +90,22 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
         request(key);return null
     }
 
+    /** [text] rendered for saying once (the drive's brief), never stored; null while it renders.
+     * [forget] drops it from memory afterwards. */
+    fun clipOnce(text:String):Pcm? {
+        val key=text.trim();if(key.isEmpty())return null
+        once.add(key)
+        return clip(key)
+    }
+    fun forget(text:String) {
+        val key=text.trim()
+        if(!once.remove(key))return
+        if(pending.containsValue(key))dropped.add(key)
+        memory.remove(key);requested.remove(key)
+    }
+    /** False when this phone has no offline voice in [language] to say a brief with. */
+    val canSpeak:Boolean get()=!missingVoice&&!closed
+
     private fun request(text:String) {
         if(closed||memory.containsKey(text)||(failures[text]?:0)>=2||!requested.add(text))return
         if(voiceKey!=null)post {prepare(text)}
@@ -134,7 +154,7 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
         if(closed||memory.containsKey(text))return
         val engine=tts?:return
         val cached=file(text)
-        if(cached.isFile)VoiceClips.read(cached)?.let {memory[text]=it;progress();return}
+        if(!once.contains(text)&&cached.isFile)VoiceClips.read(cached)?.let {memory[text]=it;progress();return}
         val id="u$tag-${counter.incrementAndGet()}"
         pending[id]=text
         val result=runCatching {engine.synthesizeToFile(text,Bundle(),File(scratch,"$id.wav"),id)}.getOrDefault(TextToSpeech.ERROR)
@@ -145,11 +165,12 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
         val text=pending.remove(id)?:return
         val wav=File(scratch,"$id.wav")
         try {
+            if(dropped.remove(text))return
             val pcm=if(ok&&wav.isFile)VoiceClips.readWave(wav.readBytes())?.let(VoiceClips::polish) else null
             if(pcm==null){failed(text);return}
             memory[text]=pcm
-            // Fixed phrases always persist; whole composed sentences up to a bounded count.
-            if(required.contains(text)||(directory.list()?.size?:0)<required.size+400)VoiceClips.write(file(text),pcm)
+            // Fixed phrases always persist; whole composed sentences up to a bounded count; a brief never.
+            if(!once.contains(text)&&(required.contains(text)||(directory.list()?.size?:0)<required.size+400))VoiceClips.write(file(text),pcm)
             progress()
         } catch(e:Exception){failed(text)} finally {wav.delete()}
     }

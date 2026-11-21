@@ -329,6 +329,9 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
         } else null
         // The step after this one: back-to-back turns are said together.
         val next=if(step!=null)info.remainingSteps.orEmpty().firstOrNull {it.stepNumber==null||it.stepNumber!=step.stepNumber} else null
+        // How many turns are still to come, for the drive's focus (a count, nothing else kept).
+        val turnsAhead=if(step!=null)(listOf(step)+info.remainingSteps.orEmpty().filter {it.stepNumber==null||it.stepNumber!=step.stepNumber})
+            .count {normalizeGoogleManeuver(it.maneuver).focusTurn()!=null} else null
         // The road being driven is the one the last step turned onto (memory only, this session).
         val stepRoad=step?.let {it.fullRoadName?.takeIf(String::isNotBlank)?:it.simpleRoadName?.takeIf(String::isNotBlank)}
         val number=step?.stepNumber
@@ -345,7 +348,8 @@ class GoogleNavigationController(private val activity:Activity,private val apiKe
             step?.fullInstructionText?.takeIf(String::isNotBlank),stepRoad,
             next?.let {it.fullRoadName?.takeIf(String::isNotBlank)?:it.simpleRoadName?.takeIf(String::isNotBlank)},drivingRoad,
             if(phase==GoogleNavigationPhase.ENROUTE)info.distanceToFinalDestinationMeters?.takeIf {it>=0}?.toDouble() else null,
-            if(phase==GoogleNavigationPhase.ENROUTE)info.timeToFinalDestinationSeconds?.takeIf {it>=0}?.toDouble() else null)
+            if(phase==GoogleNavigationPhase.ENROUTE)info.timeToFinalDestinationSeconds?.takeIf {it>=0}?.toDouble() else null,
+            turnsAhead)
         lastUpdate=update;onUpdate(update)
         updateState(state.copy(status=when(phase) {
             GoogleNavigationPhase.ENROUTE->if(step==null)"Google navigation active · turn information unavailable" else "Google navigation active"

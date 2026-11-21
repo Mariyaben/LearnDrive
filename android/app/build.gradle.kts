@@ -20,12 +20,14 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 55
-        versionName = "0.9.7"
+        versionCode = 57
+        versionName = "0.9.9"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         manifestPlaceholders["ELEVATION_API_KEY"] = elevationApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())
         buildConfigField("boolean", "PRETRAINED_RUNTIME_AVAILABLE", (rootProject.file("../.tools/intelligence/android/llama-b11932/libllama.so").isFile && rootProject.file("../.tools/intelligence/include/llama.h").isFile).toString())
+        // Off until Google Play billing is in the app: then each learner needs a subscription to start a drive.
+        buildConfigField("boolean", "SUBSCRIPTION_REQUIRED", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild { cmake { cppFlags += "-std=c++17"; arguments += "-DLEARNDRIVE_WITH_SPATIAL_ORT=ON" } }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }

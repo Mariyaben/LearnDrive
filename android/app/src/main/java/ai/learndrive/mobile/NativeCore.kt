@@ -152,6 +152,10 @@ class NativeCore : AutoCloseable {
     @Synchronized fun routeElevationCover():DoubleArray=routeElevationCover(handle)
     private external fun routeElevation(h:Long,latLonElev:DoubleArray?):Boolean
     private external fun routeElevationCover(h:Long):DoubleArray
+    /** What the route line holds for the drive's focus (ld_route_features, [DriveFocus.Route]): the
+     * header (where the car is along it) or, [full], every climb, descent, bend and turn too. Memory only. */
+    @Synchronized fun routeFeatures(now:Double,full:Boolean):DoubleArray=routeFeatures(handle,now,full)
+    private external fun routeFeatures(h:Long,now:Double,full:Boolean):DoubleArray
     /** Metres from the car to each remaining maneuver, nearest first, at [time] (elapsedRealtime s). */
     @Synchronized fun routeManeuvers(time:Double,ahead:DoubleArray)=routeManeuvers(handle,time,ahead)
     /** Detail of the Google step last sent with [navigationTurn] (same receipt time). Memory only. */

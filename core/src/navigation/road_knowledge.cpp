@@ -329,6 +329,34 @@ bool RouteLine::fix(double time,double lat,double lon,double accuracy,double bea
     consistent_=std::min(consistent_+1,100);matched_=consistent_>=2;
     return matched_;
 }
+size_t RouteLine::features(double now,double* out,size_t capacity) const noexcept {
+    constexpr size_t header=13;
+    if(!out||capacity<header)return 0;
+    std::fill(out,out+header,0.);
+    out[0]=1;out[4]=-1;
+    if(points_.empty())return header;
+    const double total=points_.back().s;
+    const bool live=matched_&&std::isfinite(now)&&now>=fixTime_&&now-fixTime_<=2.5;
+    // The provider's turns, as fresh as ahead() needs them to tell a turn from a bend.
+    const bool turnsKnown=std::isfinite(now)&&now-turnsTime_<=5;
+    out[1]=double(generation_);out[2]=total;out[3]=live;
+    out[4]=live?progress_+speedMps_*std::clamp(now-fixTime_,0.,2.5):-1;
+    out[5]=!grade_.empty();out[6]=elevationStart();out[7]=elevationEnd();
+    out[8]=turnsKnown;out[9]=turnsKnown?(turnsTruncated_&&turnCount_?turns_[turnCount_-1]:total):0;
+    size_t n=header,slopes=0,bends=0,turns=0;
+    for(const auto& q:slopes_){if(n+4>capacity)break;out[n++]=q.start;out[n++]=q.end;out[n++]=q.grade;out[n++]=q.steepest;++slopes;}
+    for(const auto& b:bends_) {
+        if(n+5>capacity)break;
+        // The same rule as ahead(): a bend at one of the provider's maneuvers is that turn.
+        bool atTurn=false;
+        if(turnsKnown)for(size_t i=0;i<turnCount_;++i){const double t=turns_[i];
+            if((b.s>=t-50&&b.s<=t+30)||(t>=b.s&&t<=b.s+bendWindowM)){atTurn=true;break;}}
+        out[n++]=b.s;out[n++]=b.angle;out[n++]=b.sharp;out[n++]=b.adviseKmh;out[n++]=atTurn;++bends;
+    }
+    if(turnsKnown)for(size_t i=0;i<turnCount_&&n<capacity;++i){out[n++]=turns_[i];++turns;}
+    out[10]=double(slopes);out[11]=double(bends);out[12]=double(turns);
+    return n;
+}
 RouteAhead RouteLine::ahead(double now,const BumpMap& bumps) const noexcept {
     RouteAhead out;
     if(points_.empty()||!matched_||!std::isfinite(now)||now<fixTime_||now-fixTime_>2.5)return out;

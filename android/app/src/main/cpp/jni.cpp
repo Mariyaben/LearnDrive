@@ -202,6 +202,12 @@ JNIEXPORT jboolean JNICALL JNI(routeElevation)(JNIEnv* e,jobject,jlong h,jdouble
     return ld_route_elevation(engine(h),v.data(),v.size()/3)!=0;
 }
 JNIEXPORT jdoubleArray JNICALL JNI(routeElevationCover)(JNIEnv* e,jobject,jlong h) {double v[4]{};ld_route_elevation_cover(engine(h),v);return output(e,v,4);}
+JNIEXPORT jdoubleArray JNICALL JNI(routeFeatures)(JNIEnv* e,jobject,jlong h,jdouble now,jboolean full) {
+    // The header alone (where the car is) each tick; the whole list now and then.
+    std::vector<double> v(full?13+4*80+5*600+24:13);
+    const int n=ld_route_features(engine(h),now,v.data(),v.size());
+    return output(e,v.data(),std::max(0,n));
+}
 JNIEXPORT void JNICALL JNI(routeManeuvers)(JNIEnv* e,jobject,jlong h,jdouble time,jdoubleArray ahead) {
     const jsize n=ahead?e->GetArrayLength(ahead):0;
     std::vector<double> v(static_cast<size_t>(n));if(n)e->GetDoubleArrayRegion(ahead,0,n,v.data());

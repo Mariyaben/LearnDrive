@@ -192,6 +192,14 @@ int ld_route_elevation(ld_engine*,const double* lat_lon_elev,size_t count);
 // out[4]: elevation covers [out0, out1] m along the line; the car is at out2 (-1 when not matched);
 // out3 climbs/descents found. Tells the app when to fetch the next stretch.
 void ld_route_elevation_cover(ld_engine*,double* out);
+// What the current route line holds for the drive's one focus (0.9.9), at `now` (engine clock).
+// Memory only, like the line. Header (capacity >= 13): [0] layout 1, [1] the line's load number
+// (0: no line), [2] its length m, [3] car matched now, [4] car m along it (-1 unmatched), [5] heights
+// known, [6..7] they cover from..to m, [8] provider turns known (as fresh as bend coaching needs),
+// [9] turns known up to m, [10] climbs/descents S, [11] bends B, [12] turns T written. Then, as many
+// as fit: S x (start m, end m, mean grade % signed, steepest %), B x (start m, angle degrees + right,
+// sharp, comfortable km/h, at a provider turn), T x (turn m). Returns the values written.
+int ld_route_features(ld_engine*,double now,double* out,size_t capacity);
 // Speed bumps learned on this phone from its motion sensor (felt on two separate passes before
 // they are coached). Restore saved ones at start; read them back (5 values each: lat, lon,
 // heading, times felt, times driven over without a jolt) to save between drives.
