@@ -9,11 +9,14 @@ class LearningRecordStore(private val preferences:SharedPreferences) {
     private val counters=listOf("opportunities","planning_deliveries","approach_deliveries","observed_speed_reductions","unassessed_outcomes")
     private val driveCounters=listOf("road_user_deliveries","bend_deliveries","hill_deliveries","junction_deliveries","vehicle_deliveries")
     @Synchronized fun clear(){preferences.edit().remove("sessions").remove(FOCUS).apply()}
-    /** The last 20 focused drives ([DriveFocus.Past]: the skill and how many of each outcome, nothing else), oldest first. */
+    /** The last focused drives ([DriveFocus.Past]: the skill and how many of each outcome, nothing else;
+     * an "All" drive keeps one per skill), oldest first. */
     @Synchronized fun focusHistory():List<DriveFocus.Past> =
         preferences.getString(FOCUS,"").orEmpty().lines().mapNotNull {if(it.isBlank())null else DriveFocus.Past.decode(it)}
-    @Synchronized fun recordFocus(past:DriveFocus.Past) {
-        val kept=(focusHistory()+past).takeLast(20)
+    /** One drive's focus: its skill, or each skill measured on an "All" drive. The last 40 are kept. */
+    @Synchronized fun recordFocus(pasts:List<DriveFocus.Past>) {
+        if(pasts.isEmpty())return
+        val kept=(focusHistory()+pasts).takeLast(40)
         preferences.edit().putString(FOCUS,kept.joinToString("\n") {it.encode()}).apply()
     }
     @Synchronized fun record(lesson:Boolean,duration:Double,interrupted:Boolean,before:JSONObject,after:JSONObject) {

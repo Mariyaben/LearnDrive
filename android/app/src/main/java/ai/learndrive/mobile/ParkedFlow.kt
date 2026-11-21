@@ -10,7 +10,7 @@ object ParkedFlow {
     /** First open, once: one question per screen, in this order. */
     enum class Step(val title:String) {
         WELCOME("Welcome to LearnDrive"),
-        LANGUAGE("Which language should the coach speak?"),
+        LANGUAGE("Choose the coach's voice"),
         NAME("What's your name?"),
         CAR("Which car are you learning in?"),
         LEVEL("How much have you driven?"),
@@ -62,15 +62,16 @@ object ParkedFlow {
 
     /** The next level down in coaching when the learner's last [DRIVES] focused drives since the level
      * was set ([since], ms) each had at least two things measured and at least two thirds of them
-     * done as the coach asks; null otherwise. A hint only: the learner decides. */
+     * done as the coach asks (an "All" drive counts once, all its skills together); null otherwise. A
+     * hint only: the learner decides. */
     fun nextLevel(profile:CoachingProfile,history:List<DriveFocus.Past>,since:Long):CoachingProfile? {
         val less=when(profile) {
             CoachingProfile.GUIDED->CoachingProfile.BALANCED
             CoachingProfile.BALANCED->CoachingProfile.MINIMAL
             CoachingProfile.MINIMAL->return null
         }
-        val recent=history.filter {it.at>=since}.takeLast(DRIVES)
-        return less.takeIf {recent.size==DRIVES&&recent.all {it.measured>=2&&3*it.good>=2*it.measured}}
+        val recent=DriveFocus.drives(history.filter {it.at>=since}).takeLast(DRIVES)
+        return less.takeIf {recent.size==DRIVES&&recent.all {d->val m=d.sumOf {it.measured};m>=2&&3*d.sumOf {it.good}>=2*m}}
     }
 
     /** Each practised skill for Progress: how many focused drives, and how the last one went. */

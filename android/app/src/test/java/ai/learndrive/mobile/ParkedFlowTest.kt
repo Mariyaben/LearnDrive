@@ -61,6 +61,12 @@ class ParkedFlowTest {
         assertNull(ParkedFlow.nextLevel(CoachingProfile.GUIDED,good.take(2),0))
     }
 
+    @Test fun anAllDriveCountsOnceForTheHint() {
+        fun all(at:Long)=listOf(past(Topic.BENDS,at,Outcome.BEND_BEFORE to 2).copy(all=true),past(Topic.TURNS,at,Outcome.TURN_EARLY to 2).copy(all=true))
+        assertNull("two drives, not four",ParkedFlow.nextLevel(CoachingProfile.GUIDED,all(1)+all(2),0))
+        assertEquals(CoachingProfile.BALANCED,ParkedFlow.nextLevel(CoachingProfile.GUIDED,all(1)+all(2)+all(3),0))
+    }
+
     @Test fun progressSaysHowEachSkillWentLastTime() {
         val history=listOf(past(Topic.HILLS,1,Outcome.CLIMB_STEADY to 1),past(Topic.BENDS,2),
             past(Topic.HILLS,3,Outcome.CLIMB_STEADY to 2,Outcome.DESCENT_BUILT to 1))

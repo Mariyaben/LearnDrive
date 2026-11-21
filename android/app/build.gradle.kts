@@ -20,8 +20,8 @@ android {
         applicationId = "ai.learndrive.mobile"
         minSdk = 28
         targetSdk = 36
-        versionCode = 58
-        versionName = "0.10.0"
+        versionCode = 59
+        versionName = "0.11.0"
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         manifestPlaceholders["ELEVATION_API_KEY"] = elevationApiKey
         buildConfigField("boolean", "GOOGLE_NAVIGATION_AVAILABLE", mapsApiKey.isNotBlank().toString())

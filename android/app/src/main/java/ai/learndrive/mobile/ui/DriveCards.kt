@@ -139,6 +139,9 @@ object DriveCards {
     fun parked(message:String,hint:String):CoachCard=CoachCard("PARKED",CoachTone.PARKED,message,hint,"coach",emptyList(),sentence=true)
     /** The drive's one focus, while it is briefed at the start (instructions still take the card). */
     fun focus(title:String,detail:String):CoachCard=CoachCard("TODAY'S FOCUS",CoachTone.CALM,title,detail,"coach",emptyList(),sentence=true)
+    /** A starting check or moving-off step while it is said parked ([header]), with the part's steps as chips, [current] lit. */
+    fun routine(header:String,title:String,detail:String,steps:List<String>,current:Int):CoachCard=
+        CoachCard(header,CoachTone.CONTROL,title,detail,if(header=="MOVING OFF")"coach" else "check",steps.mapIndexed {i,s->CardChip(s,i==current)},sentence=true)
 
     private fun categoryOf(origin:Int)=when(origin){5->"ROUTE";6->"VEHICLE CONTROL";7,4->"ROAD USER";3->"ROAD AHEAD";else->"COACH"}
     private fun source(origin:Int,contexts:List<Int>)=when {

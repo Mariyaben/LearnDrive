@@ -149,10 +149,27 @@ class MainActivity : ComponentActivity() {
     private var lastPracticeReview:PracticeSessionReview.Review?=null
     // One focus per drive (0.9.9, DriveFocus): chosen and briefed parked at the start, measured
     // during the drive, the review about it after.
-    private class FocusBrief(val startedAt:Double) {var text:String?=null;var chosenAt=Double.NaN;var done=false}
+    private class FocusBrief(val startedAt:Double) {var text:String?=null;var chosenAt=Double.NaN;var sayFrom=Double.NaN;var done=false}
     private var focusBrief:FocusBrief?=null
-    private var focusTracker:DriveFocus.Tracker?=null
-    private var lastFocusResult:DriveFocus.Result?=null
+    private var focusSession:DriveFocus.Session?=null
+    private var lastFocus:DriveFocus.Drive?=null
+    /** The starting checks and moving off (StartRoutine), said one step at a time, parked. */
+    private class Opening(val steps:List<StartRoutine.Step>) {
+        var index=0
+        var nextAt=Double.NEGATIVE_INFINITY
+        var waitingSince=Double.NaN
+        var shown=-1
+        var shownUntil=Double.NEGATIVE_INFINITY
+        var done=false
+        /** Every check has been said (or shown): today's focus may follow. */
+        val pastChecks get()=done||steps.getOrNull(index)?.part!=StartRoutine.Part.CHECKS
+    }
+    private var opening:Opening?=null
+    /** The coach's voice: recorded (what it has no take of, the phone's voice says) or the phone's own voice. */
+    private var voiceKind=RECORDED_VOICE
+    // Sample of the phone's voice asked for by Hear it: said once rendered.
+    private var pendingSample:String?=null
+    private var pendingSampleSince=0.0
     private var focusRouteAt=Double.NEGATIVE_INFINITY
     private var focusCard:Pair<String,String>?=null
     private var focusCardUntil=Double.NEGATIVE_INFINITY
@@ -429,12 +446,12 @@ class MainActivity : ComponentActivity() {
         // The coach's voice language. Malayalam is spoken by the phone's own Google voice for it,
         // rendered once on the phone; the screen stays in English.
         voiceLanguage=storedVoiceLanguage(learnerSettings())
-        val languages=ai.learndrive.mobile.audio.VoicePhrases.languages
+        voiceKind=storedVoiceKind(learnerSettings())
         before=ai.learndrive.mobile.ui.BeforeYouDrive(this,ParkedFlow.LEVELS.map {it.label},
-            languages.map {it.second.substringBefore(" · ")},FOCUS_CHOICES.map {it.second},
+            VOICE_CHOICES.map {it.third},FOCUS_CHOICES.map {it.second},
             onLevel={i->chooseLevel(ParkedFlow.LEVELS[i])},
             // Never mid-drive: one drive keeps one voice.
-            onLanguage={i->if(setup.isMonitoring())updateSetupUi() else setVoiceLanguage(languages[i].first)},
+            onVoice={i->setVoice(i)},
             onFocus={i->learnerSettings().edit().putString("driveFocus",FOCUS_CHOICES.getOrElse(i) {FOCUS_CHOICES[0]}.first).apply();updateSetupUi()})
         before.hear.setOnClickListener {hearVoice()}
         before.getVoice.setOnClickListener {installVoiceData()}
@@ -614,7 +631,8 @@ class MainActivity : ComponentActivity() {
         audio=AudioWorker(this,core::promptMayInterrupt,core.promptCount(),core::promptPriority,
             fragmentCount=core.fragmentCount(),fragments=core::promptFragments,fragmentText=core::fragmentText,
             promptText=core::promptText,voice=phoneVoice) {message->main.post {audioStatus=message}}
-        audio.naturalVoice=learnerSettings().getBoolean("naturalVoice",true)
+        // The voice is chosen whole now (recorded or the phone's, Get ready): the phone's English voice is always allowed.
+        audio.naturalVoice=true
         requireVoicePhrases();applyVoice()
         audio.setVoiceEnabled(coachingSettings.voiceEnabled)
         core.bindAudioDispatcher(ai.learndrive.mobile.audio.AudioDispatcher(audio))
@@ -635,10 +653,14 @@ class MainActivity : ComponentActivity() {
     }
     private fun roadSource()=mode=="Camera"&&!filmedVideo.isChecked
     private var phoneVoiceGeneration=0
+    /** The phone voice the learner picked for [voiceLanguage] in Settings (null: the app's own choice). */
+    private var phoneVoiceChosen:String?=null
+    private fun preferredPhoneVoice(id:String=learners.current.id,language:String=voiceLanguage)=learnerSettings(id).getString("phoneVoice.$language",null)
     private fun newPhoneVoice():ai.learndrive.mobile.audio.PhoneVoice {
         // A voice already replaced (language change) must not overwrite the new one's status.
         val generation=++phoneVoiceGeneration
-        return ai.learndrive.mobile.audio.PhoneVoice(this,voiceLanguage) {message->main.post {if(generation==phoneVoiceGeneration)voiceStatus=message}}
+        phoneVoiceChosen=preferredPhoneVoice()
+        return ai.learndrive.mobile.audio.PhoneVoice(this,voiceLanguage,phoneVoiceChosen) {message->main.post {if(generation==phoneVoiceGeneration)voiceStatus=message}}
     }
     private var appVoiceGeneration=0
     /** The recorded voice built into the app for [voiceLanguage]: unpacked once in the background,
@@ -656,12 +678,15 @@ class MainActivity : ComponentActivity() {
         val english=(1..core.promptCount()).map {core.promptText(it)}+(1..core.fragmentCount()).map {core.fragmentText(it)}
         phoneVoice.require(english.mapNotNull {ai.learndrive.mobile.audio.VoicePhrases.spoken(voiceLanguage,it)})
         appVoice?.require(voiceScript().map {it.words})
+        // The starting checks and moving off: rendered ahead (and kept), not waited for.
+        StartRoutine.lines(voiceLanguage).forEach {phoneVoice.clip(it)}
     }
-    /** The recorded voice built into the app first; a phrase it has no take of is said by the
-     * phone's artificial voice (and until that one is ready, the bundled English recordings). */
+    /** The recorded voice (when chosen) first: a phrase it has no take of is said by the phone's own
+     * voice. The phone's voice alone when chosen. Until the phone's voice is ready, the bundled
+     * English recordings speak. */
     private fun applyVoice() {
         if(!::audio.isInitialized)return
-        audio.useVoices(listOfNotNull(appVoice?.takeIf {it.complete},phoneVoice))
+        audio.useVoices(listOfNotNull(appVoice?.takeIf {it.complete&&voiceKind==RECORDED_VOICE},phoneVoice))
     }
     /** A new phone voice for [voiceLanguage]; the old one stops. Until the new one has rendered
      * every phrase, the bundled English recordings speak. */
@@ -781,7 +806,7 @@ class MainActivity : ComponentActivity() {
         // Google's turns still to come, and its current step for a drive focused on turns.
         if(update.state==GoogleNavigationPhase.ENROUTE) {
             update.turnsAhead?.let {googleTurnsAhead=it}
-            focusTracker?.turn(update.stepNumber,update.maneuver.focusTurn(),update.distanceMeters,update.receivedAtSeconds)
+            focusSession?.turn(update.stepNumber,update.maneuver.focusTurn(),update.distanceMeters,update.receivedAtSeconds)
         }
         // Invalidate native pending decisions before retiring already submitted
         // PCM and queued captions. Critical camera speech keeps its own lifetime.
@@ -1014,9 +1039,13 @@ class MainActivity : ComponentActivity() {
         if(!setup.start(t,up[0],up[1],up[2]))return false
         levelStart.cancel();practiceReview.start(t);lessonBaseline=org.json.JSONObject(core.driveContext());sessionStartDialog?.dismiss()
         core.learnerNewDrive()
-        // The drive's one focus: chosen and briefed once the route has been read, while still parked.
-        focusTracker=null;lastFocusResult=null;focusBrief=FocusBrief(t);focusRouteAt=Double.NEGATIVE_INFINITY
+        // The drive's focus: chosen and briefed once the route has been read, while still parked.
+        focusSession=null;lastFocus=null;focusBrief=FocusBrief(t);focusRouteAt=Double.NEGATIVE_INFINITY
         focusCard=null;googleTurnsAhead=null
+        // The starting checks and moving off (StartRoutine), said parked around today's focus.
+        opening=if(learnerSettings().getBoolean("startChecks",true))
+            Opening(StartRoutine.steps(voiceLanguage,manualCar,coachingSettings.profile)).also {o->if(coachingSettings.voiceEnabled)o.steps.forEach {lineClip(it.say)}}
+            else null
         audio.cancel();activeMap.setFollowing(true)
         if(useGoogle)googleNavigation?.startGuidance()
         startCamera();publishOptions();updateSetupUi();return true
@@ -1047,28 +1076,33 @@ class MainActivity : ComponentActivity() {
         if(review!=null){lastLearnerSummary=core.learnerSummary();saveLearnerRecord()}
         // The focus, settled with this drive's "You first" outcomes and kept to choose the next one by
         // (a drive too short to have practised anything is not kept).
-        val tracker=focusTracker;focusTracker=null;focusBrief=null;focusCard=null
+        val session=focusSession;focusSession=null;focusBrief=null;focusCard=null;opening=null
         if(::audio.isInitialized)audio.finishBrief()
-        lastFocusResult=if(review!=null&&tracker!=null)tracker.finish(lastLearnerSummary).also {r->
-            if(::learningRecords.isInitialized&&(r.measured>0||review.durationSeconds>=120))learningRecords.recordFocus(r.past(System.currentTimeMillis()))
+        lastFocus=if(review!=null&&session!=null)session.finish(lastLearnerSummary).also {d->
+            if(::learningRecords.isInitialized&&(d.measured>0||review.durationSeconds>=120))learningRecords.recordFocus(d.past(System.currentTimeMillis()))
         } else null
         return review
     }
-    /** The drive's focus, every tick while coaching: the brief until it has been said, then the measuring. */
+    /** The start of a drive, every tick while coaching: the starting checks, today's focus, moving off;
+     * then measuring the focus. */
     private fun driveFocusTick(t:Double,measured:Telemetry) {
-        focusBrief?.let {if(!it.done)advanceBrief(it,t)}
+        openingTick(t)
+        // Today's focus follows the starting checks and the pause after the last one (at once without them).
+        val o=opening
+        focusBrief?.let {if(!it.done)advanceBrief(it,t,o==null||o.done||(o.pastChecks&&t>=o.nextAt&&!audio.briefPlaying))}
         // Moving off ends the brief at its next pause: driving needs the learner's attention.
         if(audio.briefPlaying&&knownMoving())audio.finishBrief()
-        val tracker=focusTracker?:return
+        val session=focusSession?:return
         val speedValid=measured.speedValid&&measured.speed.isFinite()
-        if(!useGoogle){tracker.sample(t,null,speedValid,measured.speed);return}
+        if(!useGoogle){session.sample(t,null,speedValid,measured.speed);return}
         // The whole route now and then (a reroute replaces it); where the car is along it, every tick.
-        if(t-focusRouteAt>=1){focusRouteAt=t;DriveFocus.Route.parse(core.routeFeatures(t,true),true)?.let(tracker::route)}
-        tracker.sample(t,DriveFocus.Route.parse(core.routeFeatures(t,false),false),speedValid,measured.speed)
+        if(t-focusRouteAt>=1){focusRouteAt=t;DriveFocus.Route.parse(core.routeFeatures(t,true),true)?.let(session::route)}
+        session.sample(t,DriveFocus.Route.parse(core.routeFeatures(t,false),false),speedValid,measured.speed)
     }
     /** Waits, parked and for up to 6 s, for the route to be read (its line, Google's turns, its
-     * heights); then chooses the focus, shows it and says it once rendered, while still parked. */
-    private fun advanceBrief(b:FocusBrief,t:Double) {
+     * heights); then chooses the focus and renders it. Once [mayTalk] (the starting checks are said),
+     * shows it and says it, while still parked. */
+    private fun advanceBrief(b:FocusBrief,t:Double,mayTalk:Boolean) {
         val text=b.text?:run {
             val routed=useGoogle&&googleNavigation?.state?.let {it.routeReady||it.guiding}==true
             val route=if(routed)DriveFocus.Route.parse(core.routeFeatures(t,true),true) else null
@@ -1080,17 +1114,74 @@ class MainActivity : ComponentActivity() {
             }
             if(routed&&!(route!=null&&route.turnsKnown&&turns!=null&&heightsRead)&&t-b.startedAt<6)return
             val offer=DriveFocus.offer(route,turns,routed)
-            val choice=DriveFocus.choose(offer,if(::learningRecords.isInitialized)learningRecords.focusHistory() else emptyList(),wantedFocus())
-            focusTracker=DriveFocus.Tracker(choice.topic,offer.count(choice.topic)).also {tracker->route?.let(tracker::route)}
+            // "All": every skill, as the coach did before drives had one focus; otherwise one, chosen.
+            val choice=if(learnerSettings().getString("driveFocus",null)==ALL_FOCUS)DriveFocus.Choice.everything()
+                else DriveFocus.choose(offer,if(::learningRecords.isInitialized)learningRecords.focusHistory() else emptyList(),wantedFocus())
+            focusSession=DriveFocus.Session(choice,offer).also {s->route?.let(s::route)}
             focusRouteAt=t;b.chosenAt=t
-            focusCard=DriveFocus.card(choice,offer);focusCardUntil=t+25
-            Log.i("LearnDriveFocus","Focus ${choice.topic.key} (${choice.why})")
-            DriveFocus.brief(choice,offer,voiceLanguage).also {b.text=it}
+            focusCard=DriveFocus.card(choice,offer)
+            Log.i("LearnDriveFocus","Focus ${if(choice.all)"all" else choice.topic.key} (${choice.why})")
+            DriveFocus.brief(choice,offer,voiceLanguage).also {b.text=it
+                // Rendered while the starting checks are said, so it is ready when its turn comes.
+                if(coachingSettings.voiceEnabled&&phoneVoice.canSpeak)phoneVoice.clipOnce(it)}
         }
-        // Said once, parked: on the move, or not ready in time, it stays on the screen only.
-        if(!coachingSettings.voiceEnabled||!phoneVoice.canSpeak||knownMoving()||t-b.chosenAt>12){b.done=true;phoneVoice.forget(text);return}
+        if(!mayTalk)return
+        if(b.sayFrom.isNaN()){b.sayFrom=t;focusCardUntil=t+25}
+        // Said once, parked: on the move, or not ready in time, it stays on the screen only (and moving
+        // off waits long enough for it to be read).
+        if(!coachingSettings.voiceEnabled||!phoneVoice.canSpeak||knownMoving()||t-b.sayFrom>12) {
+            b.done=true;phoneVoice.forget(text)
+            focusCardUntil=minOf(focusCardUntil,t+8);opening?.let {it.nextAt=maxOf(it.nextAt,t+8)}
+            return
+        }
+        if(audio.briefPlaying)return
         val pcm=phoneVoice.clipOnce(text)?:return
-        if(audio.submitBrief(pcm)){b.done=true;phoneVoice.forget(text);focusCardUntil=maxOf(focusCardUntil,t+pcm.bytes.size/(2.0*pcm.sampleRate)+2)}
+        if(audio.submitBrief(pcm)) {
+            val seconds=pcm.bytes.size/(2.0*pcm.sampleRate)
+            b.done=true;phoneVoice.forget(text);focusCardUntil=maxOf(focusCardUntil,t+seconds+2)
+            opening?.let {it.nextAt=maxOf(it.nextAt,t+seconds+1)}
+        }
+    }
+    /** The starting checks and moving off, one step at a time, parked: each said (or, with no voice,
+     * shown) and given time to do; moving off waits for today's focus. Moving ends it. */
+    private fun openingTick(t:Double) {
+        val o=opening?:return
+        if(o.done)return
+        // Moving: the learner is driving now. What is being said ends at its next pause.
+        if(knownMoving()){if(audio.briefPlaying)audio.finishBrief();o.done=true;o.shownUntil=minOf(o.shownUntil,t+3);return}
+        if(audio.briefPlaying||t<o.nextAt)return
+        val step=o.steps.getOrNull(o.index)?:run {o.done=true;return}
+        if(step.part==StartRoutine.Part.MOVE_OFF&&focusBrief?.done==false)return
+        o.shown=o.index
+        val talk=coachingSettings.voiceEnabled&&::phoneVoice.isInitialized&&phoneVoice.canSpeak
+        val pcm=if(talk)lineClip(step.say) else null
+        if(pcm==null) {
+            // Still being rendered: a moment's wait; then (or with no voice) on the screen only.
+            if(talk) {
+                if(o.waitingSince.isNaN())o.waitingSince=t
+                if(t-o.waitingSince<3){o.shownUntil=maxOf(o.shownUntil,t+1);return}
+            }
+            o.waitingSince=Double.NaN;o.index++;o.nextAt=t+4+step.pause;o.shownUntil=o.nextAt;return
+        }
+        // Anything the coach has to say goes first; this step waits for it.
+        if(!audio.submitBrief(pcm))return
+        o.waitingSince=Double.NaN;o.index++
+        o.nextAt=t+pcm.bytes.size/(2.0*pcm.sampleRate)+step.pause;o.shownUntil=o.nextAt
+    }
+    /** A starting line in the coach's voice: a recorded take of these words when the recorded voice is
+     * chosen and has one, else the phone's voice (null while it renders). */
+    private fun lineClip(text:String):ai.learndrive.mobile.audio.Pcm? {
+        if(voiceKind==RECORDED_VOICE)appVoice?.takeIf {it.complete}?.clip(text)?.let {return it}
+        return if(::phoneVoice.isInitialized)phoneVoice.clip(text) else null
+    }
+    /** The starting step on the coach card while it is said and done (instructions still take the card). */
+    private fun openingCard(t:Double):ai.learndrive.mobile.ui.CoachCard? {
+        val o=opening?:return null
+        val step=o.steps.getOrNull(o.shown)?:return null
+        if(t>=o.shownUntil)return null
+        val part=o.steps.filter {it.part==step.part}
+        return DriveCards.routine(if(step.part==StartRoutine.Part.CHECKS)"BEFORE YOU START" else "MOVING OFF",step.title,step.text,
+            part.map {it.title},part.indexOf(step))
     }
     private fun endRoadSession() {
         val review=finishPractice(false)
@@ -1107,14 +1198,14 @@ class MainActivity : ComponentActivity() {
         if(PracticeSessionReview.access(setup.isMonitoring(),knownMoving(),lastPracticeReview!=null,true)!=PracticeSessionReview.Access.READY)return
         val review=lastPracticeReview?:return
         val whole=review.text()+"\n\n"+LearnerReview.drive(lastLearnerSummary)
-        val focus=lastFocusResult
+        val focus=lastFocus
         if(focus==null) {
             presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Drive review").setMessage(whole).setPositiveButton("Done",null).create())
             return
         }
-        // The drive's one focus first; the whole drive's cues one tap away.
-        val extra=if(focus.topic==DriveFocus.Topic.ROAD_USERS)LearnerReview.status(lastLearnerSummary) else null
-        presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Today's focus: ${focus.topic.noun}")
+        // The drive's focus first (one skill, or every skill for "All"); the whole drive's cues one tap away.
+        val extra=if(DriveFocus.Topic.ROAD_USERS in focus.topics)LearnerReview.status(lastLearnerSummary) else null
+        presentSessionReviewDialog(android.app.AlertDialog.Builder(this).setTitle("Today's focus: ${focus.title}")
             .setMessage(DriveFocus.review(focus,extra)+"\n\n"+review.summary()).setPositiveButton("Done",null)
             .setNeutralButton("Whole drive") {_,_->presentSessionReviewDialog(android.app.AlertDialog.Builder(this)
                 .setTitle("Whole drive").setMessage(whole).setPositiveButton("Done",null).create())}.create())
@@ -1131,7 +1222,21 @@ class MainActivity : ComponentActivity() {
     private fun learnerRecords(id:String=learners.current.id)=getSharedPreferences(learners.storage(id).records,MODE_PRIVATE)
     private fun learnerFile(id:String=learners.current.id)=java.io.File(filesDir,learners.storage(id).recordPath)
     /** Setup's drive focus choices: the key kept in the learner's settings, and what they read. */
-    private val FOCUS_CHOICES=listOf("auto" to "Coach picks")+DriveFocus.Topic.entries.map {it.key to it.noun.replaceFirstChar {c->c.titlecase()}}
+    private val FOCUS_CHOICES=listOf("auto" to "Coach picks",ALL_FOCUS to "All")+DriveFocus.Topic.entries.map {it.key to it.noun.replaceFirstChar {c->c.titlecase()}}
+    /** The coach's voices, as Get ready offers them: language and kind, and what a learner reads. */
+    private val VOICE_CHOICES=listOf(Triple(ai.learndrive.mobile.audio.VoicePhrases.ENGLISH,RECORDED_VOICE,"English · recorded"),
+        Triple(ai.learndrive.mobile.audio.VoicePhrases.ENGLISH,PHONE_VOICE,"English · phone voice"),
+        Triple(ai.learndrive.mobile.audio.VoicePhrases.MALAYALAM,RECORDED_VOICE,"മലയാളം · recorded"),
+        Triple(ai.learndrive.mobile.audio.VoicePhrases.MALAYALAM,PHONE_VOICE,"മലയാളം · phone voice"))
+    private fun voiceChoiceIndex()=VOICE_CHOICES.indexOfFirst {it.first==voiceLanguage&&it.second==voiceKind}.coerceAtLeast(0)
+    private fun storedVoiceKind(settings:android.content.SharedPreferences)=settings.getString("voiceKind",null)?.takeIf {it==PHONE_VOICE}?:RECORDED_VOICE
+    /** A voice from Get ready or first open: its language (the voices start again) and kind (the order they speak in). Parked only. */
+    private fun setVoice(index:Int) {
+        val (language,kind,_)=VOICE_CHOICES.getOrNull(index)?:return
+        if(setup.isMonitoring()){updateSetupUi();return}
+        if(kind!=voiceKind){voiceKind=kind;learnerSettings().edit().putString("voiceKind",kind).apply();applyVoice()}
+        if(language!=voiceLanguage)setVoiceLanguage(language) else updateSetupUi()
+    }
     private fun focusChoiceIndex(settings:android.content.SharedPreferences)=
         FOCUS_CHOICES.indexOfFirst {it.first==settings.getString("driveFocus","auto")}.coerceAtLeast(0)
     /** The learner's own choice of focus, or null when the coach chooses. */
@@ -1222,11 +1327,13 @@ class MainActivity : ComponentActivity() {
         val stored=coachingPreferences.load()
         applyCoachingSettings(stored.profile,stored.voiceEnabled,stored.revision)
         core.learnerWaiting(settings.getBoolean("youFirst",true))
-        if(::audio.isInitialized)audio.naturalVoice=settings.getBoolean("naturalVoice",true)
         learningRecords=LearningRecordStore(learnerRecords(id))
-        lastPracticeReview=null;lastLearnerSummary=null;lastFocusResult=null
+        lastPracticeReview=null;lastLearnerSummary=null;lastFocus=null
         val language=storedVoiceLanguage(settings)
-        if(language!=voiceLanguage){voiceLanguage=language;restartPhoneVoice()}
+        val kind=storedVoiceKind(settings)
+        if(kind!=voiceKind){voiceKind=kind;applyVoice()}
+        // Another language, or another phone voice chosen for it: the voices start again.
+        if(language!=voiceLanguage||preferredPhoneVoice(id,language)!=phoneVoiceChosen){voiceLanguage=language;restartPhoneVoice()}
         // Get ready shows the new learner's choices from their state (updateSetupUi); an open page is built again for them.
         pageKind?.let(::openPage)
         updateSetupUi()
@@ -1316,9 +1423,10 @@ class MainActivity : ComponentActivity() {
             !coachingSettings.voiceEnabled->"Voice off · instructions on screen only"
             !audio.ready->"$audioStatus · instructions on screen meanwhile"
             // The recorded voice while it unpacks (the first start of a version), or what went wrong.
-            appVoice!=null&&!appVoice!!.complete->appVoiceStatus.ifBlank {"Coach voice: preparing"}
-            appVoice!=null&&appVoice!!.missing>0->"Ready · ${appVoice!!.missing} phrases in the artificial voice"
-            // Malayalam until it is rendered: its progress, or what is missing (English speaks meanwhile).
+            recordedVoiceSpeaks()&&!appVoice!!.complete->appVoiceStatus.ifBlank {"Coach voice: preparing"}
+            recordedVoiceSpeaks()&&appVoice!!.missing>0->"Ready · ${appVoice!!.missing} phrases in the phone voice"
+            // The phone's voice until it is rendered: its progress, or what is missing (English recordings speak meanwhile).
+            !recordedVoiceSpeaks()&&!phoneVoice.complete->voiceStatus
             voiceLanguage!=ai.learndrive.mobile.audio.VoicePhrases.ENGLISH&&!phoneVoice.complete->voiceStatus
             else->"Ready · tap to hear it"
         }
@@ -1365,10 +1473,9 @@ class MainActivity : ComponentActivity() {
     /** Get ready shows the learner's choices as they are now, and takes changes only parked. */
     private fun refreshBefore(editable:Boolean) {
         if(!::before.isInitialized)return
-        val languages=ai.learndrive.mobile.audio.VoicePhrases.languages
         val level=coachingSettings.profile
         before.level.select(ParkedFlow.LEVELS.indexOf(level));before.levelLine.setUiText(ParkedFlow.levelLine(level))
-        before.voice.select(languages.indexOfFirst {it.first==voiceLanguage}.coerceAtLeast(0))
+        before.voice.select(voiceChoiceIndex())
         val note=voiceNote();before.voiceNote.setUiText(note.orEmpty());before.voiceNote.visibility=if(note==null)View.GONE else View.VISIBLE
         before.getVoice.visibility=if(canGetVoice())View.VISIBLE else View.GONE
         val focus=focusChoiceIndex(learnerSettings());before.focus.select(focus);before.focusLine.setUiText(focusLine(focus))
@@ -1378,26 +1485,48 @@ class MainActivity : ComponentActivity() {
     /** What today's focus choice means, in one line. */
     private fun focusLine(index:Int):String {
         val routed=useGoogle&&googleNavigation?.state?.let {it.routeReady||it.guiding}==true
-        val topic=DriveFocus.Topic.of(FOCUS_CHOICES.getOrNull(index)?.first)
+        val key=FOCUS_CHOICES.getOrNull(index)?.first
+        val topic=DriveFocus.Topic.of(key)
         return when {
+            key==ALL_FOCUS->"The coach covers everything, and the review after the drive goes through every hill, bend, turn and road user."+
+                if(routed)"" else " Without a destination, only road users can be measured."
             topic==null->"The coach picks one from your route and your last drives. The review after the drive is about it."
             topic==DriveFocus.Topic.ROAD_USERS->"Every drive focuses on road users. The review after the drive is about them."
             !routed->"${topic.noun.replaceFirstChar {it.titlecase()}} need a Google destination. Without one, the focus is road users."
             else->"Every drive focuses on ${topic.noun} when the route has them; otherwise the coach picks."
         }
     }
-    /** A line under the coach's voice, only when there is something to know. */
+    /** The recorded voice is chosen and the app has one in this language. */
+    private fun recordedVoiceSpeaks()=voiceKind==RECORDED_VOICE&&appVoice!=null
+    /** The line under the coach's voice: which voice it is, or what to know about it. */
     private fun voiceNote():String?=when {
         !coachingSettings.voiceEnabled->"The coach's voice is off (Settings): instructions show on screen only."
-        voiceLanguage!=ai.learndrive.mobile.audio.VoicePhrases.ENGLISH&&::phoneVoice.isInitialized&&!phoneVoice.complete->voiceStatus
-        else->null
+        voiceKind==RECORDED_VOICE&&appVoice==null->"There is no recording in this language yet: the phone voice speaks."
+        ::phoneVoice.isInitialized&&!phoneVoice.complete&&(!recordedVoiceSpeaks()||voiceLanguage!=ai.learndrive.mobile.audio.VoicePhrases.ENGLISH)->voiceStatus
+        voiceKind==RECORDED_VOICE->"A real person's recorded voice. New sentences, such as the starting checks, are in the phone voice."
+        else->"The phone's own friendly voice"+(if(::phoneVoice.isInitialized)phoneVoice.description?.let {" · $it"}.orEmpty() else "")+". Another one: Settings."
     }
     private fun canGetVoice()=voiceLanguage!=ai.learndrive.mobile.audio.VoicePhrases.ENGLISH&&::phoneVoice.isInitialized&&phoneVoice.missingVoice
-    /** A sample of the coach's voice in its language: the sound check. */
-    private fun hearVoice() {
+    /** A sample of the coach's voice as chosen: the recorded voice's own take, or a sentence in the
+     * phone's voice rendered now (so a newly chosen phone voice can be heard straight away). */
+    private fun hearVoice(phone:Boolean=false) {
         if(!::audio.isInitialized||setup.isMonitoring())return
         audio.cancel()
-        if(!audio.submit(2))status.text="Voice unavailable: $audioStatus · check media volume"
+        if((phone||!recordedVoiceSpeaks())&&::phoneVoice.isInitialized&&phoneVoice.canSpeak) {
+            // Not one of the coach's phrases: those stay rendered and kept as they are.
+            pendingSample=if(voiceLanguage==ai.learndrive.mobile.audio.VoicePhrases.MALAYALAM)"നമസ്കാരം! ഞാൻ നിങ്ങളുടെ ഡ്രൈവിംഗ് കോച്ചാണ്. നമുക്ക് ഒരുമിച്ച് സുരക്ഷിതമായി ഓടിക്കാം."
+                else "Hello! I'm your driving coach. Let's drive safely together."
+            pendingSampleSince=now();sampleTick()
+        }
+        else if(!audio.submit(2))status.text="Voice unavailable: $audioStatus · check media volume"
+    }
+    /** Says the phone-voice sample once it is rendered (given up after 6 s). */
+    private fun sampleTick() {
+        val text=pendingSample?:return
+        if(setup.isMonitoring()||now()-pendingSampleSince>6){pendingSample=null;phoneVoice.forget(text);return}
+        val pcm=phoneVoice.clipOnce(text)?:return
+        pendingSample=null;phoneVoice.forget(text)
+        if(!audio.submitBrief(pcm))status.text="Voice unavailable: $audioStatus · check media volume"
     }
     /** A coaching level the learner chose (Get ready, first open, or the hint in Progress), from now on. */
     private fun chooseLevel(profile:CoachingProfile) {
@@ -1431,11 +1560,10 @@ class MainActivity : ComponentActivity() {
     private fun showOnboarding() {
         if(onboarding!=null)return
         showSetup=false;showDestination=false
-        val languages=ai.learndrive.mobile.audio.VoicePhrases.languages
         val view=ai.learndrive.mobile.ui.Onboarding(this,object:ai.learndrive.mobile.ui.Onboarding.Host {
-            override fun languages()=languages
-            override fun language()=voiceLanguage
-            override fun setLanguage(code:String)=setVoiceLanguage(code)
+            override fun voices()=VOICE_CHOICES.map {it.third}
+            override fun voice()=voiceChoiceIndex()
+            override fun setVoice(index:Int)=this@MainActivity.setVoice(index)
             override fun hear()=hearVoice()
             override fun voiceNote()=this@MainActivity.voiceNote()
             override fun canGetVoice()=this@MainActivity.canGetVoice()
@@ -1518,8 +1646,22 @@ class MainActivity : ComponentActivity() {
         p.paragraph("Once your record over several drives shows that you slow for road users, the coach leaves out what your speed shows you have already done. If you have not slowed, you are told in full, and \"Brake now\" is never left out.",CoachStyle.muted,13f)
         p.switch("The coach's voice",coachingSettings.voiceEnabled) {on->changeCoachingSettings(coachingSettings.profile,on);updateSetupUi()}
         p.paragraph("Off: instructions show on screen only.",CoachStyle.muted,13f)
-        p.section("Voice")
-        p.switch("Natural phone voice",s.getBoolean("naturalVoice",true)) {on->if(::audio.isInitialized)audio.naturalVoice=on;learnerSettings().edit().putBoolean("naturalVoice",on).apply()}
+        p.switch("Starting checks before each drive",s.getBoolean("startChecks",true)) {on->learnerSettings().edit().putBoolean("startChecks",on).apply()}
+        p.paragraph("Parked, after Start: the checks before you start the engine, then today's focus, then how to move off. How much is said follows the coaching level.",CoachStyle.muted,13f)
+        p.section("Phone voice")
+        val names=if(::phoneVoice.isInitialized)phoneVoice.voiceNames else emptyList()
+        val current=if(::phoneVoice.isInitialized)names.indexOf(phoneVoice.voiceName) else -1
+        p.paragraph(when {
+            !::phoneVoice.isInitialized||phoneVoice.missingVoice->"The phone has no ${ai.learndrive.mobile.audio.VoicePhrases.name(voiceLanguage)} voice of its own yet."
+            current<0->"Getting the phone's voices ready… Open Settings again in a moment."
+            else->"${ai.learndrive.mobile.audio.VoicePhrases.name(voiceLanguage)}: voice ${current+1} of ${names.size}"+(phoneVoice.description?.let {" · $it"}.orEmpty())
+        })
+        p.paragraph("The voice the coach uses when you choose the phone voice, and for new sentences such as the starting checks. Android does not say which voices are which, so listen and keep the one you like best: a new voice takes a minute to prepare every phrase.",CoachStyle.muted,13f)
+        if(names.size>1)p.button("Try the next phone voice") {
+            val next=names[(current+1).mod(names.size)]
+            learnerSettings().edit().putString("phoneVoice.$voiceLanguage",next).apply();restartPhoneVoice();openPage("settings")
+        }
+        p.button("Hear the phone voice") {hearVoice(phone=true)}
         p.paragraph("Malayalam is spoken by the phone's Google voice. If it is missing, get it here (or in Android Settings › Text-to-speech); until it is ready the English recordings speak.",CoachStyle.muted,13f)
         p.button("Get the Malayalam voice") {installVoiceData()}
         p.section("Your car")
@@ -2211,7 +2353,9 @@ class MainActivity : ComponentActivity() {
                     else DriveCards.fromText(caption.text,caption.origin,caption.ageSeconds)
                 roadSource()&&!setup.isMonitoring()->DriveCards.parked("Your next session starts here.",
                     if(useGoogle&&googleNavigation?.state?.routeReady==true)"Route ready. Tap Get ready to start." else "Choose a destination, or practise without one.")
-                // The drive's focus while it is briefed (an instruction takes the card, above).
+                // The starting checks and moving off, step by step, then the drive's focus while it is
+                // briefed (an instruction takes the card, above).
+                roadSource()&&openingCard(visionNow)!=null->openingCard(visionNow)!!
                 roadSource()&&focusCard!=null&&visionNow<focusCardUntil->focusCard!!.let {DriveCards.focus(it.first,it.second)}
                 // An instruction left unsaid because the learner slowed first is shown, never hidden:
                 // the coach has seen the road user (silence is not an all-clear).
@@ -2232,6 +2376,7 @@ class MainActivity : ComponentActivity() {
                 options.filmedVideo->DriveCards.idle("Screen test · recorded scene only","")
                 else->DriveCards.idle(roadHealth.idleCaption,"")
             })
+            sampleTick()
             updateSetupUi()
             if(showLab||mode!="Camera")updateEvidenceUi()
             main.postDelayed(this,50)
@@ -2253,3 +2398,8 @@ class MainActivity : ComponentActivity() {
     override fun onLowMemory(){super.onLowMemory();if(::pretrained.isInitialized)pretrained.setEnabled(false);if(::routeMap.isInitialized)routeMap.onLowMemory();googleNavigation?.onLowMemory()}
     override fun onDestroy() {if(::phoneVoice.isInitialized)phoneVoice.close();appVoice?.close();if(::roads.isInitialized)roads.close();if(::pretrained.isInitialized)pretrained.close();getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displayListener);stopEvidence("activity_destroyed");googleNavigation?.close(isChangingConfigurations);googleNavigation=null;routeElevation?.close();routeElevation=null;destinationPanel.close();routeMap.close();evidenceIo.shutdown();audio.close();sensors.close();player?.close();ruleThread.quitSafely();inference.execute {vision?.close();core.close()};inference.shutdown();main.removeCallbacksAndMessages(null);super.onDestroy()}
 }
+
+// Choices kept in a learner's settings: the coach's voice ("voiceKind") and "All" for today's focus ("driveFocus").
+private const val RECORDED_VOICE="recorded"
+private const val PHONE_VOICE="phone"
+private const val ALL_FOCUS="all"

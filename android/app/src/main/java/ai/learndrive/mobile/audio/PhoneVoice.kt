@@ -19,9 +19,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * speak, so one drive never mixes two voices.
  *
  * [language] picks the voice ("en", or "ml" for Malayalam); the texts given are already in it
- * ([VoicePhrases]). Each language keeps its own rendered clips.
+ * ([VoicePhrases]). Each language keeps its own rendered clips. [preferred]: the phone voice the
+ * learner picked by name; without one, Google's own default voice for India, the friendly voice its
+ * apps speak with.
  */
-class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLISH,private val status:(String)->Unit):CoachVoice,AutoCloseable {
+class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLISH,private val preferred:String?=null,
+    private val status:(String)->Unit):CoachVoice,AutoCloseable {
     private val folder=if(language==VoicePhrases.ENGLISH)"phone-voice" else "phone-voice-$language"
     private val directory=File(context.noBackupFilesDir,folder).apply {mkdirs()}
     private val scratch=File(context.cacheDir,folder).apply {mkdirs()}
@@ -49,6 +52,9 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
     @Volatile private var closed=false
     @Volatile private var ready=false
     @Volatile var description:String?=null;private set
+    /** The phone's offline voices in [language], best first, and the one speaking (null until set up). */
+    @Volatile var voiceNames:List<String> = emptyList();private set
+    @Volatile var voiceName:String?=null;private set
     /** True when the phone has no offline voice for [language] (it can be installed, then retried). */
     @Volatile var missingVoice=false;private set
     /** True once every required phrase has a rendered clip. */
@@ -115,7 +121,9 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
         val engine=tts?:return
         if(closed)return
         if(code!=TextToSpeech.SUCCESS){missingVoice=true;status(unavailable());return}
-        val voice=runCatching {choose(engine.voices.orEmpty())}.getOrNull()
+        val ranked=runCatching {ranked(engine.voices.orEmpty())}.getOrDefault(emptyList())
+        voiceNames=ranked.map {it.name}
+        val voice=runCatching {choose(engine,ranked)}.getOrNull()
         if(voice==null||engine.setVoice(voice)!=TextToSpeech.SUCCESS) {
             missingVoice=true
             status(if(language==VoicePhrases.ENGLISH)"No offline English voice on this phone · built-in voice"
@@ -132,17 +140,27 @@ class PhoneVoice(context:Context,override val language:String=VoicePhrases.ENGLI
         })
         val engineName=if(runCatching {engine.engines.any {it.name==GOOGLE}}.getOrDefault(false))GOOGLE else engine.defaultEngine?:"default"
         description=voice.locale.displayName+(if(engineName==GOOGLE)" · Google" else "")
+        voiceName=voice.name
         voiceKey="v1|$engineName|${voice.name}"
         status("$label: preparing ${voice.locale.displayName}")
         for(text in requested)post {prepare(text)}
     }
 
-    /** An offline voice in [language]: India first (the learners' accent), then UK, then US. */
-    private fun choose(voices:Set<Voice>):Voice? {
+    /** The offline voices in [language], best first: India first (the learners' accent), then UK, then US. */
+    private fun ranked(voices:Set<Voice>):List<Voice> {
         val usable=voices.filter {v->v.locale.language==language&&!v.isNetworkConnectionRequired&&
             !v.features.orEmpty().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)}
         fun region(v:Voice)=when(v.locale.country){"IN"->0;"GB"->1;"US"->2;else->3}
-        return usable.minWithOrNull(compareBy<Voice>({region(it)},{-it.quality},{it.latency},{it.name}))
+        return usable.sortedWith(compareBy<Voice>({region(it)},{-it.quality},{it.latency},{it.name}))
+    }
+
+    /** The learner's own pick; else the engine's default voice for India in [language] (the one Google
+     * speaks with itself, when it is offline); else the best ranked. */
+    private fun choose(engine:TextToSpeech,ranked:List<Voice>):Voice? {
+        preferred?.let {name->ranked.firstOrNull {it.name==name}?.let {return it}}
+        val default=runCatching {engine.setLanguage(java.util.Locale(language,"IN"));engine.voice}.getOrNull()
+        default?.let {d->ranked.firstOrNull {it.name==d.name}?.let {return it}}
+        return ranked.firstOrNull()
     }
 
     private fun file(text:String):File {

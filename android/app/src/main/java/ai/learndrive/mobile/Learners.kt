@@ -96,7 +96,8 @@ class Learners(private val store:KeyValue,private val newId:()->String=::randomI
         const val MAX_NAME=30
         const val MAX_LEARNERS=30
         /** The learner's own keys in the shared pre-0.9.8 settings (the rest belong to the phone or car). */
-        val LEGACY_SETTINGS=listOf("coachingProfile","coachingVoice","coachingRevision","youFirst","naturalVoice","voiceLanguage","driveFocus","paidUntil","paidCheckedAt")
+        val LEGACY_SETTINGS=listOf("coachingProfile","coachingVoice","coachingRevision","youFirst","naturalVoice","voiceLanguage","driveFocus","paidUntil","paidCheckedAt",
+            "voiceKind","startChecks","levelSince","phoneVoice.en","phoneVoice.ml")
         private const val IDS="ids"
         private const val NAME="name."
         private const val CURRENT="current"

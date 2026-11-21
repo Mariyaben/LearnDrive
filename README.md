@@ -1,6 +1,20 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.10.0 (experimental, host-tested only).** As 0.9.9, with a parked
+**Current Android candidate: 0.11.0 (experimental, host-tested only).** As 0.10.0, and:
+four voices, English or Malayalam in the recorded voice or the phone's own voice (Google's default
+voice for India unless the learner picks another in Settings, by ear; Hear it plays the voice
+chosen). Today's focus gains "All": the brief names every skill and what the route holds, and the
+review goes through every hill, bend, turn and road user (while driving the coach always covered
+everything, whatever the focus). At the start of a drive, parked, the coach says the checks before
+starting the engine (doors, seat, steering, seat belt, mirrors, handbrake and neutral or P, the
+engine and its warning lights), then today's focus, then how to move off (first gear and the
+biting point, the mirrors and a look over the right shoulder, a signal if it would help anyone,
+handbrake off, move off gently; an automatic: foot on the brake, D). Taught as in the UK DVSA
+syllabus, where traffic also keeps left. Guided says every step with time to do it, Balanced one
+sentence for each part, Minimal a reminder; manual and automatic cars differ; moving off ends it.
+Settings › Coach turns it off.
+
+0.10.0: as 0.9.9, with a parked
 screen a new learner can follow; the drive screen is unchanged. First open asks six things, one per
 screen: what LearnDrive is (with a licensed driver beside you; silence never means the road is
 clear), the coach's language (English or Malayalam, with a sample to hear), the learner's name, a

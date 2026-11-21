@@ -103,8 +103,15 @@ object DriveFocus {
 
     enum class Why {FIRST,NEXT,AGAIN,CHOSEN,NOT_ON_ROUTE}
     /** This drive's focus, and why: the first, the next skill, the same again, the learner's choice, or
-     * the learner's choice ([wanted]) is not on this route. [last]: the drive it repeats. */
-    data class Choice(val topic:Topic,val why:Why,val wanted:Topic?=null,val last:Past?=null)
+     * the learner's choice ([wanted]) is not on this route. [last]: the drive it repeats. [all]: the
+     * learner chose "All": every skill is briefed, measured and reviewed ([topic] is then unused). */
+    data class Choice(val topic:Topic,val why:Why,val wanted:Topic?=null,val last:Past?=null,val all:Boolean=false) {
+        val topics:List<Topic> get()=if(all)Topic.entries else listOf(topic)
+        companion object {
+            /** "All": the drive covers every skill, as the coach did before drives had one focus. */
+            fun everything()=Choice(Topic.ROAD_USERS,Why.CHOSEN,all=true)
+        }
+    }
 
     private fun available(topic:Topic,offer:Offer,wanted:Boolean):Boolean {
         if(topic==Topic.ROAD_USERS)return true
@@ -118,37 +125,53 @@ object DriveFocus {
      * route has most of), else the one that went least well, not the same as last time. */
     fun choose(offer:Offer,history:List<Past>,wanted:Topic?):Choice {
         if(wanted!=null&&available(wanted,offer,true))return Choice(wanted,Why.CHOSEN)
-        val last=history.lastOrNull()
-        val pick=if(last!=null&&available(last.topic,offer,false)&&last.measured>=2&&2*last.good<last.measured)
-            Choice(last.topic,Why.AGAIN,last=last)
+        val drives=drives(history)
+        // The last drive: its one skill, or every skill measured on an "All" drive (then the one that went worst).
+        val last=drives.lastOrNull().orEmpty()
+        val again=last.filter {available(it.topic,offer,false)&&it.measured>=2&&2*it.good<it.measured}.minByOrNull {it.good.toDouble()/it.measured}
+        val pick=if(again!=null)Choice(again.topic,Why.AGAIN,last=again)
         else {
             val open=Topic.entries.filter {available(it,offer,false)}
             val fresh=open.filter {t->history.none {it.topic==t}}
+            val lastTopics=last.map {it.topic}.toSet()
             val topic=if(fresh.isNotEmpty())fresh.maxBy {offer.count(it)?:0}
-            else open.filter {it!=last?.topic}.ifEmpty {open}.minWith(compareBy<Topic>({ratio(history,it)},{-ago(history,it)}))
+            else open.filter {it !in lastTopics}.ifEmpty {open}.minWith(compareBy<Topic>({ratio(history,it)},{-ago(drives,it)}))
             Choice(topic,if(history.isEmpty())Why.FIRST else Why.NEXT)
         }
         return if(wanted!=null)pick.copy(why=Why.NOT_ON_ROUTE,wanted=wanted,last=null) else pick
     }
     private fun ratio(history:List<Past>,topic:Topic)=history.lastOrNull {it.topic==topic}?.let {if(it.measured>0)it.good.toDouble()/it.measured else .5}?:.5
-    private fun ago(history:List<Past>,topic:Topic)=history.size-1-history.indexOfLast {it.topic==topic}
+    /** How many drives ago [topic] was last practised (never: more than any). */
+    private fun ago(drives:List<List<Past>>,topic:Topic)=drives.size-1-drives.indexOfLast {d->d.any {it.topic==topic}}
 
-    /** One focused drive as kept for the learner: the skill and how many of each outcome, nothing else. */
-    data class Past(val topic:Topic,val outcomes:Map<Outcome,Int>,val at:Long) {
+    /** The history as drives, oldest first: an "All" drive's skills together, every other entry a drive of its own. */
+    fun drives(history:List<Past>):List<List<Past>> {
+        val out=ArrayList<MutableList<Past>>()
+        for(p in history) {
+            val previous=out.lastOrNull()?.lastOrNull()
+            if(p.all&&previous!=null&&previous.all&&previous.at==p.at)out.last()+=p else out+=mutableListOf(p)
+        }
+        return out
+    }
+
+    /** One focused drive as kept for the learner: the skill and how many of each outcome, nothing else.
+     * [all]: one of the skills of an "All" drive (kept as "hills*"; the drive's other skills share [at]). */
+    data class Past(val topic:Topic,val outcomes:Map<Outcome,Int>,val at:Long,val all:Boolean=false) {
         val measured:Int get()=outcomes.values.sum()
         val good:Int get()=outcomes.entries.sumOf {if(it.key.good)it.value else 0}
-        fun encode():String=topic.key+"|"+at+"|"+outcomes.entries.joinToString(",") {"${it.key.key}=${it.value}"}
+        fun encode():String=topic.key+(if(all)"*" else "")+"|"+at+"|"+outcomes.entries.joinToString(",") {"${it.key.key}=${it.value}"}
         companion object {
             fun decode(line:String):Past? {
                 val parts=line.trim().split('|');if(parts.size!=3)return null
-                val topic=Topic.of(parts[0])?:return null;val at=parts[1].toLongOrNull()?:return null
+                val all=parts[0].endsWith("*")
+                val topic=Topic.of(parts[0].removeSuffix("*"))?:return null;val at=parts[1].toLongOrNull()?:return null
                 val outcomes=LinkedHashMap<Outcome,Int>()
                 if(parts[2].isNotEmpty())for(item in parts[2].split(',')) {
                     val pair=item.split('=');if(pair.size!=2)return null
                     val n=pair[1].toIntOrNull()?.takeIf {it in 0..10000}?:return null
                     Outcome.of(pair[0])?.takeIf {it.topic==topic}?.let {outcomes[it]=n}
                 }
-                return Past(topic,outcomes,at)
+                return Past(topic,outcomes,at,all)
             }
         }
     }
@@ -157,11 +180,22 @@ object DriveFocus {
 
     /** About 20 seconds, said parked before the drive: the focus, what the route holds of it, how to
      * drive it, and that the review will go through it. In the coach's voice language. */
-    fun brief(choice:Choice,offer:Offer,language:String):String=
-        if(language==ai.learndrive.mobile.audio.VoicePhrases.MALAYALAM)Malayalam.brief(choice,offer) else English.brief(choice,offer)
+    fun brief(choice:Choice,offer:Offer,language:String):String=when {
+        language==ai.learndrive.mobile.audio.VoicePhrases.MALAYALAM->if(choice.all)Malayalam.everything(offer) else Malayalam.brief(choice,offer)
+        choice.all->English.everything(offer)
+        else->English.brief(choice,offer)
+    }
 
     /** The brief on the coach card while it is said: a title and what the route holds. */
     fun card(choice:Choice,offer:Offer):Pair<String,String> {
+        if(choice.all) {
+            fun part(km:Int?)=km?.let {" (first $it km)"}.orEmpty()
+            val route=listOfNotNull(offer.climbs?.takeIf {it>0}?.let {plural(it,"climb")+part(offer.hillsKm)},
+                offer.descents?.takeIf {it>0}?.let {plural(it,"descent")+part(offer.hillsKm)},
+                offer.bends?.takeIf {it>0}?.let {plural(it,"bend")+part(offer.bendsKm)},offer.turns?.takeIf {it>0}?.let {plural(it,"turn")})
+            return "Today's focus: everything" to
+                if(route.isEmpty())(if(offer.routed)"Hills, bends, turns and road users" else "Road users: no destination, so no route to read") else (route+"road users").joinToString(" · ")
+        }
         val n=offer.count(choice.topic)
         val where=offer.partKm(choice.topic)?.let {" in the first $it km of your route"}?:" on your route"
         val detail=when(choice.topic) {
@@ -199,6 +233,20 @@ object DriveFocus {
             counted(c.topic,o)?.let {out+=it}
             out+=technique(c.topic,o)
             out+=if(c.topic==Topic.ROAD_USERS)"After the drive, you'll see how often you slowed first." else "After the drive, we'll go through each one."
+            return out.joinToString(" ")
+        }
+        /** "All": every skill, what the route holds (only when it is known for all of the route), and one line on driving them. */
+        fun everything(o:Offer):String {
+            val out=ArrayList<String>()
+            out+="Today's focus is everything: hills, bends, turns and road users."
+            if(o.hillsKm==null&&o.bendsKm==null) {
+                val parts=listOfNotNull(o.climbs?.takeIf {it>0}?.let {count(it,"climb")},o.descents?.takeIf {it>0}?.let {count(it,"descent")},
+                    o.bends?.takeIf {it>0}?.let {count(it,"bend")},o.turns?.takeIf {it>0}?.let {count(it,"turn")})
+                if(parts.isNotEmpty())out+="Your route has "+(if(parts.size<2)parts[0] else parts.dropLast(1).joinToString(", ")+" and "+parts.last())+"."
+            }
+            if(!o.routed)out+="Without a destination, the review can only measure road users, but I'll coach you on everything I see."
+            out+="Slow down early for every bend and turn, keep a steady speed on hills, and watch far ahead for people and vehicles."
+            out+="After the drive, we'll go through each one."
             return out.joinToString(" ")
         }
         private fun opening(c:Choice,o:Offer):String=when(c.why) {
@@ -266,6 +314,29 @@ object DriveFocus {
             counted(c.topic,o)?.let {out+=it}
             out+=technique(c.topic,o)
             out+=if(c.topic==Topic.ROAD_USERS)"ഡ്രൈവ് കഴിഞ്ഞ്, എത്ര തവണ നിങ്ങൾ ആദ്യം വേഗം കുറച്ചു എന്ന് നോക്കാം." else "ഡ്രൈവ് കഴിഞ്ഞ് ഓരോന്നും നമുക്ക് ഒരുമിച്ച് നോക്കാം."
+            return out.joinToString(" ")
+        }
+        /** A noun as counted: one, one with "and" (-ഉം), many, many with "and". */
+        private class Noun(val one:String,val oneAnd:String,val many:String,val manyAnd:String)
+        private val CLIMB=Noun("കയറ്റം","കയറ്റവും","കയറ്റങ്ങൾ","കയറ്റങ്ങളും")
+        private val DESCENT=Noun("ഇറക്കം","ഇറക്കവും","ഇറക്കങ്ങൾ","ഇറക്കങ്ങളും")
+        private val BEND=Noun("വളവ്","വളവും","വളവുകൾ","വളവുകളും")
+        private val TURN=Noun("തിരിവ്","തിരിവും","തിരിവുകൾ","തിരിവുകളും")
+        /** "All", as [English.everything] says it. */
+        fun everything(o:Offer):String {
+            val out=ArrayList<String>()
+            out+="ഇന്നത്തെ ഡ്രൈവിൽ ശ്രദ്ധ എല്ലാത്തിലുമാണ്: കയറ്റിറക്കങ്ങൾ, വളവുകൾ, തിരിവുകൾ, റോഡിലെ മറ്റുള്ളവർ."
+            if(o.hillsKm==null&&o.bendsKm==null) {
+                val items=listOfNotNull(o.climbs?.takeIf {it>0}?.let {it to CLIMB},o.descents?.takeIf {it>0}?.let {it to DESCENT},
+                    o.bends?.takeIf {it>0}?.let {it to BEND},o.turns?.takeIf {it>0}?.let {it to TURN})
+                // Several are joined by -ഉം on each, as the hills sentence does; one stands alone.
+                val and=items.size>1
+                if(items.isNotEmpty())out+="നിങ്ങളുടെ റൂട്ടിൽ "+items.joinToString(" ") {(k,w)->
+                    if(k==1)"ഒരു "+(if(and)w.oneAnd else w.one) else "${n(k)} "+(if(and)w.manyAnd else w.many)}+" ഉണ്ട്."
+            }
+            if(!o.routed)out+="ലക്ഷ്യസ്ഥാനം നൽകാത്തതിനാൽ, ഡ്രൈവിന് ശേഷം റോഡിലെ മറ്റുള്ളവരുടെ കാര്യം മാത്രമേ അളക്കാനാകൂ. എങ്കിലും ഞാൻ കാണുന്നതെല്ലാം പറഞ്ഞുതരാം."
+            out+="ഓരോ വളവിനും തിരിവിനും നേരത്തെ തന്നെ വേഗം കുറയ്ക്കുക, കയറ്റങ്ങളിൽ ഒരേ വേഗം പിടിക്കുക, ദൂരേക്ക് നോക്കി ആളുകളെയും വാഹനങ്ങളെയും ശ്രദ്ധിക്കുക."
+            out+="ഡ്രൈവ് കഴിഞ്ഞ് ഓരോന്നും നമുക്ക് ഒരുമിച്ച് നോക്കാം."
             return out.joinToString(" ")
         }
         private fun focus(t:Topic)="ഇന്നത്തെ ഡ്രൈവിൽ ശ്രദ്ധ ${FOCUS.getValue(t)}."
@@ -537,10 +608,53 @@ object DriveFocus {
         private fun pct(grade:Double)=abs(grade).roundToInt()
     }
 
+    /** One drive's focus measured: a tracker for its skill, or one for every skill on an "All" drive. */
+    class Session(val choice:Choice,offer:Offer) {
+        private val trackers=choice.topics.map {Tracker(it,offer.count(it))}
+        fun route(route:Route)=trackers.forEach {it.route(route)}
+        fun turn(step:Int?,kind:Turn?,distance:Double?,receivedAt:Double)=trackers.forEach {it.turn(step,kind,distance,receivedAt)}
+        fun sample(time:Double,here:Route?,speedValid:Boolean,speedKmh:Double)=trackers.forEach {it.sample(time,here,speedValid,speedKmh)}
+        fun finish(roadUsers:IntArray?=null)=Drive(choice.all,trackers.map {it.finish(roadUsers)})
+    }
+
+    /** What a drive's focus came to: one result, or every skill's on an "All" drive. */
+    class Drive(val all:Boolean,val results:List<Result>) {
+        val title:String get()=if(all)"everything" else results.first().topic.noun
+        val measured:Int get()=results.sumOf {it.measured}
+        val topics:List<Topic> get()=results.map {it.topic}
+        /** As kept for the learner: the skill's result; on an "All" drive each skill that had something measured. */
+        fun past(at:Long):List<Past> =if(all)results.filter {it.measured>0}.map {Past(it.topic,it.tallies,at,true)} else results.map {it.past(at)}
+    }
+
     // ------------------------------------------------------------------ the review
+
+    /** The review of a drive's focus: one skill as [review] below, or every skill on an "All" drive,
+     * each under its name, then one thing for next time. [extra]: lines added at the end. */
+    fun review(d:Drive,extra:String?=null):String {
+        if(!d.all)return review(d.results.first(),extra)
+        val out=StringBuilder()
+        for(r in d.results)out.append(r.topic.noun.uppercase()).append('\n').append(section(r)).append("\n\n")
+        val tallies=d.results.flatMap {it.tallies.entries}.groupBy({it.key},{it.value}).mapValues {it.value.sum()}
+        out.append(tip(tallies,d.measured,Topic.ROAD_USERS,all=true))
+        out.append("\n\n").append(CAVEAT_ROUTE)
+        extra?.takeIf {it.isNotBlank()}?.let {out.append("\n\n").append(it)}
+        return out.toString()
+    }
+
+    private const val CAVEAT_ROUTE="Measured from your speed and the route only, and the route's positions and heights are approximate. The phone cannot see your gears, pedals or where you looked, or why you slowed: an observation, not a driving grade."
+    private const val CAVEAT_ROAD_USERS="Measured from your speed only. The app cannot see where you looked, why you slowed or what your feet did: an observation, not a driving grade."
 
     /** The session review for the drive's focus (English, on screen). [extra]: lines added at the end. */
     fun review(r:Result,extra:String?=null):String {
+        val out=StringBuilder(section(r))
+        out.append("\n\n").append(tip(r.tallies,r.measured,r.topic))
+        out.append("\n\n").append(if(r.topic==Topic.ROAD_USERS)CAVEAT_ROAD_USERS else CAVEAT_ROUTE)
+        extra?.takeIf {it.isNotBlank()}?.let {out.append("\n\n").append(it)}
+        return out.toString()
+    }
+
+    /** What was driven and measured of one skill, item by item. */
+    private fun section(r:Result):String {
         val out=StringBuilder()
         val noun=r.topic.noun
         when(r.topic) {
@@ -563,11 +677,6 @@ object DriveFocus {
                 if(measured>0)out.append("\n\n").append(summary(r))
             }
         }
-        out.append("\n\n").append(tip(r))
-        out.append("\n\n").append(if(r.topic==Topic.ROAD_USERS)
-            "Measured from your speed only. The app cannot see where you looked, why you slowed or what your feet did: an observation, not a driving grade."
-            else "Measured from your speed and the route only, and the route's positions and heights are approximate. The phone cannot see your gears, pedals or where you looked, or why you slowed: an observation, not a driving grade.")
-        extra?.takeIf {it.isNotBlank()}?.let {out.append("\n\n").append(it)}
         return out.toString()
     }
 
@@ -586,11 +695,15 @@ object DriveFocus {
         }
     }
 
-    /** One thing for next time: about what went wrong most often. */
-    private fun tip(r:Result):String {
-        if(r.measured==0)return if(r.topic==Topic.ROAD_USERS)"Next time: watch far ahead, and ease off as soon as someone may need room."
-            else "Next time: drive the route with the destination set, so each one can be measured."
-        val bad=r.tallies.filter {!it.key.good&&it.value>0}.maxByOrNull {it.value}?.key
+    /** One thing for next time: about what went wrong most often ([tallies] of [topic], or of every
+     * skill on an "All" drive). */
+    private fun tip(tallies:Map<Outcome,Int>,measured:Int,topic:Topic,all:Boolean=false):String {
+        if(measured==0)return when {
+            all->"Next time: set a destination, so hills, bends and turns can be measured as well as road users."
+            topic==Topic.ROAD_USERS->"Next time: watch far ahead, and ease off as soon as someone may need room."
+            else->"Next time: drive the route with the destination set, so each one can be measured."
+        }
+        val bad=tallies.filter {!it.key.good&&it.value>0}.maxByOrNull {it.value}?.key
             ?:return "Every one measured went as the coach asks. Next time: the same, on busier roads or with less help."
         return "Next time: "+when(bad) {
             Outcome.CLIMB_SLOWED->"change down before a climb, while the road is still flat, so the car keeps its speed going up."
