@@ -1,6 +1,16 @@
 # LearnDrive.AI Mobile
 
-**Current Android candidate: 0.11.0 (experimental, host-tested only).** As 0.10.0, and:
+**Current Android candidate: 0.11.1 (experimental, host-tested only).** As 0.11.0, with the
+starting checks cut to the most important steps (said in full they ran to about two minutes):
+seat belt, seat and mirrors, handbrake on and neutral or P; then, after today's focus, first gear
+and the biting point (an automatic: foot on the brake, D), the mirrors and a look over the right
+shoulder, handbrake off when it is clear. About half a minute at Guided, one sentence each at
+Balanced, a reminder at Minimal. The whole routine (doors, head restraint, steering, warning
+lights, signalling, the clutch fully up, no steering before moving, what to do after a stall,
+automatics) and the coach's advice for each skill are in a Handbook page beside Progress,
+Settings and About, to read parked.
+
+0.11.0: as 0.10.0, and:
 four voices, English or Malayalam in the recorded voice or the phone's own voice (Google's default
 voice for India unless the learner picks another in Settings, by ear; Hear it plays the voice
 chosen). Today's focus gains "All": the brief names every skill and what the route holds, and the

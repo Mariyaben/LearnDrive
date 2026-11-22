@@ -80,6 +80,7 @@ class BeforeYouDrive(context:Context,levels:List<String>,voices:List<String>,foc
     val focusLine=note(context)
     val checks=LinearLayout(context).apply {orientation=VERTICAL}
     val progress=CoachStyle.button(context,"Progress").apply {tag="open-progress"}
+    val handbook=CoachStyle.button(context,"Handbook").apply {tag="open-handbook"}
     val settings=CoachStyle.button(context,"Settings").apply {tag="open-settings"}
     val about=CoachStyle.button(context,"About").apply {tag="open-about"}
     init {
@@ -92,9 +93,13 @@ class BeforeYouDrive(context:Context,levels:List<String>,voices:List<String>,foc
         addView(getVoice,LayoutParams(-1,dp(46)).apply {topMargin=dp(6)})
         heading("Today's focus");addView(focus,LayoutParams(-1,-2));addView(focusLine,LayoutParams(-1,-2).apply {topMargin=dp(6)})
         heading("Ready to drive");addView(checks,LayoutParams(-1,-2))
+        // The way to the pages, two by two: what has been done, how to drive, and the app itself.
         addView(LinearLayout(context).apply {
-            addView(progress,LayoutParams(0,dp(46),1f));addView(settings,LayoutParams(0,dp(46),1f).apply {marginStart=dp(6)})
-            addView(about,LayoutParams(0,dp(46),1f).apply {marginStart=dp(6)})},LayoutParams(-1,-2).apply {topMargin=dp(10);bottomMargin=dp(6)})
+            addView(progress,LayoutParams(0,dp(46),1f));addView(handbook,LayoutParams(0,dp(46),1f).apply {marginStart=dp(6)})},
+            LayoutParams(-1,-2).apply {topMargin=dp(10)})
+        addView(LinearLayout(context).apply {
+            addView(settings,LayoutParams(0,dp(46),1f));addView(about,LayoutParams(0,dp(46),1f).apply {marginStart=dp(6)})},
+            LayoutParams(-1,-2).apply {topMargin=dp(6);bottomMargin=dp(6)})
     }
     private fun heading(text:String,top:Int=18)=addView(caption(context,text),LayoutParams(-1,-2).apply {topMargin=dp(top);bottomMargin=dp(7)})
 }

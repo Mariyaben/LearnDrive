@@ -456,6 +456,7 @@ class MainActivity : ComponentActivity() {
         before.hear.setOnClickListener {hearVoice()}
         before.getVoice.setOnClickListener {installVoiceData()}
         before.progress.setOnClickListener {openPage("progress")}
+        before.handbook.setOnClickListener {openPage("handbook")}
         before.settings.setOnClickListener {openPage("settings")}
         before.about.setOnClickListener {openPage("about")}
         before.checks.addView(dashboard.readiness)
@@ -1596,9 +1597,9 @@ class MainActivity : ComponentActivity() {
     /** Progress, Settings or About over the parked screen, built afresh from the learner's data; parked only. */
     private fun openPage(kind:String) {
         if(setup.isMonitoring()||knownMoving())return
-        val title=when(kind) {"progress"->"Progress";"settings"->"Settings";else->"About LearnDrive"}
+        val title=when(kind) {"progress"->"Progress";"handbook"->"Handbook";"settings"->"Settings";else->"About LearnDrive"}
         val fresh=ai.learndrive.mobile.ui.Page(this,title) {closePage()}
-        when(kind) {"progress"->fillProgress(fresh);"settings"->fillSettings(fresh);else->fillAbout(fresh)}
+        when(kind) {"progress"->fillProgress(fresh);"handbook"->fillHandbook(fresh);"settings"->fillSettings(fresh);else->fillAbout(fresh)}
         page?.let {dashboard.overlayHost.removeView(it)}
         page=fresh;pageKind=kind;dashboard.overlayHost.addView(fresh,FrameLayout.LayoutParams(-1,-1))
     }
@@ -1636,6 +1637,14 @@ class MainActivity : ComponentActivity() {
                 }.show()
         }
     }
+    /** The full routines and the advice for each skill (Handbook), to read parked. */
+    private fun fillHandbook(p:ai.learndrive.mobile.ui.Page) {
+        p.paragraph("Before every drive the coach says the most important checks. Here is the whole routine, and what the coach asks on the road. Read it while parked.",CoachStyle.muted)
+        for(section in Handbook.sections) {
+            p.section(section.title)
+            section.lines.forEach {p.paragraph(it)}
+        }
+    }
     private fun fillSettings(p:ai.learndrive.mobile.ui.Page) {
         val s=learnerSettings()
         p.section("Learners")
@@ -1647,7 +1656,7 @@ class MainActivity : ComponentActivity() {
         p.switch("The coach's voice",coachingSettings.voiceEnabled) {on->changeCoachingSettings(coachingSettings.profile,on);updateSetupUi()}
         p.paragraph("Off: instructions show on screen only.",CoachStyle.muted,13f)
         p.switch("Starting checks before each drive",s.getBoolean("startChecks",true)) {on->learnerSettings().edit().putBoolean("startChecks",on).apply()}
-        p.paragraph("Parked, after Start: the checks before you start the engine, then today's focus, then how to move off. How much is said follows the coaching level.",CoachStyle.muted,13f)
+        p.paragraph("Parked, after Start: the most important checks, then today's focus, then how to move off. The checks and moving off take about half a minute at Guided, less at the other levels. The whole routine is in the Handbook.",CoachStyle.muted,13f)
         p.section("Phone voice")
         val names=if(::phoneVoice.isInitialized)phoneVoice.voiceNames else emptyList()
         val current=if(::phoneVoice.isInitialized)names.indexOf(phoneVoice.voiceName) else -1
@@ -1684,7 +1693,7 @@ class MainActivity : ComponentActivity() {
         p.section("What LearnDrive is")
         p.paragraph("A driving coach on your windscreen. Through the phone's rear camera it watches the road ahead, and it tells you, out loud and on screen, what to do next: slow for a bend, get ready for a turn, give a road user room. With a Google destination it also knows the turns, bends and hills on your route.")
         p.section("How a drive works")
-        p.paragraph("Before you drive, choose the coaching level, the coach's voice and today's focus under Get ready. Parked, after Start, the coach names today's focus. While you drive, it speaks when you need to act. Afterwards, the review goes through today's focus.")
+        p.paragraph("Before you drive, choose the coaching level, the coach's voice and today's focus under Get ready. Parked, after Start, the coach says the most important checks, names today's focus and tells you how to move off; the whole routine is in the Handbook. While you drive, it speaks when you need to act. Afterwards, the review goes through today's focus.")
         p.section("What it cannot see")
         p.paragraph("It measures your speed and sees the road ahead. It cannot see your pedals, your gear lever, your mirrors or where you look, and it can miss things on the road. Silence never means the road is clear.")
         p.section("Safety")

@@ -186,6 +186,9 @@ object DriveFocus {
         else->English.brief(choice,offer)
     }
 
+    /** How to drive [topic], in the brief's own words (hills: climbs and descents), for the Handbook. */
+    fun advice(topic:Topic):String=English.technique(topic,Offer(true,climbs=1,descents=1))
+
     /** The brief on the coach card while it is said: a title and what the route holds. */
     fun card(choice:Choice,offer:Offer):Pair<String,String> {
         if(choice.all) {
@@ -288,7 +291,7 @@ object DriveFocus {
                 Topic.ROAD_USERS->null
             }
         }
-        private fun technique(t:Topic,o:Offer):String=when(t) {
+        fun technique(t:Topic,o:Offer):String=when(t) {
             Topic.HILLS->{
                 val climb="Before a climb, change down while the road is still flat, then keep a steady speed up it."
                 val descent="From the top of a descent, hold your speed back so that it doesn't build."
